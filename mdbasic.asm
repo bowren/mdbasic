@@ -87,6 +87,7 @@ Bits 0-1: Select VIC-II 16K addressable memory bank (0-3)
   11 Bank 0 (    0-16383, $0   -$3FFF) 16K RAM / system variables, screen RAM, BASIC text
 *See zero-page memory location $01 bits 0 & 1 for RAM/ROM switching
 */
+.label C2DDRA = $dd02 //Data Direction Register for port A (CI2PRA)
 .label CI2ICR = $dd0d //Interrupt Control Register
 
 //CBM command line functions
@@ -1029,13 +1030,11 @@ okx1: sta $fb
  sta $a4
  tay
  beq colbas
-
  lda $fb
  ldx $fc
- jsr times40 //time40
+ jsr times40
  sta $fb
  stx $fc
-
 colbas: jsr addoffset
  jsr CHRGOT
  cmp #TOKEN_TO
@@ -2313,9 +2312,9 @@ misngop: jmp missop
 designon:
  lda CI2PRA     //bits 0-1: mem bank, 00=bank3, 01=bank2, 10=bank1, 11=bank0
  and #%11111100 //select VIC-II 16K mem bank 3 ($C000-$FFFF)
- sta CI2PRA     //bits 0-1: mem bank, 00=bank3, 01=bank2, 10=bank1, 11=bank0
- lda #%00101100 //video maxtrix offset %0010 (2*1K) = $0800; char dot data offset at %110 (6*1K) = $1800
- sta VMCSB      //bit 0:unused; bits 1-3: char dot data base addr; bits 4-7: video matrix base addr
+ sta CI2PRA     //base address is now $C000
+ lda #%00101100 //video matrix offset %0010 (2*1K) = $0800; char dot data offset at %110 (6*1K) = $1800
+ sta VMCSB      //bit 0: unused; bits 1-3: char dot data base addr; bits 4-7: video matrix base addr
  lda #$c8       //video matrix is at $c800
  sta HIBASE     //let Kernel know video matrix is at $c800 so printed chars will be visible
  lda SCROLX
@@ -2336,16 +2335,16 @@ design:
  beq designoff
  cmp #TOKEN_NEW
  bne dodesign
- lda #$f0    //copy character set from rom image
+ lda #$f0    //target location $F000-$FFFF
  sta $bc
  lda #$00
  sta $bb
  sta $a3
- lda #$d0
+ lda #$d0    //source location 4K CHAREN at $D000-$DFFF
  sta $a4
  lda $01
  pha
- and #%11111011 //bit2=0 switch in CHAREN ROM into bank $d000-$dfff
+ and #%11111011 //bit2=0 switch out I/O and bring in CHAREN ROM into bank $d000-$dfff
  sei
  sta $01
 nex256: ldy #0
@@ -2422,28 +2421,36 @@ clrbyt: sta ($a3),y
  jmp CHRGET
 illqty6: jmp FCERR //illegal qty
 bitscr:
- jsr skip73       //colorMode 0 or 1
+ jsr skip73         //colorMode 0 or 1
  beq hiresmode
  cmp #1
  bne illqty6
 mcmode:
- lda SCROLX      //horiz fine scrolling and control reg
- ora #%00010000  //turn on bit 4 - enable multi color text or bitmap mode
+ lda SCROLX         //horiz fine scrolling and control reg
+ ora #%00010000     //turn on bit 4 - enable multi color text or bitmap mode
  sta SCROLX
  jsr comchk
- bne bitmapon    //no more params so turn bitmap mode on
+ bne bitmapon       //no more params so turn bitmap mode on
  jsr getval15_
  sta BGCOL0
 bitmapon:
+ lda C2DDRA         //data direction for port A (CI2PRA)
+ ora #%00000011     //bits 0-1 are set to 1=output (default)
+ sta C2DDRA
+ 
+ lda #%11000100     //bits 0-1: VIC-II 16K memory bank 00=bank3 (49152-65535, $C000-$FFFF)
+ sta CI2PRA         //send bits out data port register
+
  lda SCROLY         //turn on bitmap graphics mode
  ora #%00100000     //bit#5: 1=on, 0=off
  sta SCROLY         //apply setting to control register
- lda #%00101100     //bits 1-3: text dot-data base addr (upper case), bits 4-7: video matrix base addr (???) 
+ lda #%00101100     //bit 0: unused
+                    //bits 1-3: text dot-data base offset=  110=6 ->6K offset from base $c000+6K=$d800
+                    //bits 4-7: video matrix base offset = 0010=2 ->2K offset from base $c000+2K=$c800
  sta VMCSB          //apply setting to control register
- lda #%11000100     //bits 0-1: VIC-II 16K memory bank 11=bank0 (0-16383, $0-$3FFF), 00=bank3 (49152-65535, $C000-$FFFF)
- sta CI2PRA         //data port register
- lda #$04           //hibyte of ptr to screen ram
- sta HIBASE         //top page of screen memory
+
+// lda #$c8           //hibyte of ptr to screen ram $c800
+// sta HIBASE         //top page of screen memory for Kernel prints
  rts
 hiresmode: 
  lda SCROLX         //turn off mulicolor mode
@@ -2527,25 +2534,25 @@ pulse: jsr ppw
  sta PWHI1,y  //Pulse Waveform Width (hibyte)
  rts
 //
-//*******************
-// Voice Control Register: Voice 1 $D404, Voice 2 $D40B, Voice 3 $D412
-// Bit 0: Gate Bit: 1=Start attack/decay/sustain, 0 = start release
-// Bit 1: Sync Bit: 1=Sync Oscillator with Oscillator 3
-// Bit 2: Ring Modulation: 1=Ring modulate Oscillators 1 and 3
-// Bit 3: Test Bit: 1 = Disable Oscillator
-// Waveform parameter value:
-// Voice Control Register bits 4-7 so this value is multiplied by 16
-// 0 none
-// 1 triangle
-// 2 saw tooth
-// 3 saw tooth + triangle
-// 4 pulse 
-// 5 pulse + triangle
-// 6 pulse + saw tooth 
-// 7 pulse + saw tooth + triangle
-// 8 noise
-//WAVE [voice#], [waveform], [gate], [sync], [ring], [disable] 
-//TODO: cannot read sound registers so make mirror registers to remember last value used
+/*******************
+Voice Control Register: Voice 1 $D404, Voice 2 $D40B, Voice 3 $D412
+ Bit 0: Gate Bit: 1=Start attack/decay/sustain, 0 = start release
+ Bit 1: Sync Bit: 1=Sync Oscillator with Oscillator 3
+ Bit 2: Ring Modulation: 1=Ring modulate Oscillators 1 and 3
+ Bit 3: Test Bit: 1 = Disable Oscillator
+ Waveform parameter value:
+ Voice Control Register bits 4-7 so this value is multiplied by 16
+ 0 none
+ 1 triangle
+ 2 saw tooth
+ 3 saw tooth + triangle
+ 4 pulse 
+ 5 pulse + triangle
+ 6 pulse + saw tooth 
+ 7 pulse + saw tooth + triangle
+ 8 noise
+WAVE [voice#], [waveform], [gate], [sync], [ring], [disable]
+*/
 wave: jsr ppw  //get voice SID register offset (voice#-1)*7
  sta $fb       //save SID register offset
  jsr ckcom2    //throw misop if current char is not a comma
@@ -2929,11 +2936,11 @@ restorepoint:  //temp copy last plot coords and plot type used by graphics cmds
  rts
 //
 point2: lda #TOKEN_TO
- jsr CHKCOM   //skip over TO token, syntax error if not there
+ jsr CHKCOM    //skip over TO token, syntax error if not there
  jsr savepoint //move point 1 to last plot point acting as point 2
  jsr pntweg
  jmp swappoint
-//this spot (pntweg) is an entry point for getting the x,y,plot type, and color
+//get x,y coordinates
 pntweg: jsr skp73 //get x coordinate, returns lobyte in x, hibyte in y
  jsr xytim2
  tya
@@ -2963,7 +2970,6 @@ xytim2:
  tay
 theend: rts
 hellno: jmp FCERR //throw illegal qty error
-//---------
 //
 //*******************
 paint: jsr getpnt
@@ -2995,30 +3001,57 @@ okcirc:
 endcir: rts
 //
 //*******************
-//TODO: add a param that allows the selection of char set (upper,lower,symbol see $D018 bits 4-7)
-//TODO: this new param will switch mem banks before reading the dot data from it, then switch it back 
-textnorm: jmp norm
+norm:
+ lda C2DDRA      //data direction for port A (CI2PRA)
+ ora #%00000011  //bits 0-1 are set to 1=output (default)
+ sta C2DDRA
+ lda CI2PRA
+ ora #%00000011  //select VIC-II 16K mem bank 0 ($0000-$4000)
+ sta CI2PRA
+ lda #$04        //text page for kernel prints
+ sta HIBASE      //top page of screen mem
+ lda #%00010101  //bit0 is always 1; bits1-3: text chr dot data base address in 1K chunks; bits 4-7: video matrix base address in 1K chunks
+ sta VMCSB       //VIC-II chip memory control register
+ lda #%11001000  //display on, multicolor text/bitmap mode off, 40 columns, 0 horizontal scroll scan lines
+ sta SCROLX
+ lda #%00011011  //extended color text mode off, bitmap mode off, display on, 25 rows, 3 vertical scroll scan lines
+ sta SCROLY
+r6510: lda $01
+ ora #%00000111  //switch mem banks to normal: mem mapped I/O RAM ($d000-$dfff), HIROM ($e000-$ffff), LOROM ($a000-$bfff)
+ sta $01
+ rts
+//
+// TEXT x,y "string", [charset], [sizeX], [sizeY], [plotType], [color]
 text:
- beq textnorm
- jsr getpnt  //get plot x,y, plot type and color
- jsr ckcom2  //throw misop if current char is not comma
+ beq norm
+ jsr getpnt  //get plot x,y
+ jsr ckcom2  //raise misop err if current char is not comma
  jsr getstr  //get text string returning ptr in vector ($50)
  lda #1      //default size value
  sta $57     //temp var of x size
  sta $58     //temp var of y size
+ lda #$d0    //assume charset 0 at $d000
+ sta $26     //charset temp var
  jsr comchk
  bne ne
+ jsr getval     //charset 0 or 1
+ beq sizes
+ lda #$d8       //charset 1 at $d800
+ sta $26
+sizes:
+ jsr comchk
+ bne ne 
  jsr getval
- cmp #32    //max size is 31
+ cmp #32        //max size is 31
  bcc notspc
- jmp FCERR  //illegal quantity error
+ jmp FCERR      //illegal quantity error
 notspc: sta $57 //user specified x size
  jsr comchk
  bne ne
  jsr getval
- cmp #32   //max y size is 31
+ cmp #32        //max y size is 31
  bcs notspc-3
- sta $58   //user specified y size
+ sta $58        //user specified y size
  jsr comchk
  bne ne
  jsr types
@@ -3028,7 +3061,9 @@ ne: dec $01
  rts
 //
 //*******************
-screen: //jsr CHRGET
+// SCREEN ON|OFF
+// SCREEN cols, rows where cols=38|40, rows=24|25
+screen:
  cmp #TOKEN_ON
  bne scnoff
  lda SCROLY
@@ -3061,7 +3096,7 @@ cklast: jsr chkcomm
  cmp #25
  bne chk24
  lda SCROLY
- ora #%00001000  //bit 3 on 25 r
+ ora #%00001000  //bit 3 on 25 rows
  sta SCROLY
  rts
 chk24: cmp #24
@@ -3072,29 +3107,33 @@ chk24: cmp #24
  rts
 //
 //*******************
-scroll: jsr getscroll
+// SCROLL x1, y1 TO x2, y2, direction, color
+scroll:
+ jsr getscroll
  jsr comchk
  beq okscroll1
  lda #0
  sta $ff
  beq okscroll2
-okscroll1: jsr getval //direction 0-3
+okscroll1:
+ jsr getval       //direction 0-3
  cmp #4
  bcc okscroll3
-noscroll: jmp FCERR   //illegal quantity error
+noscroll:
+ jmp FCERR        //illegal quantity error
 okscroll3: pha 
  jsr comchk
  bne okscroll4
- jsr getval //wrap? 0=no, 1=yes
+ jsr getval       //wrap? 0=no, 1=yes
  cmp #2
  bcs noscroll
  sta $ff
-okscroll4: pla   //what was the direction?
-okscroll2: asl //convert to 2 byte offset
+okscroll4: pla    //what was the direction?
+okscroll2: asl    //convert to 2 byte offset
  tay
- lda scrolls,y    //note: scroll direction vector lobyte
+ lda scrolls,y    //scroll direction vector lobyte
  sta $55
- lda scrolls+1,y  //note: scroll direction vector hibyte
+ lda scrolls+1,y  //scroll direction vector hibyte
  sta $56
  dec $01
  jmp $0054
@@ -3115,13 +3154,11 @@ goodscroll: sta $fb
  sta $a4
  tay 
  beq notime40
-
  lda $fb
  ldx $fc
- jsr times40 //time40
+ jsr times40
  sta $fb
  stx $fc
-
 notime40: jsr addoffset
  jsr CHRGOT
  cmp #TOKEN_TO
@@ -3923,7 +3960,6 @@ times8:
  dey
  bne times8
  rts
-
 //*******************
 //add 40 to the double byte binary value in A(lobyte) and X(hibyte), Y times
 //assumes y > 0; if y = 0 then adds 40, 256 times
@@ -3938,7 +3974,6 @@ times40:
  dey
  bne times40
  rts
- 
 //*******************
 opget: jsr CHRGET
 opget2: bcc okopge   //text found (not a token)
@@ -4049,22 +4084,6 @@ getvoc:
  bcc getvoc-1
 iverr: ldx #32
  jmp ($0300)     //illegal voice number
-//*******************
-norm: lda #4     //normal screen mode
- sta HIBASE      //top page of screen mem
- lda #%00010101  //bit0 is always 1; bits1-3: text chr dot data base address in 1K chunks; bits 4-7: video matrix base address in 1K chunks
- sta VMCSB       //VIC-II chip memory control register
- lda #%11001000  //display on, multicolor text/bitmap mode off, 40 columns, 0 horizontal scroll scan lines
- sta SCROLX
- lda #%00011011  //extended color text mode off, bitmap mode off, display on, 25 rows, 3 vertical scroll scan lines
- sta SCROLY
- lda CI2PRA
- ora #%00000011  //select VIC-II 16K mem bank 0 ($0000-$4000)
- sta CI2PRA
-r6510: lda $01
- ora #%00000111  //switch mem banks to normal: mem mapped I/O RAM ($d000-$dfff), HIROM ($e000-$ffff), LOROM ($a000-$bfff)
- sta $01
- rts
 //*******************
 addoffset: lda $fb
  sta $fd
@@ -4195,7 +4214,8 @@ keybuf: .text "LIST"
 //strings for keylist
 addcr: .text "+CHR$(13)"
 //
-bmdt: .byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
+bmdt:
+ .byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
  .byte $f2,$1a,$02,$12,$97,$20,$20,$20,$f2,$1a,$03,$20,$20,$20,$f2,$1b
  .byte $04,$20,$f2,$09,$05,$a1,$20,$f2,$17,$05,$20,$20,$20,$20,$20,$20
  .byte $20,$20,$20,$f2,$08,$06,$92,$a2,$a2,$12,$bc,$92,$a2,$bb,$f2,$1b
@@ -4669,20 +4689,17 @@ ydiv8x: ldy #0
  rts
 //
 //**************************
-texter: lda $58
+texter: lda $58 //y size
  beq texter-1
- lda $57
+ lda $57        //x size
  beq texter-1
 nextchar: lda #0
- sta $59        //index variable
+ sta $59        //index variable for current byte of dot data in char
  sta $a3
- lda #$d0       //upper case at $d000
- sta $a4        //assume upper case
- lda VMCSB
- and #%00000010 //bits 1-3: video matrix base addr
- beq readstr    //upper case
- lda #$d8       //lower case at $d800
- sta $a4
+ 
+ lda $26        //charset 0 at $d000, charset 1 at $d800
+ sta $a4        //charset ptr hibyte
+
 readstr: ldy #0
  lda ($50),y    //get character to display on bitmap
  cmp #'A'
@@ -5787,17 +5804,6 @@ evar:
 jp: jmp xvar
 //
 //****************
-
-//playwave:  .byte 0,0,0  //waveform for each voice
-//playlen:   .byte 0,0,0  //notelength for each voice
-//playvoice: .byte 0,2,4  //SID register offset for each voice
-//playfreq:  .byte 0,0,0  //note freq value offset for each voice
-//.align $100 //Alignment to the nearest page boundary saves a cycle
-//playindex  .byte 0,0,0  //index of current char in play string for each voice
-//playstr1:  .fill 256,0  //voice 1 play string
-//playstr2:  .fill 256,0  //voice 2 play string
-//playstr3:  .fill 256,0  //voice 3 play string
-
 playy:
  sta $14        //voice register offset
  tax
@@ -6249,7 +6255,7 @@ scroll1: ldy $a4
  beq notimes40
  lda $fb
  ldx $fc
- jsr times40 //time40
+ jsr times40
  sta $fb
  stx $fc
 notimes40:
@@ -6332,7 +6338,7 @@ cpyright: dey
  bpl scroll3
  bmi scroll3-3
 //--scroll subs--
-scrollh: lda bufchar   //scrollh was $ace6
+scrollh: lda bufchar
  ldx $ff     //wrap?
  bne shiftchar
  lda #32     //no wrap, use space
@@ -6342,14 +6348,15 @@ shiftchar: sta ($fb),y
  bne shiftcolor
  lda COLOR   //current foreground color for text
 shiftcolor: sta ($fd),y
- ldy #1      //add 40 1 time
-
+//add 40 to text ptr
  lda $fb
- ldx $fc
- jsr times40 //time40
+ clc
+ adc #40
  sta $fb
- stx $fc
-
+ lda $fc
+ adc #0
+ sta $fc
+//add 40 to color ptr
  lda $fd
  clc 
  adc #40
@@ -6375,4 +6382,3 @@ paintbuf2: .fill 256,0 //$BE00
 paintbuf3: .fill 256,0 //$BF00
 //
 //.end
- 
