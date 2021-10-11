@@ -273,6 +273,7 @@ Token #   Function  Routine Address
 .label TOKEN_RUN     = $8a
 .label TOKEN_IF      = $8b
 .label TOKEN_RESTORE = $8c
+.label TOKEN_STOP    = $90
 .label TOKEN_ON      = $91
 .label TOKEN_PRINT   = $99
 .label TOKEN_LIST    = $9b
@@ -1354,18 +1355,18 @@ swap:
  jsr ckcom2
  jsr CHRGET
  jsr PTRGET  //search for a variable & setup if not found
- lda $0e     //var 2 data type
- cmp $fe     //v2 has same type as var 1?
+ lda $0e     //var 2 numeric data type, int or float
+ cmp $fe     //v2 has same numeric type as var 1?
  beq match   //same type, good to go
 nomtch: ldx #22 //TYPE MISMATCH ERROR
  jmp ($0300) //raise error
-match: lda $fd
- cmp $0d
+match: lda $fd //param1 data type $ or #
+ cmp $0d       //param2 data type $ or #
  bne nomtch
- ldy #$04
- cmp #$ff
- bne bytes
- ldy #$02
+ ldy #$04   //numeric use 5 bytes 0-4
+ cmp #$ff   //string?
+ bne bytes  //swap numeric data using FAC1 as buffer
+ ldy #$02   //strings only use 3 bytes 0-2
 bytes: sty $02
 cpyvar: lda ($fb),y //var1 to fac2
  sta $0069,y
@@ -2161,9 +2162,8 @@ spntr: jsr comck2
  lsr
  clc
  adc $fc        //base+offset
- adc #4         //end of screen RAM is 1K more
- sta $fc        //sprite pointers are in the last 8 bytes of 1K chunk
- dec $fc        //need highest hibyte of 1K offset;
+ adc #3         //the end of screen RAM is 1K more
+ sta $fc        //sprite pointers are in the last 8 bytes of 1K screen RAM
  lda #$f8       //lobyte of offset to first byte of sprite data ptrs
  sta $fb        //pointer to first byte of sprite data ptr, ie: bank 0 with 1K offset is $04F8
  lda $14
@@ -2665,7 +2665,7 @@ G	DOWN & LEFT
 H	DOWN & RIGHT 
 */
 draw: 
- jsr getstr+3
+ jsr getstr0
  beq draw-1
 //save current txt ptr
  lda $7a
@@ -3372,12 +3372,105 @@ settype:
  rts
 //*******************
 // PLAY S$
+// PLAY STOP
 play:
+ cmp #TOKEN_STOP
+ bne playy
+ jsr playstop
+ jmp CHRGET 
+playy:
  jsr getstr0
- beq play-1   //quit now if string is empty
+ beq endplay   //quit now if string is empty
+ ldy #0
+cpystr: lda ($50),y
+ sta playbuf1,y
+ iny
+ cpy $52
+ bne cpystr
  lda #0       //default voice 1 (index 0)
- dec $01      //switch to ram (a000-bfff)
- jmp playy
+ sta playbuf1,y  //zero-byte terminator
+ sta playindex //start index of string
+
+ jsr initvoice
+
+ lda #1
+ sta playtime   //initial wait
+
+ lda #<playit
+ ldy #>playit
+ sei 
+ sta $0314
+ sty $0315
+ cli
+endplay: rts 
+
+playit:
+ dec playtime
+ bne jea31
+ 
+ lda $01
+ pha
+ and #%11111110
+ sta $01
+
+ jsr notegot
+ beq stoplay
+ jsr nextn
+
+playgo:
+ pla
+ sta $01
+
+jea31: jmp $ea31
+stoplay:
+ jsr playstop
+ bne playgo  //always branches
+
+playstop:
+ ldx playvoice  //SID reg offset
+ lda playwave   //select current waveform; start release cycle
+ sta VCREG1,x   //start decay cycle
+ lda #$31
+ ldy #$ea
+ sei 
+ sta $0314
+ sty $0315
+ cli
+ rts
+
+initvoice:
+ sta playvoice  //voice register offset
+ tax
+
+ lda #%00010000 //select default waveform to triangle; start decay cycle
+ sta playwave
+ sta VCREG1,x
+
+ lda #30        //default note length to 30 jiffies (approx 1/60 sec.)
+ sta playlen    //note duration 30/60=0.50 sec.
+
+ lda #4         //default octave 4
+ sta playoct
+
+ lda #0         //init voice's registers
+// sta FRELO1,x
+// sta FREHI1,x
+ sta PWLO1,x    //in case user select pulse waveform
+ lda #$04       //set the pulse duty cycle to 25%
+ sta PWHI1,x    //lower nibble only, upper nibble is unused (12-bit value)
+
+ lda #$10       //set attack duraction to 8ms (hi nibble)
+ sta ATDCY1,x   //and decay duration to 6ms (lo nibble)
+ lda #$F8       //set sustain volume to 15    (hi nibble)
+ sta SUREL1,x   //and release duration to 300ms (lo nibble)
+
+ lda md418      //all voices volume register mirror
+ bne vocrdy     //if volume is 0 (off) turn it up!
+ ora #%00001111 //set volume to max
+ sta md418
+ sta SIGVOL     //SID main volume register
+vocrdy: rts
+
 //
 //*******************
 // KEY n, "string"  where n = (1-8)
@@ -4177,6 +4270,11 @@ moveflag:   .byte 0  //flag for LINE function for which cmd is executing; 0=LINE
 
 autonum:    .word 10 //hold 2-byte value of auto line numbering setting
 
+//PLAY command use only - used during IRQ
+playtime:  .byte 0  //current jiffies till next note for each voice
+playvoice: .byte 0  //,2,4  //SID register offset for each voice
+playwave:  .byte 0  //waveform for each voice
+
 //*****************************************************************
 //*** Temp variables needed during subroutine execution only (local variables)
 //*****************************************************************
@@ -4209,11 +4307,19 @@ keybuf: .text "LIST"
 .text "TEXT"
 .byte 13,0,0,0,0,0,0,0,0,0,0,0   //F6
 .text "CLS"
-.byte 13,0,0,0,0,0               //F8
+.byte 13,0,0,0,0,0,0,0,0,0,0,0,0 //F8
 //
 //strings for keylist
 addcr: .text "+CHR$(13)"
 //
+
+//
+//screen char storage for scroll with wrapping
+bufchar:  .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+bufcolor: .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+//
+
+.align $100 //align tables to the nearest page boundary (saves a cycle on read)
 bmdt:
  .byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
  .byte $f2,$1a,$02,$12,$97,$20,$20,$20,$f2,$1a,$03,$20,$20,$20,$f2,$1b
@@ -4224,10 +4330,8 @@ bmdt:
  .byte $1a,$09,$12,$20,$92,$20,$12,$20,$f2,$1a,$0a,$20,$92,$20,$12,$20
  .byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
 //*** plot tables ***
-lbtab: .byte 0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128
-.byte 192,0,64,128,192,0
-hbtab: .byte 224,225,226,227,229,230,231,232,234,235,236,237,239,240,241
-.byte 242,244,245,246,247,249,250,251,252,254
+lbtab: .byte 0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0
+hbtab: .byte 224,225,226,227,229,230,231,232,234,235,236,237,239,240,241,242,244,245,246,247,249,250,251,252,254
 //
 ptab2:
 .byte %10000000,%01000000,%00100000,%00010000,%00001000,%00000100,%00000010,%00000001
@@ -4240,28 +4344,6 @@ ptab3:
 .byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
 .byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
 //
-/*** play table ***
-These numbers represent the middle octave and are only for the SID freq control registers
-CLOCK is NTSC=1022730, PAL=985250
-FREQUENCY=REG_VALUE*(CLOCK/16777216)Hz
-REG_VALUE=FREQUENCY/(CLOCK/16777216)Hz
-https://pages.mtu.edu/~suits/notefreqs.html
-There are 7 octaves each with 12 notes 7*12 = 84 total
-The notes here are octave 4 on NTSC clock
-*/
-//             A    B    C    D    E    F    G
-notes:  .word 3609,4051,4292,4817,5407,5729,6431
-//flats(-) are derived from sharps(#) except A- is diff octave
-//             A-
-fnotes: .word 3406
-//             B-        D-   E-        G-
-//             A#        C#   D#        F#   G#
-snotes: .word 3824,   0,4547,5104,   0,6069,6813
-
-//
-//screen char storage for scroll with wrapping
-bufchar:  .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-bufcolor: .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 //
 //KEY LIST continued while LOROM is switched to LORAM
 keyy: stx $fb
@@ -5804,216 +5886,6 @@ evar:
 jp: jmp xvar
 //
 //****************
-playy:
- sta $14        //voice register offset
- tax
-
- lda #%00010000 //select default waveform to triangle; start decay cycle
- sta $a3
- sta VCREG1,x
-
- lda #30        //default note length to 30 jiffies (approx 1/60 sec.)
- sta $a4 		//note duration 30/60=0.50 sec.
-
- lda #0         //init voice's registers
-// sta FRELO1,x
-// sta FREHI1,x
- sta PWLO1,x    //in case user select pulse waveform
- lda #$04       //set the pulse duty cycle to 25%
- sta PWHI1,x    //lower nibble only, upper nibble is unused (12-bit value)
-
- lda #$10       //set attack duraction to 8ms (hi nibble)
- sta ATDCY1,x   //and decay duration to 6ms (lo nibble)
- lda #$F8       //set sustain volume to 15    (hi nibble)
- sta SUREL1,x   //and release duration to 300ms (lo nibble)
-
- lda md418      //all voices volume register mirror
- bne nextn      //if volume is 0 (off) turn it up!
- ora #%00001111 //set volume to max
- sta md418
- sta SIGVOL     //SID main volume register
-
-nextn:
- jsr notegot
- beq endply
- cmp #'H'       //notes A-G only
- bcs nonnote
- sec            //ascii of notes must start at A (65)
- sbc #'A'       //ascii - A(65) starts at 0 for A, 1 for B, etc.
- bmi badnote
- asl            //note# * 2 --> note numbers A=0, B=1, etc.
- sta $15        //save current note freq offset (word ptr)
-
- jsr noteget
- beq regnote
-
- cmp #'#'       //sharp?
- bne noshar
- jsr noteget    //skip over txt
- lda #<snotes   //use sharp notes
- ldy #>snotes
- bne playnote   //always branches
-
-noshar:
- cmp #'-'       //flat?
- bne regnote
- jsr noteget    //skip over txt
- lda #<fnotes   //use flat notes
- ldy #>fnotes
- bne playnote   //always branches
-
-regnote:
- lda #<notes    //get pointer to notes A-F binary values
- ldy #>notes
-
-playnote:
- sta $fd
- sty $fe
-
- ldy $15        //note freq value offset
- lda ($fd),y    //freq value lo byte
- ldx $14 
- sta FRELO1,x   //voice x freq lo byte
- iny            //next byte is hi byte
- lda ($fd),y    //freq value hi byte
-// beq badnote    //zero hibyte indicates bad note
- sta FREHI1,x   //voice x freq hi byte
- lda $a3        //select current waveform
- ora #%00000001 //and start attack/decay cycle
- sta VCREG1,x   //make sound via waveform setting
-
- jsr notegot
- jsr getdigitval+3
- bmi notewait
- tax
- bne notewait2
-
-notewait:
- ldx $a4        //wait time
-notewait2:
- ldy #0
- jsr delay2
- bcs endply     //STOP key pressed
- ldx $14        //SID reg offset
- lda $a3        //select current waveform; start release cycle
- sta VCREG1,x
- ldx #1         //wait for release to complete, 1 jiffy should do
- ldy #0
- jsr delay2
-
-nextn2:
- lda $52
- bne nextn
- beq endply
-
-badnote:
- lda #>FCERR-1  //illegal quanity error address
- pha            //when rom is restored rts will
- lda #<FCERR-1  //return to FCERR (illegal qty)
- pha
-endply:
- jmp r6510      //switch LORAM back to LOROM
-badvoc:
- lda #>iverr-1  //illegal voice number address
- pha            //when rom is restored rts will
- lda #<iverr-1  //return to error
- pha
- jmp r6510      //switch LORAM back to LOROM
-
-nonnote:
- cmp #'V'
- bne notepause  //bad note
- jsr getdigitval
- beq badvoc     //voice 0 invalid
- cmp #4         //voice 1,2 or 3 only
- bcs badvoc
- jsr ppw2       //get SID register offset for voice 
- jmp playy
-
-notepause:
- cmp #'P'
- bne notelen
- lda $a3        //current waveform
- ldx $14        //SID reg offset
- sta VCREG1,x   //bit0 = 0 start release
- jsr getdigitval
- tax
- bpl notewait2  //use supplied wait length
- bmi notewait   //use current note length as default wait length
- 
-notelen:
- cmp #'L'
- bne notewave
- jsr getdigitval
- bmi badnote    //value 0-99 only
- sta $a4        //apply new note length
- jmp nextn2
-
-notewave:
- cmp #'W'
- bne badnote
- jsr getdigitval
- cmp #9
- bcs badnote
- asl            //convert to waveform bit pattern
- asl
- asl
- asl
- sta $a3        //set new waveform
- ldx $14
- sta VCREG1,x   //bit0 = start release
- jmp nextn2     //always branches 
-
-getdigitval:    //get 2-digit value 0-99
- jsr noteget
- beq digitdone2 //end of string, assume 0 value
- sec            //convert ascii digit to binary value
- sbc #'0'       //first char must be digit between 0 and 9
- bpl digit9
-nondigit:
- lda #$ff       //flag for non numeric digit
- bne digitdone2
-digit9:
- cmp #10
- bcs nondigit
- sta $fb        //1's place value or 10's place value, not sure yet
- jsr noteget
- beq digitdone  //end of string; use first digit as value
- sec            //calc valid 10's place value
- sbc #'0'
- bmi digitdone  //non digit; use first digit as value
- cmp #10
- bcs digitdone  //non-digit; use first digit as value
- sta $fc        //save as new 1's place value
- jsr noteget    //skip over digit
-//perform math: (8*x)+(2*x)+y
- lda $fb        //convert first digit to 10 times the value
- asl $fb        //(2*x)
- asl            //(8*x)
- asl
- asl
- clc
- adc $fb        //+(2*x)
- adc $fc        //+y
-digitdone2:
- sta $fb
-digitdone:
- lda $fb
- rts            //result is in A reg and $fb
-
-//returns char in A reg; zero-flag set indicate no more notes
-noteget:
- dec $52
- beq nonote
- inc $50
- bne notegot
- inc $51
-notegot:
- ldy #0
- lda ($50),y
- cmp #' '
- beq noteget
-nonote: rts
 
 //***************
 dumpscreen2:
@@ -6375,10 +6247,256 @@ cpybuf: lda ($fb),y
  bpl cpybuf
  rts
 //
-//addresses $BD00-$BFFF are used for temp storage for paint command
-*=$BD00 "Paint Buffer"
-paintbuf1: .fill 256,0 //$BD00
-paintbuf2: .fill 256,0 //$BE00
-paintbuf3: .fill 256,0 //$BF00
-//
-//.end
+
+
+nextn2:
+ jsr notegot
+ beq nextn2-1
+nextn:
+ cmp #'H'       //notes A-G only
+ bcs nonnote
+goodnote:
+ sec            //ascii of notes must start at A (65)
+ sbc #'A'       //ascii - A(65) starts at 0 for A, 1 for B, etc.
+ bmi octchg
+ asl            //note# * 2 --> note numbers A=0, B=1, etc.
+ sta playfreq   //save current note freq offset (word ptr)
+ tax
+ jsr noteget
+ beq regnote
+
+ cmp #'#'       //sharp?
+ bne noshar
+ jsr noteget    //skip over txt
+ lda snotes+1,x
+ tay
+ lda snotes,x
+ jmp playnote   //always branches
+
+noshar:
+ cmp #'-'       //flat?
+ bne regnote
+ jsr noteget    //skip over txt
+ lda fnotes+1,x
+ tay
+ lda fnotes,x
+ jmp playnote   //always branches
+
+regnote:
+ lda notes+1,x
+ tay
+ lda notes,x
+
+playnote:
+ jsr octadj
+ ldx playvoice 
+ sta FRELO1,x   //voice x freq lo byte
+ tya 
+ sta FREHI1,x   //voice x freq hi byte
+ lda playwave   //select current waveform
+ ora #%00000001 //and start attack/decay cycle
+ sta VCREG1,x   //make sound via waveform setting
+
+ jsr notegot
+ jsr getdigitval+3
+ bmi notewait
+ bne notewait2  //use provided wait time
+notewait:
+ lda playlen    //use current note length wait time
+notewait2:
+ sta playtime   //start of timer
+endply:
+ rts
+
+octchg:
+ cmp #251 //<
+ bne octup2
+prevoct:
+ dec playoct
+ bpl nextn3
+ bmi nextoct
+octup2:
+ cmp #253  //>
+ bne nextn2 
+nextoct:
+ inc playoct
+ lda playoct
+ cmp #8
+ bcs prevoct
+nextn3:
+ inc playindex //skip over char
+ jmp nextn2
+
+nonnote: 
+ cmp #'V'
+ bne notepause
+ jsr getdigitval
+ beq badvoc     //voice 0 invalid
+ cmp #4         //voice 1,2 or 3 only
+ bcc goodvoc
+badvoc: lda #1  //use default voice 1
+goodvoc:
+ jsr ppw2       //get SID register offset for voice 
+ jsr initvoice
+ jmp nextn2
+
+notepause:
+ cmp #'P'
+ bne notelen
+ lda playwave   //current waveform
+ ldx playvoice  //SID reg offset
+ sta VCREG1,x   //bit0 = 0 start release
+ jsr getdigitval
+ bpl notewait2  //use supplied wait length
+ bmi notewait   //use current note length as default wait length
+ 
+notelen:
+ cmp #'L'
+ bne noteoct
+ jsr getdigitval
+// bmi badnote  //value 0-99 only
+ sta playlen    //apply new note length
+ jmp nextn2
+
+noteoct:
+ cmp #'O'
+ bne notewave
+ jsr getdigitval
+ cmp #8
+ bcs skipnote
+ sta playoct
+ bcc skipnote  //always branches
+ 
+notewave:
+ cmp #'W'
+ bne skipnote
+ jsr getdigitval
+ cmp #9
+ bcs skipnote
+ asl          //convert to waveform bit pattern
+ asl
+ asl
+ asl
+ sta playwave  //set new waveform
+ ldx playvoice
+ sta VCREG1,x   //bit0 = start release
+skipnote: jmp nextn2
+
+getdigitval:    //get 2-digit value 0-99
+ jsr noteget
+ beq digitdone2 //end of string, assume 0 value
+ sec            //convert ascii digit to binary value
+ sbc #'0'       //first char must be digit between 0 and 9
+ bpl digit9
+nondigit:
+ lda #$ff       //flag for non numeric digit
+ bne digitdone2
+digit9:
+ cmp #10
+ bcs nondigit
+ sta temp1      //1's place value or 10's place value, not sure yet
+ jsr noteget
+ beq digitdone  //end of string; use first digit as value
+ sec            //calc valid 10's place value
+ sbc #'0'
+ bmi digitdone  //non digit; use first digit as value
+ cmp #10
+ bcs digitdone  //non-digit; use first digit as value
+ sta temp2      //save as new 1's place value
+ jsr noteget    //skip over digit
+//perform math: (8*x)+(2*x)+y
+ lda temp1      //convert first digit to 10 times the value
+ asl temp1      //(2*x)
+ asl            //(8*x)
+ asl
+ asl
+ clc
+ adc temp1      //+(2*x)
+ adc temp2      //+y
+ sta temp1
+digitdone:
+ lda temp1
+digitdone2:
+ rts            //result is in A reg and $fb
+
+//returns char in A reg; zero-flag set indicate no more notes
+noteget:
+ inc playindex
+ beq nonote
+notegot:
+ ldy playindex
+ lda playbuf1,y
+ beq nonote
+ cmp #' '
+ beq noteget
+nonote: rts
+
+octadj:
+ ldx playoct
+ cpx #4
+ beq octdone
+ sta temp1
+ sty temp2
+ bcc octdwn
+ txa
+ sbc #4
+ tax
+octup:
+ asl temp1
+ rol temp2 
+ dex
+ bne octup
+ beq octend
+octdwn:
+ lda #4
+ sec
+ sbc playoct
+ tax 
+octdwn2:
+ lsr temp2
+ ror temp1
+ dex
+ bne octdwn2
+octend:
+ lda temp1
+ ldy temp2
+octdone: rts
+
+//PLAY command temp vars used during IRQ
+temp1:     .byte 0
+temp2:     .byte 0
+playoct:   .byte 4  //default octave 4
+playlen:   .byte 30 //notelength for each voice
+playfreq:  .byte 0  //note freq value offset for each voice
+playindex: .byte 0  //index of current char in play string for each voice
+
+.align $100 //Alignment to the nearest page boundary saves a cycle
+playbuf1: .fill 256,0
+//playbuf2: .fill 256,0
+//playbuf3: .fill 256,0
+
+/*** play table ***
+These numbers represent the middle octave and are only for the SID freq control registers
+CLOCK is NTSC=1022730, PAL=985250
+FREQUENCY=REG_VALUE*(CLOCK/16777216)Hz
+REG_VALUE=FREQUENCY/(CLOCK/16777216)Hz
+https://pages.mtu.edu/~suits/notefreqs.html
+There are 8 octaves each with 12 notes 8*12 = 96 total notes
+The notes here are octave 4 on NTSC clock. The others are derived from these.
+*/
+//             A    B    C    D    E    F    G
+notes:  .word 3609,4051,4292,4817,5407,5729,6431
+//flats(-) are derived from sharps(#). A- is in previous octave (G#)
+//for invalid notes C-/B# = B and F-/E# = E
+//             A-
+fnotes: .word 3406
+//             B-  *C-   D-   E-  *F-   G-
+//             A#  *B#   C#   D#  *E#   F#   G#
+snotes: .word 3824,4051,4547,5104,5407,6069,6813
+
+//temp storage for PAINT command
+.align $100 //Alignment to the nearest page boundary saves a cycle
+paintbuf1: .fill 256,0
+paintbuf2: .fill 256,0
+paintbuf3: .fill 256,0
+
