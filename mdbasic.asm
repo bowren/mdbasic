@@ -97,15 +97,17 @@ Bits 0-1: Select VIC-II 16K addressable memory bank (0-3)
 .label IMAIN  = $0302 //Vector to the Main BASIC Program Loop
 
 //CBM BASIC functions
+.label GETSTK = $a3fb //Check for Space on Stack
 .label READY  = $a474 //Print READY
 .label REASON = $a408 //Check for Space in Memory
 .label LINKPRG= $a533 //Relink Lines of Tokenized Program Text
 .label INLIN  = $a560 //input a line to buffer from keyboard (max 88 chars)
-.label FINDLN = $a613 //search for line number
+.label FINDLN = $a613 //search for line number using ptr at $2b, $2c
 .label CLEAR  = $a65e //perform CLR
 .label NEWSTT = $a7ae //setup next statement for execution
 .label RUN    = $a871 //peform RUN
 .label GOTO   = $a8a0 //perform GOTO
+.label DATAN  = $a906 //search BASIC text for the end of the current statement
 .label LINGET = $a96b //convert an ASCII decimal number to a 2-byte binary line number
 .label STROUT = $ab1e //print msg from str whose addr is in the Y (hi byte) and A (lo byte) registers
 .label FRMNUM = $ad8a //evaluate a numeric expression and/or check for data type mismatch, store result in FAC1
@@ -273,6 +275,7 @@ Token #   Function  Routine Address
 .label TOKEN_RUN     = $8a
 .label TOKEN_IF      = $8b
 .label TOKEN_RESTORE = $8c
+.label TOKEN_GOSUB   = $8d
 .label TOKEN_STOP    = $90
 .label TOKEN_ON      = $91
 .label TOKEN_PRINT   = $99
@@ -293,6 +296,7 @@ Token #   Function  Routine Address
 .label TOKEN_SCREEN  = $e7
 .label TOKEN_RESUME  = $e8
 .label TOKEN_SOUND   = $eb
+.label TOKEN_KEY     = $f7
 .label TOKEN_ERROR   = $f8
 .label FIRST_FUN_TOK = $f8  //first MDBASIC function
 .label TOKEN_PI      = $ff  //PI symbol token
@@ -354,16 +358,16 @@ newcmd:
 .byte 204
 .text "SCROL"
 .byte 204
-.text "AUT"
-.byte 207
+.text "SWA"
+.byte 208
 .text "LOCAT"
 .byte 197
-.text "OL"
-.byte 196
+.text "DIS"
+.byte 203
 .text "DELA"
 .byte 217
-.text "KE"
-.byte 217
+.text "FILE"
+.byte 211
 .text "COLO"
 .byte 210
 .text "MOV"
@@ -412,10 +416,10 @@ newcmd:
 .byte 210
 .text "PLA"
 .byte 217
-.text "SWA"
-.byte 208
-.text "DIS"
-.byte 203
+.text "AUT"
+.byte 207
+.text "OL"
+.byte 196
 .text "TRAC"
 .byte 197
 .text "FIN"
@@ -424,18 +428,17 @@ newcmd:
 .byte 197
 .text "RENU"
 .byte 205
-.text "FILE"
-.byte 211
 
 //reserved for future use
 .text "RESE"
 .byte 212
 
-//ERROR is a statement and a function
+.text "KE"
+.byte 217
+//statement and a function
 .text "ERRO"
 .byte 210
-
-//functions CSR PEN JOY POT HEX$, INSTR
+//functions only CSR PEN JOY POT HEX$ INSTR
 .text "CS"
 .byte 210
 .text "PE"
@@ -457,13 +460,13 @@ cmdtab:
 .word else-1  //$cc token
 //commands
 .word merge-1,  dump-1,   vars-1,    circle-1, fill-1             //$d1 token
-.word scroll-1, auto-1,   locate-1,  old-1,    delay-1,   key-1   //$d7
+.word scroll-1, swap-1,   locate-1,  disk-1,   delay-1,   files-1 //$d7
 .word color-1,  move-1,   sprite-1,  multi-1,  expand-1,  RESET-1 //$dd
 .word design-1, bitmap-1, mapcol-1,  plot-1,   line-1,    paint-1 //$e3
 .word draw-1,   cls-1,    text-1,    screen-1, resume-1,  adsr-1  //$e9
 .word wave-1,   sound-1,  pulse-1,   vol-1,    filter-1,  play-1  //$ef
-.word swap-1,   disk-1,   trace-1,   find-1,   delete-1,  renum-1 //$f5
-.word files-1,  RESET-1,  error-1                                 //$f8
+.word auto-1,   old-1,    trace-1,   find-1,   delete-1,  renum-1 //$f5
+.word RESET-1,  key-1,    error-1                                 //$f8
 //functions
 funtab: 
 .word err                              //$f8 is both a command and a function
@@ -537,6 +540,7 @@ nwvec2: lda #0
  sta EXTCOL     //border color black
  sta BGCOL0     //background color black
  sta traceflag  //trace flag off
+ sta keyflag    //key trapping off
  sta blinkcol   //all colors turn off flash flag
  sta blinkcol+1
  lda #$80       //value to enable all keys to repeat
@@ -685,15 +689,92 @@ cont1: iny
  bne oldtst
  beq notfou
 //
+
+onkey1:
+ lda #1        //0=off,1=on,2=pause
+ sta keyflag   //pause key trapping
+ jmp NEWSTT
+//
+//find beginning of next statement even if on next line number
+nextstmt:
+ jsr DATAN+3   //find end of current BASIC statement
+ sec
+ lda $39
+ sbc $14
+ lda $3a
+ sbc $15
+ bcs _a8bc
+ tya
+ sec
+ adc $7a
+ ldx $7b
+ bcc _a8c0
+ inx
+ bcs _a8c0
+_a8bc: lda $2b
+ ldx $2c
+_a8c0: jsr FINDLN+4 //search for line number
+ lda $5f
+ sbc #$01
+ sta $7a
+ lda $60
+ sbc #$00
+ sta $7b
+ rts
+//
 //Evaluate tokens via vector ($0308)
 //
-exccmd: lda traceflag
- beq execut
+exccmd:
+ lda traceflag
+ beq notrace
  jsr trace1
-execut: jsr CHRGET
+notrace:
+ ldy keyflag
+ beq execut    //off
+ dey
+ bne execut    //paused
+ lda $c6       //num chars in keyboard buffer
+ beq execut
+ lda #2        //0=off,1=on,2=pause
+ sta keyflag   //pause key trapping
+ jsr $E5B4     //get char in keyboard buffer
+ sta keyentry  //use K=KEY(0) to get value
+ lda #3
+ jsr GETSTK    //check for space on stack
+ jsr nextstmt  //find beginning of next statement even if on next line
+goexec:
+ lda #>onkey1-1
+ pha
+ lda #<onkey1-1
+ pha
+ lda $7b       //save basic text ptr
+ pha           //of the statement to execute 
+ lda $7a       //after returning from subroutine
+ pha           //and it's
+ lda $3a       //basic line# to RETURN
+ pha
+ lda $39
+ pha
+ lda #TOKEN_GOSUB
+ pha
+ lda keyptr
+ sta $7a
+ lda keyptr+1
+ sta $7b
+ lda keyline
+ sta $39
+ lda keyline+1
+ sta $3a
+ jmp NEWSTT
+execut:
+ jsr CHRGET
  jsr tstcmd
  jmp NEWSTT
-tstcmd: cmp #FIRST_CMD_TOK
+quitnow: 
+ rts
+tstcmd:
+ beq quitnow
+ cmp #FIRST_CMD_TOK
  bcs oknew      //if token is greater than or equal to FIRST_CMD_TOK then MDBASIC
  cmp #TOKEN_RESTORE
  bne notrestore
@@ -713,7 +794,8 @@ oldcmd:
  cmp #TOKEN_ON
  bne oldcmd2
  jmp on
-oldcmd2: jsr CHRGOT
+oldcmd2:
+ jsr CHRGOT
  sec
  jmp $a7ed      //execute CBM statement
 oknew:
@@ -725,6 +807,7 @@ oknew:
  lda cmdtab,x    //lobyte
  pha
  jmp CHRGET
+ 
 //
 //Evalutate functions via vector ($030A) originaly IEVAL $AE86
 //
@@ -866,7 +949,7 @@ if: jsr CHRGET
 condit:
  lda $61        //expression result 0=false, otherwise true
  bne istrue     //non-zero means expression is true
- jsr $a909      //???skip to end of line or colon???
+ jsr DATAN+3    //find end of current BASIC statement
  beq isfalse    //now check for ELSE
 istrue:
  jsr CHRGOT     //check current char is numeric digit
@@ -1282,13 +1365,14 @@ newrun: beq oldrun
 oldrun: jmp RUN  //CBM BASIC - perform RUN
 lodrun: lda #$00    //prepare for load
  sta $0a     //load or verify? 0=load, 1=verify
+ sta keyflag //ensure key trapping is off
  jsr $e1d4   //set parms for LOAD, VERIFY, and SAVE
  jsr $a68e   //reset ptr to current text char to the beginning of program text
  jsr $e16f   //perform load
  jsr old
- lda #>NEWSTT  //vector to $a7ae on stack for rts
+ lda #>NEWSTT-1  //vector to $a7ae on stack for rts
  pha           //setup next statment for execution
- lda #<NEWSTT
+ lda #<NEWSTT-1
  pha
 runit: jmp $a659
 //
@@ -1323,10 +1407,10 @@ brkerr: jmp $e0f9 //kernal i/o routines
 //*******************
 newload: cmp #1    //flag for load routine (see $93) 0=Load, 1=Verify
  beq oldload       //if verifying then
- pha               //remember load/verify flag
- lda $b9           //check logical file number is >=128
+ ldx #0
+ stx keyflag       //turn off key trapping
+ ldx $b9           //check logical file number is >=128
  bmi newlod        //indicates MDBASIC load
- pla               //restore load/verify flag
 oldload: jmp $f4a5 //use original load routine
 newlod: dec $01    //rom to ram (a000-bfff)
  jmp loadd         //continue under rom with the rest of the new load routine
@@ -1765,6 +1849,19 @@ dec5f: dec $5f
  rts
 //
 //*******************
+//get BASIC line number ($14,$15) and text ptr-1 in X,Y
+getline:
+ jsr CHRGET
+ jsr LINGET   //convert an ascii # to 2 byte int
+ jsr FINDLN   //search for line#
+ bcc undef 
+ ldy $60
+ ldx $5f 
+ bne dec5f2
+ dey
+dec5f2: dex
+ rts
+//
 clearerr:
  ldy #0
  sty errnum
@@ -1790,14 +1887,29 @@ raiseerr:
  jmp ($0300)
 baderr2: jmp FCERR //illegal qty err
 baderr: jmp SNERR  //syntax err
-// ON hack to support ON ERROR
+// ON hack to support ON ERROR, ON KEY
 //TODO:
-//ON COLLISION TEXT GOSUB [line#]
-//ON COLLISION SPRITE GOSUB [line#]  
+//ON COLLISION TEXT GOSUB line#
+//ON COLLISION SPRITE GOSUB line# 
 on: jsr CHRGET
  cmp #TOKEN_ERROR
  beq onerror
+ cmp #TOKEN_KEY
+ beq onkey
  jmp $a94b    //perform ON
+onkey: jsr CHRGET
+ cmp #TOKEN_GOSUB
+ bne baderr
+ jsr getline
+ stx keyptr   //of the line# specified
+ sty keyptr+1
+ lda $14
+ sta keyline
+ lda $15
+ sta keyline+1
+ lda #1
+ sta keyflag   //turn off key trapping
+ rts
 onerror: jsr CHRGET
  cmp #TOKEN_GOTO
  beq errgoto
@@ -1810,16 +1922,9 @@ onerror: jsr CHRGET
  ldy #>resumenext  //so that all errors will be ignored
  jsr seterrvec     //and failed statement are skipped
  jmp CHRGET
-errgoto: jsr CHRGET
- jsr LINGET   //convert an ascii # to 2 byte int
- jsr FINDLN   //search for line#
- bcc undef 
- lda $5f      //store the basic txt ptr 
- sbc #1       //to the start position
- sta txtptr   //of the line# specified
- lda $60      //for use when error occurs
- sbc #0
- sta txtptr+1
+errgoto: jsr getline
+ stx txtptr        //of the line# specified
+ sty txtptr+1
  lda $14
  sta errtrap
  lda $15
@@ -1834,13 +1939,13 @@ detrap:       //enable error trapping
 seterrvec:
  stx $0300
  sty $0301
- rts 
+ rts
 //
 //*******************************************
 // error trap routine - x reg hold error #
 //*******************************************
 resumenext:
- lda $9d
+ lda $9d       //0=suppress msgs (program running mode) 
  bne olerr
  txa
  bmi quitrun
@@ -1850,7 +1955,7 @@ resumenext:
  lda $39
  sta errline
 nxtstmt:
- jsr $a906   //DATAN - Search Program Text for the End of the Current BASIC Statement
+ jsr DATAN   //Search Program Text for the End of the Current BASIC Statement
  tya         //apply offset to text ptr
  clc 
  adc $7a
@@ -1858,8 +1963,9 @@ nxtstmt:
  bcc nxtstmtok
  inc $7b
 nxtstmtok: rts
-quitrun: jsr detrap  //disable error trapping
- jmp $a480 //MAIN BASIC program loop
+quitrun:
+ jsr detrap   //disable error trapping
+ jmp $a480    //MAIN BASIC program loop
 olerr: jmp errors
 trap: lda $9d  //MSGFLG Flag: Kernal Message Control, #$C0=kernel & ctrl, #$80=ctrl only, #$40=kernel only, #$00=none
  bne olerr
@@ -1867,8 +1973,8 @@ trap: lda $9d  //MSGFLG Flag: Kernal Message Control, #$C0=kernel & ctrl, #$80=c
  bmi quitrun
  stx errnum    //set current error number
  jsr detrap    //disable error trapping
- lda #5
- jsr $a3fb     //check for space on stack
+ lda #3        //3 plus the 2 for this next call = 5 bytes
+ jsr GETSTK    //check for space on stack
  lda $7b       //save basic text ptr
  pha           //of the statement that 
  lda $7a       //caused the error
@@ -1889,7 +1995,7 @@ trap: lda $9d  //MSGFLG Flag: Kernal Message Control, #$C0=kernel & ctrl, #$80=c
  sta $39
  lda errtrap+1
  sta $3a
- jmp $a7ae     //setup nxt statement for execution
+ jmp NEWSTT     //setup nxt statement for execution
 //
 //*******************
 resume:
@@ -1923,7 +2029,8 @@ okresu:
  sta $7a     //pull text ptr from stack and make current
  pla 
  sta $7b
- jsr $a67a   //empty stack
+ pla         //discard address of calling subtroutine
+ pla
  jsr nxtstmt //set txt ptr to next statement
 continu:
  jsr entrap  //enable error trapping
@@ -1934,12 +2041,14 @@ continu:
  rts
 //perform RESUME linenum
 resume0:
-// pla 		 //discard ERROR token
-// pla       //discard line number that caused the error
-// pla
-// pla		 //discard txt ptr of error 
-// pla 
- jsr $a67a   //empty stack
+ pla       //discard ERROR token
+ pla       //discard line number that caused the error
+ pla
+ pla       //discard txt ptr of error 
+ pla 
+ pla       //discard address of calling subtroutine
+ pla       //NOTE: line number specified may or may not be inside a subroutine
+           //jsr $a67a to empty stack might be needed to prevent stack overflow or return without GOSUB 
  jsr CHRGOT
  jsr GOTO    //perform goto (adjust txt ptr to given line num)
  jmp continu
@@ -1953,18 +2062,24 @@ resum: pla   //discard ERROR token
  sta $7A
  pla 
  sta $7b
- jsr $a67a   //empty stack
+ pla         //discard address of calling subtroutine
+ pla
+ jsr prevtxt
+goerr:
+ jsr entrap  //enable error trapping
+ jmp ($0308)    //read and execute the next statement
+prevtxt:
  ldy #$00
 look7a: lda $7a //backup to the beginning of statement that caused the error
  bne dec7a
  dec $7b
 dec7a: dec $7a
  lda ($7a),y    //get char on program line
- beq goerr      //statement was the first one on the line
+ beq txtdone    //statement was the first one on the line
  cmp #':'       //did statement began at a colon?
  bne look7a     //no, keep looking
-goerr: jsr entrap  //enable error trapping
- jmp ($0308)    //read and execute the next statement
+txtdone: rts
+
 //
 //*******************
 // COLOR [foregndColor], [backgndColor], [borderColor]
@@ -3859,7 +3974,7 @@ romerr: lda $a326,x  //$A328-$A364 Error Message Vector Table
  lda $a327,x
 hibyer: sta $23
  jsr norm
- lda #$80
+ lda #$80   //only control messages - SEARCHING, SAVING, FOUND, etc.
  jsr SETMSG
  jsr CLRCHN //restore default devices
  lda #$00
@@ -4242,13 +4357,16 @@ prtnum: jsr FOUT  //convert fac1 to ascii
 //*** Global Variable Storage
 //*****************************************************************
 
-//TRACE command
 traceflag:   .byte 0 //trace flag 0=off, 1-on
 listflag:    .byte 0 //list flag: 0=off, 1=on
+keyflag:     .byte 0 //key capture mode: 0=disabled, 1=enabled, 2=paused
+keyentry:    .byte 0 //the scan code of the last key captured with ON KEY statement enabled
 errnum:      .byte 0 //last error number that occured, default 0 (no error)
 errline:     .word $FFFF //last line number causing error, default -1 (not applicable)
 errtrap:     .word 0 //error handler line number
 txtptr:      .word 0 //basic txt ptr of statement causing error
+keyptr:      .word 0 //basic txt ptr of statement for ON KEY GOSUB line#
+keyline:     .word $FFFF //line number for ON KEY subroutine
 
 //SOUND COMMAND:
 md417:      .byte 0  //holds current filter control and resonance
@@ -5603,7 +5721,7 @@ chbyc: lda $fe
 //*********************
 //load command re-write
 //*********************
-loadd: pla   //discard load/verify flag
+loadd:
  pla         //discard return address
  pla
  ldx #0
