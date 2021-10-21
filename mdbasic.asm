@@ -71,6 +71,8 @@ Bit 7: High bit (Bit 8) of raster compare register at 53266 ($D012)
 .label CUTHI  = $d416 //Filter Cutoff Frequency (high byte)
 .label RESON  = $d417 //Filter Resonance Control Register
 .label SIGVOL = $d418 //Volume and Filter Select Register
+.label POTX   = $d419 //Read Game Paddle 1 or 3 Position
+//.label POTY   = $d41a //54298 Read Game Paddle 2 or 4 Position
 
 //Complex Interface Adapter (CIA) #1 Registers ($DC00-$DC0F)
 .label CIAPRA = $dc00 //Data Port Register A
@@ -297,8 +299,8 @@ Token #   Function  Routine Address
 .label TOKEN_RESUME  = $e8
 .label TOKEN_SOUND   = $eb
 .label TOKEN_KEY     = $f7
+.label FIRST_FUN_TOK = $f7  //first MDBASIC function
 .label TOKEN_ERROR   = $f8
-.label FIRST_FUN_TOK = $f8  //first MDBASIC function
 .label TOKEN_PI      = $ff  //PI symbol token
 
 *=$8000 "MDBASIC RAM Memory Block"
@@ -307,7 +309,7 @@ Token #   Function  Routine Address
 .byte $c3,$c2,$cd,$38,$30  //necessary for cartridge indicator
 //
 mesge: .byte 147
-.text "MDBASIC 21.10.3"
+.text "MDBASIC 21.10.20"
 .byte 13
 .text "(C)1985-2021 MARK BOWREN"
 .byte 13,0
@@ -433,9 +435,9 @@ newcmd:
 .text "RESE"
 .byte 212
 
+//statement and a function
 .text "KE"
 .byte 217
-//statement and a function
 .text "ERRO"
 .byte 210
 //functions only CSR PEN JOY POT HEX$ INSTR
@@ -469,7 +471,7 @@ cmdtab:
 .word RESET-1,  key-1,    error-1                                 //$f8
 //functions
 funtab: 
-.word err                              //$f8 is both a command and a function
+.word _key, err                        //$f7, $f8 are both a command and a function
 .word csr, pen, joy, pot, hex, instr   //$f9,$fa,$fb,$fc,$fd,$fe tokens for func
 //token $ff is reserved for PI
 //
@@ -689,38 +691,37 @@ cont1: iny
  bne oldtst
  beq notfou
 //
-
+nextstmt:
+ ldy #0
+ lda ($7a),y
+ bne _a807
+ ldy #2
+ lda ($7a),y
+ clc
+ bne _a7ce
+ jmp $a84b
+_a7ce: iny
+ lda ($7a),y
+ sta $39
+ iny
+ lda ($7a),y
+ sta $3a
+ tya
+ adc $7a
+ sta $7a
+ bcc _a7e1
+ inc $7b
+_a7e1: rts
+_a807: cmp #$3a
+ beq _a7e1
+ jmp $af08
+//
+//after ON KEY RETURN re-enable key trapping then fall through to main routine
 onkey1:
+ lda keyflag   //if key trapping turned off manually during subroutine
+ beq exccmd    //then no need to switch pause to on
  lda #1        //0=off,1=on,2=pause
  sta keyflag   //pause key trapping
- jmp NEWSTT
-//
-//find beginning of next statement even if on next line number
-nextstmt:
- jsr DATAN+3   //find end of current BASIC statement
- sec
- lda $39
- sbc $14
- lda $3a
- sbc $15
- bcs _a8bc
- tya
- sec
- adc $7a
- ldx $7b
- bcc _a8c0
- inx
- bcs _a8c0
-_a8bc: lda $2b
- ldx $2c
-_a8c0: jsr FINDLN+4 //search for line number
- lda $5f
- sbc #$01
- sta $7a
- lda $60
- sbc #$00
- sta $7b
- rts
 //
 //Evaluate tokens via vector ($0308)
 //
@@ -730,18 +731,17 @@ exccmd:
  jsr trace1
 notrace:
  ldy keyflag
- beq execut    //off
+ beq execut     //key trapping is off
  dey
- bne execut    //paused
- lda $c6       //num chars in keyboard buffer
+ bne execut     //key trapping is paused
+ lda $c6        //num chars in keyboard buffer
  beq execut
- lda #2        //0=off,1=on,2=pause
- sta keyflag   //pause key trapping
- jsr $E5B4     //get char in keyboard buffer
- sta keyentry  //use K=KEY(0) to get value
+ jsr $E5B4      //get char in keyboard buffer
+ sta keyentry   //use K=KEY(0) to get value
+ lda #2         //0=off,1=on,2=pause
+ sta keyflag    //pause key trapping
  lda #3
- jsr GETSTK    //check for space on stack
- jsr nextstmt  //find beginning of next statement even if on next line
+ jsr GETSTK     //check for space on stack
 goexec:
  lda #>onkey1-1
  pha
@@ -765,7 +765,7 @@ goexec:
  sta $39
  lda keyline+1
  sta $3a
- jmp NEWSTT
+ jsr nextstmt
 execut:
  jsr CHRGET
  jsr tstcmd
@@ -773,7 +773,7 @@ execut:
 quitnow: 
  rts
 tstcmd:
- beq quitnow
+ beq quitnow    //occurs when line ends with a colon
  cmp #FIRST_CMD_TOK
  bcs oknew      //if token is greater than or equal to FIRST_CMD_TOK then MDBASIC
  cmp #TOKEN_RESTORE
@@ -787,6 +787,8 @@ notrestore:
  jmp if
 do_run:
  jsr detrap  //turn off error trapping incase it was enabled in previous run
+ lda #0
+ sta keyflag //ensure key trapping is off
  jsr CHRGOT
  sec
  jmp newrun
@@ -802,9 +804,9 @@ oknew:
  sbc #FIRST_CMD_TOK //first mdbasic cmd token for index calc start at 0
  asl            //index * 2 for word pointer indexing
  tax
- lda cmdtab+1,x  //hibyte
+ lda cmdtab+1,x //hibyte
  pha
- lda cmdtab,x    //lobyte
+ lda cmdtab,x   //lobyte
  pha
  jmp CHRGET
  
@@ -1365,7 +1367,6 @@ newrun: beq oldrun
 oldrun: jmp RUN  //CBM BASIC - perform RUN
 lodrun: lda #$00    //prepare for load
  sta $0a     //load or verify? 0=load, 1=verify
- sta keyflag //ensure key trapping is off
  jsr $e1d4   //set parms for LOAD, VERIFY, and SAVE
  jsr $a68e   //reset ptr to current text char to the beginning of program text
  jsr $e16f   //perform load
@@ -1469,16 +1470,23 @@ faccpy: lda $0069,y //swap 1 to 2
  rts
 //
 //*******************
-find: lda $0801
+//
+find:
+ ldy #0
+ lda ($2b),y //should be $0801
  sta $fb
- lda $0802
+ iny
+ lda ($2b),y //should be $0802
  sta $fc
  ora $fb
  bne prgyes
  jmp prgend
-prgyes: lda $0803
+prgyes:
+ iny
+ lda ($2b),y //should be $0803
  sta $39
- lda $0804
+ iny
+ lda ($2b),y //should be $0804
  sta $3a
  jsr CHRGOT
  bne dofind
@@ -1898,6 +1906,8 @@ on: jsr CHRGET
  beq onkey
  jmp $a94b    //perform ON
 onkey: jsr CHRGET
+ cmp #TOKEN_OFF
+ beq onkeyoff
  cmp #TOKEN_GOSUB
  bne baderr
  jsr getline
@@ -1908,8 +1918,11 @@ onkey: jsr CHRGET
  lda $15
  sta keyline+1
  lda #1
- sta keyflag   //turn off key trapping
+ sta keyflag   //turn on key trapping
  rts
+onkeyoff: lda #0
+ sta keyflag
+ jmp CHRGET
 onerror: jsr CHRGET
  cmp #TOKEN_GOTO
  beq errgoto
@@ -3731,6 +3744,28 @@ okjoy: tay
 nofire: tay //lowbyte
  jmp nobutt
 //
+// K% = KEY(n) where n=0: ascii, n=1: flags
+keybytes: .word keyentry,SHFLAG,$00c5,$00cb,$00c6
+//0 keyentry - used with ON KEY GOSUB to indicate key causing event
+//1 $028d SHFLAG Shift/Ctrl/Logo key flags
+//2 $00c5 LSTX Matrix Coordinate of Last Key Pressed
+//3 $00cb SFDX Matrix Coordinate of Current Key Pressed
+//4 $00c6 Num chars in key buf
+_key:
+ jsr fac2int
+ cmp #5
+ bcs badpot
+ asl
+ tay
+ lda keybytes,y
+ sta $fb
+ lda keybytes+1,y
+ sta $fc
+ ldy #0
+ lda ($fb),y
+ tay
+ jmp nobutt
+//
 //E% = ERROR(n) where n=0: Error Number, n=1: Error Line Number
 err:
  jsr fac2int
@@ -3772,7 +3807,7 @@ wait: dey
  bpl wait
  lsr
  tay
- lda 54297,y
+ lda POTX,y
  ldx #$ff
  stx CIDDRA
  cli
@@ -4360,7 +4395,7 @@ prtnum: jsr FOUT  //convert fac1 to ascii
 traceflag:   .byte 0 //trace flag 0=off, 1-on
 listflag:    .byte 0 //list flag: 0=off, 1=on
 keyflag:     .byte 0 //key capture mode: 0=disabled, 1=enabled, 2=paused
-keyentry:    .byte 0 //the scan code of the last key captured with ON KEY statement enabled
+keyentry:    .byte 0 //byte0: the scan code of the last key captured with ON KEY statement enabled
 errnum:      .byte 0 //last error number that occured, default 0 (no error)
 errline:     .word $FFFF //last line number causing error, default -1 (not applicable)
 errtrap:     .word 0 //error handler line number
