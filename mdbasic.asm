@@ -1906,8 +1906,6 @@ on: jsr CHRGET
  beq onkey
  jmp $a94b    //perform ON
 onkey: jsr CHRGET
- cmp #TOKEN_OFF
- beq onkeyoff
  cmp #TOKEN_GOSUB
  bne baderr
  jsr getline
@@ -1920,9 +1918,6 @@ onkey: jsr CHRGET
  lda #1
  sta keyflag   //turn on key trapping
  rts
-onkeyoff: lda #0
- sta keyflag
- jmp CHRGET
 onerror: jsr CHRGET
  cmp #TOKEN_GOTO
  beq errgoto
@@ -3603,9 +3598,10 @@ vocrdy: rts
 //*******************
 // KEY n, "string"  where n = (1-8)
 key:
-//jsr CHRGET
  cmp #TOKEN_LIST   //list token?
  beq keylist
+ cmp #TOKEN_OFF
+ beq onkeyoff
 keyass: jsr skip73 //get key#
  beq badkey
  cmp #9            //only func keys 1-8
@@ -3617,7 +3613,10 @@ okkey: sta $02     //save key#
  beq key-1         //quit
  dec $01
  jmp keyy
-donehere: rts
+onkeyoff: lda #0
+ sta keyflag
+ sta keyentry
+ jmp CHRGET
 keylist: dec $01
  jmp keylistt
 //*******************
@@ -3629,6 +3628,7 @@ keylist: dec $01
 //"C0:sourceFile=destinationFile" - copy a file
 //"R0:newfileName=oldfileName" - rename file
 //"V0:" - defragment disk
+donehere: rts
 disk:
  jsr getstr0     //get DOS string
  beq donehere
