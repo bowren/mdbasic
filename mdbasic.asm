@@ -720,8 +720,8 @@ _a807: cmp #$3a
 onkey1:
  lda keyflag   //if key trapping turned off manually during subroutine
  beq exccmd    //then no need to switch pause to on
- lda #1        //0=off,1=on,2=pause
- sta keyflag   //pause key trapping
+ dec keyflag   //otherwise switch from paused (2) to on (1)
+ bne execut    //always branches: allows the interrupted statement to execute
 //
 //Evaluate tokens via vector ($0308)
 //
@@ -730,7 +730,7 @@ exccmd:
  beq notrace
  jsr trace1
 notrace:
- ldy keyflag
+ ldy keyflag    //0=off,1=on,2=pause
  beq execut     //key trapping is off
  dey
  bne execut     //key trapping is paused
@@ -738,11 +738,9 @@ notrace:
  beq execut
  jsr $E5B4      //get char in keyboard buffer
  sta keyentry   //use K=KEY(0) to get value
- lda #2         //0=off,1=on,2=pause
- sta keyflag    //pause key trapping
+ inc keyflag    //pause key trapping
  lda #3
  jsr GETSTK     //check for space on stack
-goexec:
  lda #>onkey1-1
  pha
  lda #<onkey1-1
@@ -768,12 +766,10 @@ goexec:
  jsr nextstmt
 execut:
  jsr CHRGET
+ beq nocmd   //occurs when line ends with a colon
  jsr tstcmd
- jmp NEWSTT
-quitnow: 
- rts
+nocmd: jmp NEWSTT
 tstcmd:
- beq quitnow    //occurs when line ends with a colon
  cmp #FIRST_CMD_TOK
  bcs oknew      //if token is greater than or equal to FIRST_CMD_TOK then MDBASIC
  cmp #TOKEN_RESTORE
