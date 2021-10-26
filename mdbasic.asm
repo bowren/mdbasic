@@ -1105,11 +1105,11 @@ fill:
  bcc okx1
 illqty: jmp FCERR  //display illegal qty error
 okx1: sta $fb
- sta $a3
+ sta $be //$a3
  jsr getval   //y1 (0-24)
  cmp #25      //max is 25 so if greater than error
  bcs illqty
- sta $a4
+ sta $bf //$a4
  tay
  beq colbas
  lda $fb
@@ -1126,22 +1126,22 @@ getx2: jsr getval //x2
  cmp #40
  bcs illqty
  sec
- sbc $a3 //x2-x1
- sta $a3
+ sbc $be //$a3 //x2-x1
+ sta $be //$a3
  jsr getval //y2
  cmp #25
  bcs illqty
  sec
- sbc $a4 //y2-y1
- sta $a4
+ sbc $bf //$a4 //y2-y1
+ sta $bf //$a4
  jsr comck2
  beq srncol
  jsr pokchr
  jsr chkcomm
 srncol: jsr getval
  sta $02
- ldx $a4
-nxtc: ldy $a3
+ ldx $bf //$a4
+nxtc: ldy $be //$a3
  lda $02
 nxtcol: sta ($fd),y
  dey
@@ -1158,8 +1158,8 @@ nxtcol: sta ($fd),y
  rts
 pokchr: jsr skip73
  sta $bb
- ldx $a4
-pokep: ldy $a3
+ ldx $bf //$a4
+pokep: ldy $be //$a3
 nextp: lda $bb
  sta ($fb),y
  dey
@@ -2147,18 +2147,18 @@ move:
  jsr sprnum //get sprite# and store in $a3 and 2^sprite# in $a4
  tya        //sprite number 0-7
  asl        //convert to 2-byte index for registers
- sta $03    //sprite# * 2
+ sta $0f    //sprite# * 2
  jsr backuppoint  //save last plot used by graphics commands in case of from/to move
  jsr CHRGOT
  cmp #TOKEN_TO
  bne getfrom
 //get current x and y coordiates for move starting point
- ldy $03       //sprite# * 2
+ ldy $0f       //sprite# * 2
  lda SP0Y,y    //get current y coord for sprite
  sta $fd
  lda SP0X,y    //get current x coord for sprite
  sta $fb
- lda $a4       //2^sprite#
+ lda $bf //$a4       //2^sprite#
  and MSIGX     //get msb of x coordinate
  beq msbx
  lda #1        //hibyte for x coord in y reg
@@ -2173,19 +2173,19 @@ getfrom:
  bcc biton
  jmp FCERR //illegal qty - a valid x coordinate is between 0 and 511
 biton: lda MSIGX  //Most Significant Bits of Sprites 0-7 Horizontal Position
- ora $a4   //2^sprite# ie: sprite0=1, sprite1=2, sprite3=4, etc.
+ ora $bf //$a4   //2^sprite# ie: sprite0=1, sprite1=2, sprite3=4, etc.
  jmp msb
-bitof: lda $a4 //sprite register offset 2^sprite#
+bitof: lda $bf //$a4 //sprite register offset 2^sprite#
  eor #$ff
  and MSIGX
 msb: sta MSIGX  //x coord hibyte
- ldy $03        //sprite# * 2
+ ldy $0f        //sprite# * 2
  lda $14
  sta SP0X,y     //sprite x coord
  sta $fb
  jsr chkcomm
  jsr getval
- ldy $03        //sprite# * 2
+ ldy $0f        //sprite# * 2
  lda $14
  sta SP0Y,y     //sprite y coord
  sta $fd
@@ -2193,8 +2193,8 @@ msb: sta MSIGX  //x coord hibyte
  cmp #TOKEN_TO
  bne move-1  //TO token not present so we are done
 moveto:
- lda $a4     //temp var holding 2^sprite# value
- sta $05     //temp var for moving sprite on a line
+ lda $bf     //temp var holding 2^sprite# value
+ sta $07     //temp var for moving sprite on a line
  jsr dbyval  //get destination x coordinate
  cpy #2      //must be between 0 and 511
  bcc okpnt2
@@ -2231,18 +2231,18 @@ sprite:
  jmp FCERR      //illegal qty for boolean value
 onezro: lda $14 //visible param
  bne spron
- lda $a4        //turn sprite off
+ lda $bf //$a4        //turn sprite off
  eor #$ff
  and SPENA
  jmp onoff
 spron: lda SPENA //turn sprite on
- ora $a4
+ ora $bf //$a4
 onoff: sta SPENA
  jsr chkcomm
 scr: jsr comck2
  beq smcr
  jsr skip73
- lda $a3       //sprite number 0-7
+ lda $be //$a3       //sprite number 0-7
  tay
  lda $14
  sta SP0COL,y  //sprite y's color
@@ -2252,15 +2252,15 @@ smcr: jsr comck2
  jsr skip73
  bne setm
  lda SPMC     //mcol off
- ora $a4
+ ora $bf //$a4
  sec
- sbc $a4
+ sbc $bf //$a4
  jmp skipmc
 setm: cmp #1
  beq setmul
  jmp FCERR     //illegal quantity error
 setmul: lda SPMC //mcol on
- ora $a4
+ ora $bf //$a4
 skipmc: sta SPMC
  jsr chkcomm
 spntr: jsr comck2
@@ -2286,20 +2286,20 @@ spntr: jsr comck2
  lda #$f8       //lobyte of offset to first byte of sprite data ptrs
  sta $fb        //pointer to first byte of sprite data ptr, ie: bank 0 with 1K offset is $04F8
  lda $14
- ldy $a3
+ ldy $be //$a3
  sta ($fb),y    //sprite y's data ptr
 //
 prorty: jsr chkcomm  //if end of statement then do not return here
  jsr getval  //get priority
  bne ontop
- lda $a4
+ lda $bf //$a4
  ora SPBGPR
  sta SPBGPR
  rts
 ontop: cmp #1
  beq okpri
  jmp FCERR
-okpri: lda $a4
+okpri: lda $bf //$a4
  eor #$ff
  and SPBGPR
  sta SPBGPR
@@ -2358,28 +2358,28 @@ expand:
  jsr skip73
  bne onchk
  lda $d01d //x expand off
- ora $a4
+ ora $bf //$a4
  sec
- sbc $a4
+ sbc $bf //$a4
  jmp magx
 onchk: cmp #$01
  beq doit
 illqty2: jmp FCERR //illegal quan.
 doit: lda $d01d
- ora $a4
+ ora $bf //$a4
 magx: sta $d01d //x expand on
  jsr chkcomm
 magx2: jsr getval
  bne magchk
  lda YXPAND
- ora $a4
+ ora $bf //$a4
  sec
- sbc $a4
+ sbc $bf //$a4
  jmp magy
 magchk: cmp #$01
  bne illqty2
 sety: lda YXPAND //y expand
- ora $a4
+ ora $bf //$a4
 magy: sta YXPAND
  rts
 cls: lda #$93   //clear screen
@@ -2458,20 +2458,20 @@ design:
  sta $bc
  lda #$00
  sta $bb
- sta $a3
+ sta $be //$a3
  lda #$d0    //source location 4K CHAREN at $D000-$DFFF
- sta $a4
+ sta $bf //$a4
  lda $01
  pha
  and #%11111011 //bit2=0 switch out I/O and bring in CHAREN ROM into bank $d000-$dfff
  sei
  sta $01
 nex256: ldy #0
-nexbyt: lda ($a3),y
+nexbyt: lda ($be),y //($a3),y
  sta ($bb),y
  iny
  bne nexbyt
- inc $a4
+ inc $bf //$a4
  inc $bc
  bne nex256
  pla
@@ -2480,18 +2480,18 @@ nexbyt: lda ($a3),y
  jmp CHRGET
 dodesign:
  lda #$f0      //perfrom design pokecode,d1,d2,...,d8
- sta $a4       //$f000 = location of char bit data
+ sta $bf //$a4       //$f000 = location of char bit data
  lda #$00
- sta $a3
+ sta $be //$a3
  jsr skip73    //get pokecode
  beq skipcopy
  tay
 
- lda $a3
- ldx $a4
+ lda $be //$a3
+ ldx $bf //$a4
  jsr times8   //calc ptr (8 bytes per char)
- sta $a3
- stx $a4
+ sta $be //$a3
+ stx $bf //$a4
 
 skipcopy:
  jsr ckcom2    //throw misop if current text is not a comma
@@ -2499,7 +2499,7 @@ skipcopy:
 gtdata: sty $02
  jsr getval
  ldy $02
- sta ($a3),y
+ sta ($be),y //($a3),y
  jsr ckcom2
  iny 
  cpy #7
@@ -2507,7 +2507,7 @@ gtdata: sty $02
  jsr getval
  ldy $02
  iny 
- sta ($a3),y
+ sta ($be),y //($a3),y
  rts
 //
 //*******************
@@ -2527,15 +2527,15 @@ bitmap:
  cmp #TOKEN_CLR
  bne bitscr
 bitclr: lda #$e0 //bitmap located at $e000 ptr is ($a3)
- sta $a4
+ sta $bf //$a4
  lda #$00
- sta $a3
+ sta $be //$a3
 nxpart: ldy #0
  lda #0          //clear bitmap page
-clrbyt: sta ($a3),y
+clrbyt: sta ($be),y //($a3),y
  iny
  bne clrbyt
- inc $a4
+ inc $bf //$a4
  bne nxpart
  jmp CHRGET
 illqty6: jmp FCERR //illegal qty
@@ -3263,14 +3263,14 @@ getscroll:
  bcc goodscroll
 badscroll: jmp FCERR //illegal quantity error
 goodscroll: sta $fb
- sta $a3
+ sta $be //$a3
  lda HIBASE   //top page of screen memory
  sta $fc
  jsr ckcom2   //throw misop if current char is not comma
  jsr getval   //y1
  cmp #25      //max rows
  bcs badscroll
- sta $a4
+ sta $bf //$a4
  tay 
  beq notime40
  lda $fb
@@ -3288,15 +3288,15 @@ foundto: jsr getval //x2
  cmp #40
  bcs badscroll
  sec 
- sbc $a3
- sta $a3
+ sbc $be //$a3
+ sta $be //$a3
  jsr ckcom2
  jsr getval //y2
  cmp #25
  bcs badscroll
  sec 
- sbc $a4
- sta $a4
+ sbc $bf //$a4
+ sta $bf //$a4
  rts 
 //
 //*******************
@@ -4310,10 +4310,10 @@ sprnum:
  bcc less8
  ldx #33           //illegal sprite number
  jmp ($0300)
-less8: sta $a3
+less8: sta $be //$a3
  tay
  lda bitweights,y
- sta $a4           //2^sprite#
+ sta $bf //$a4           //2^sprite#
  rts
 //*******************
 getvoc:
@@ -4539,10 +4539,10 @@ keylistt: lda #13 //cr
  sta $bb //key#
  lda #<keybuf
  sta $fb //odd keys F1, F3, F5, F7
- sta $a3
+ sta $be //$a3
  lda #>keybuf
  sta $fc  //hi byte for odd keys
- sta $a4
+ sta $bf //$a4
  sta $fe  //bi byte for even keys is same hi byte since all keys live inside 64 bytes
  lda #<keybuf+$40
  sta $fd //even keys offset F2, F4, F6, F8
@@ -4552,9 +4552,9 @@ nextke: jsr kprnt
  adc #$10
  sta $fb
  lda $fd
- sta $a3
+ sta $be //$a3
  lda $fe
- sta $a4
+ sta $bf //$a4
  inc $bb //key#+1
  jsr kprnt
  lda $fd
@@ -4566,9 +4566,9 @@ nextke: jsr kprnt
  jsr CHRGET
  jmp r6510 //switch LORAM back to LOROM
 exchng: lda $fb
- sta $a3
+ sta $be //$a3
  lda $fc
- sta $a4
+ sta $bf //$a4
  inc $bb
  jmp nextke
 //--------
@@ -4586,7 +4586,7 @@ kprnt: ldy #$ff
  lda #'"'
  jsr CHROUT
 nextlt: iny
- lda ($a3),y
+ lda ($be),y //($a3),y
  beq stoppr
  cmp #13 //cr?
  bne nocr
@@ -4599,7 +4599,7 @@ nextch: lda addcr,x //+chr$(13)
  cpx #$09
  bne nextch
  iny
- lda ($a3),y
+ lda ($be),y //($a3),y
  bne chrprs
  dey
  jmp prntit
@@ -4609,10 +4609,10 @@ chrprs: lda #'+'
  jsr CHROUT
  dey
  jmp nextlt
-prntit: lda ($a3),y
+prntit: lda ($be),y //($a3),y
  jsr CHROUT
  rts
-nocr: lda ($a3),y
+nocr: lda ($be),y //($a3),y
  jsr CHROUT
  jmp nextlt
 stoppr: lda #'"'
@@ -4648,11 +4648,7 @@ noincy: lda $fc  //determine which x coord is larger
  bcs storxy
 looper: ldy #$ff
  ldx #$ff
-// lda SCROLX
-// and #%00010000 //check if multicolor mode on or off
-// beq nodecy
-// dey
-nodecy: lda $fb
+ lda $fb
  sec
  sbc lastplotx
  sta $57
@@ -4681,7 +4677,7 @@ dniy:
 stya7: sty $a7
  lda #0
  sta $59
- sta $a3
+ sta $69
  ldx $57
  ldy $58
  bne b5ne
@@ -4689,7 +4685,7 @@ stya7: sty $a7
  bcs b5ne
  ldx $6b
  jsr fac
- sta $a3
+ sta $69
  jmp drwlin
 b5ne: jsr fac
  sta $59
@@ -4704,7 +4700,7 @@ fac: sty $6e
 drwlin: lda #0
  sta $9e
  sta $9f
- sta $a4
+ sta $6a
  sta $5a
 starts: jsr pokadd
  lda $fc
@@ -4717,26 +4713,26 @@ starts: jsr pokadd
  cmp lastploty
  bne aca3
  rts
-aca3: lda $a3
+aca3: lda $69
  clc
  adc $57
- sta $a3
- lda $a4
+ sta $69
+ lda $6a
  adc $58
- sta $a4
+ sta $6a
  cmp $6e
  beq a4is6e
  bcc a4cc
  bcs a4cs
-a4is6e: lda $a3
+a4is6e: lda $69
  cmp $6d
  bcc a4cc
-a4cs: lda $a3
+a4cs: lda $69
  sbc $6d
- sta $a3
- lda $a4
+ sta $69
+ lda $6a
  sbc $6e
- sta $a4
+ sta $6a
  lda $fb
  clc
  adc $6f
@@ -4779,15 +4775,15 @@ pokadd: lda moveflag  //flag: 0=LINE cmd, >0=MOVE cmd
 //hack to move a sprite instead of plot line
  lda $fc    //temp var hibyte of x coord
  beq nod010 //x is less than 256
- lda $05    //temp var of sprite's bit#
+ lda $07    //temp var of sprite's bit#
  ora MSIGX  //MSB of sprites 0-7 x coordinate 
  bne std010
-nod010: lda $05  //temp var
+nod010: lda $07
  eor #$ff
  and MSIGX
 std010: sta MSIGX
  lda $fb
- ldy $03  //temp var of sprite reg index
+ ldy $0f    //temp var of sprite reg index
  sta SP0X,y
  lda $fd
  sta SP0Y,y
@@ -4926,10 +4922,10 @@ texter: lda $58 //y size
  beq texter-1
 nextchar: lda #0
  sta $59        //index variable for current byte of dot data in char
- sta $a3
+ sta $be //$a3
  
  lda $26        //charset 0 at $d000, charset 1 at $d800
- sta $a4        //charset ptr hibyte
+ sta $bf //$a4        //charset ptr hibyte
 
 readstr: ldy #0
  lda ($50),y    //get character to display on bitmap
@@ -4948,11 +4944,11 @@ goodalpha: sec
  sbc #$40
 lessthana: tay 
  beq doloop3
- lda $a3
- ldx $a4
+ lda $be //$a3
+ ldx $bf //$a4
  jsr times8
- sta $a3
- stx $a4
+ sta $be //$a3
+ stx $bf //$a4
 doloop3: lda $58
  sta $5a    //temp var for y size multiplication by decrement loop
 doloop2: lda #128
@@ -4965,7 +4961,7 @@ doloop: ldy $59
  and #%11111011 //bit2=0 switch in CHAREN ROM into bank $d000-$dfff
  sei 
  sta $01     //use chargen (rom char images)
- lda ($a3),y //read CHAREN byte data for character (8 bytes, y=byte#) 
+ lda ($be),y //($a3),y read CHAREN byte data for character (8 bytes, y=byte#) 
  tax
  pla
  sta $01     //back to normal
@@ -5321,14 +5317,14 @@ tc4taf: lda $22,x
  ldx #3
  ldy #1
  jsr curve
- ldx #3
- ldy #0
+ ldx #0
+ ldy #3
  clc
-d8pb6: lda $0025,y
- adc $0059,y
- sta $0025,y
- iny
- dex
+d8pb6: lda $25,x
+ adc $59,x
+ sta $25,x
+ inx
+ dey
  bne d8pb6
  bcc dpcsym
  inc $28
@@ -5440,7 +5436,8 @@ f2b600: sta $59,x
  sty $5f
  lda #$80
  sta $60
-cc2bd: and $0057,y
+ ldx $5f
+cc2bd: and $57,x
  bne bdb2ne
  lsr $60
  lda $60
@@ -5448,7 +5445,7 @@ cc2bd: and $0057,y
  ror $60
  lda $60
  dec $5f
- dey
+ dex
  bpl cc2bd
  rts
 lsr2bd: lsr $60
@@ -6223,7 +6220,7 @@ aldone: lda SCROLY
 //***********************
 //scroll up
 scroll0: jsr wrapit
- ldy $a3
+ ldy $be //$a3
  lda $fb
  clc 
  adc #40
@@ -6238,7 +6235,7 @@ scroll0: jsr wrapit
  lda $fe
  adc #0
  sta $af
- dec $a4
+ dec $bf //$a4
  bpl cpyup
  lda $ff      //wrap?
  beq nowrapup
@@ -6272,7 +6269,7 @@ cpyup: lda ($ac),y
  sta $fe
  jmp scroll0+3
 //scroll down
-scroll1: ldy $a4
+scroll1: ldy $bf //$a4
  beq notimes40
  lda $fb
  ldx $fc
@@ -6282,7 +6279,7 @@ scroll1: ldy $a4
 notimes40:
  jsr addoffset
  jsr wrapit
-nxtdwn: ldy $a3
+nxtdwn: ldy $be //$a3
  lda $fb
  sec 
  sbc #40
@@ -6297,7 +6294,7 @@ nxtdwn: ldy $a3
  lda $fe
  sbc #0
  sta $af
- dec $a4
+ dec $bf //$a4
  bpl cpydwn
  lda $ff
  beq nowrapup
@@ -6332,14 +6329,14 @@ cpyleft: iny
  dey 
  sta ($fd),y
  iny 
- cpy $a3
+ cpy $be //$a3
  bne cpyleft
  jsr scrollh
- dec $a4
+ dec $bf //$a4
  bpl scroll2
  jmp r6510 //switch LORAM back to LOROM
 //scroll right
-scroll3: ldy $a3
+scroll3: ldy $be //$a3
  lda ($fb),y
  sta bufchar
  lda ($fd),y
@@ -6355,7 +6352,7 @@ cpyright: dey
  dey 
  bne cpyright
  jsr scrollh
- dec $a4
+ dec $bf //$a4
  bpl scroll3
  bmi scroll3-3
 //--scroll subs--
@@ -6387,7 +6384,7 @@ shiftcolor: sta ($fd),y
  sta $fe
  rts 
 //--------------
-wrapit: ldy $a3
+wrapit: ldy $be //$a3
 cpybuf: lda ($fb),y
  sta bufchar,y //char mem buffer
  lda ($fd),y
