@@ -309,7 +309,7 @@ Token #   Function  Routine Address
 .byte $c3,$c2,$cd,$38,$30  //necessary for cartridge indicator
 //
 mesge: .byte 147
-.text "MDBASIC 21.10.20"
+.text "MDBASIC 21.10.30"
 .byte 13
 .text "(C)1985-2021 MARK BOWREN"
 .byte 13,0
@@ -369,7 +369,7 @@ newcmd:
 .text "DELA"
 .byte 217
 .text "FILE"
-.byte 211
+.byte 'S'|$80  //.byte 211
 .text "COLO"
 .byte 210
 .text "MOV"
@@ -543,8 +543,10 @@ nwvec2: lda #0
  sta BGCOL0     //background color black
  sta traceflag  //trace flag off
  sta keyflag    //key trapping off
- sta blinkcol   //all colors turn off flash flag
- sta blinkcol+1
+ ldy #15
+noblink: sta blinkcol,y   //all colors turn off flash flag
+ dey
+ bpl noblink
  lda #$80       //value to enable all keys to repeat
  sta $028A      //which keys will repeat: 0=only cursor, insert, delete and spacebar keys, 64 = no keys, 128=all keys
  lda #14        //light blue
@@ -992,11 +994,11 @@ skpd51: dec $50 //TODO: this is bad. writing byte outside string alloc!!
  ldx $50        //str ptr lobyte
  ldy $51        //str ptr hibyte
 setnaminf: jsr SETNAM
- lda #$7f
- ldx #$08
- ldy #$00
+ lda #$7f       //file handle 127
+ ldx #$08       //device 8
+ ldy #$00       //secondary 0
  jsr SETLFS
- jsr OPEN
+ jsr OPEN       //perform OPEN 127,8,0,S$
  bcc noerr
  jmp clos7f
 noerr: ldx #$7f
@@ -1046,7 +1048,7 @@ openprint: lda #$7f     //file handle 127
  jsr SETLFS   //set logical file parameters BASIC eq: open 127,4,0
  lda #$00     //zero byte file name length (no name)
  jsr SETNAM   //set file name
- jsr OPEN     //perform OPEN
+ jsr OPEN     //perform OPEN 127,4,0,""
  bcc prtopen  //clear carry flag means success
  tax          //save a reg
  pla          //do not return to caller
@@ -1105,11 +1107,11 @@ fill:
  bcc okx1
 illqty: jmp FCERR  //display illegal qty error
 okx1: sta $fb
- sta $be //$a3
+ sta $be
  jsr getval   //y1 (0-24)
  cmp #25      //max is 25 so if greater than error
  bcs illqty
- sta $bf //$a4
+ sta $bf
  tay
  beq colbas
  lda $fb
@@ -1126,22 +1128,22 @@ getx2: jsr getval //x2
  cmp #40
  bcs illqty
  sec
- sbc $be //$a3 //x2-x1
- sta $be //$a3
+ sbc $be    //x2-x1
+ sta $be
  jsr getval //y2
  cmp #25
  bcs illqty
  sec
- sbc $bf //$a4 //y2-y1
- sta $bf //$a4
+ sbc $bf   //y2-y1
+ sta $bf
  jsr comck2
  beq srncol
  jsr pokchr
  jsr chkcomm
 srncol: jsr getval
  sta $02
- ldx $bf //$a4
-nxtc: ldy $be //$a3
+ ldx $bf
+nxtc: ldy $be
  lda $02
 nxtcol: sta ($fd),y
  dey
@@ -1158,8 +1160,8 @@ nxtcol: sta ($fd),y
  rts
 pokchr: jsr skip73
  sta $bb
- ldx $bf //$a4
-pokep: ldy $be //$a3
+ ldx $bf
+pokep: ldy $be
 nextp: lda $bb
  sta ($fb),y
  dey
@@ -2107,23 +2109,17 @@ noback: jsr getval
  rts
 blink:
  and #%00001111 //only lo nibble is the char color
- ldx #0         //assume lobyte
- cmp #8
- bcc blinkcol2
- inx            //focus on hibyte
- lsr            //convert value 8-15 to 0-7
- lsr
- lsr
 blinkcol2: tay
- lda blinkcol,x
- eor bitweights,y  //toggle bit y
- sta blinkcol,x    //apply new blink flag
- and bitweights,y  //was bit y 1 or 0?
+ lda blinkcol,y
+ eor #1
+ sta blinkcol,y    //apply new blink flag
  bne setfsh        //not currently flashing so enable it
 //check if there are any other colors needing the blink irq
- lda blinkcol
- ora blinkcol+1
- bne ecolor     //at least one flag still set so quit now
+ ldy #15
+chkblink: lda blinkcol,y
+ bne ecolor     //at least one flag still set so leave irq set
+ dey
+ bpl chkblink
 irqea31:
  ldx #$31       //re-apply original irq vector of $EA31
  ldy #$ea
@@ -2144,7 +2140,7 @@ ecolor: rts
 // MOVE sprite#, x1, y1 [TO x2, y2, speed]
 // MOVE sprite# TO x2, y2, [speed]
 move:
- jsr sprnum //get sprite# and store in $a3 and 2^sprite# in $a4
+ jsr sprnum //get sprite# and store in $be and 2^sprite# in $bf
  tya        //sprite number 0-7
  asl        //convert to 2-byte index for registers
  sta $0f    //sprite# * 2
@@ -2158,7 +2154,7 @@ move:
  sta $fd
  lda SP0X,y    //get current x coord for sprite
  sta $fb
- lda $bf //$a4       //2^sprite#
+ lda $bf       //2^sprite#
  and MSIGX     //get msb of x coordinate
  beq msbx
  lda #1        //hibyte for x coord in y reg
@@ -2173,9 +2169,9 @@ getfrom:
  bcc biton
  jmp FCERR //illegal qty - a valid x coordinate is between 0 and 511
 biton: lda MSIGX  //Most Significant Bits of Sprites 0-7 Horizontal Position
- ora $bf //$a4   //2^sprite# ie: sprite0=1, sprite1=2, sprite3=4, etc.
+ ora $bf   //2^sprite# ie: sprite0=1, sprite1=2, sprite3=4, etc.
  jmp msb
-bitof: lda $bf //$a4 //sprite register offset 2^sprite#
+bitof: lda $bf  //sprite register offset 2^sprite#
  eor #$ff
  and MSIGX
 msb: sta MSIGX  //x coord hibyte
@@ -2221,7 +2217,7 @@ nosped: lda #$ff
 //*******************
 //SPRITE [sprite#], [on/off], [color], [multi], [data pointer], [priority]
 sprite:
- jsr sprnum     //sprite# returned in $a3 and 2^sprite# in $a4
+ jsr sprnum     //sprite# returned in $be and 2^sprite# in $bf
  jsr ckcom2     //throw misop if current char is not comma
  jsr comck2     //get next char and compare to comma
  beq scr        //another comma so skip param
@@ -2231,36 +2227,36 @@ sprite:
  jmp FCERR      //illegal qty for boolean value
 onezro: lda $14 //visible param
  bne spron
- lda $bf //$a4        //turn sprite off
+ lda $bf        //turn sprite off
  eor #$ff
  and SPENA
  jmp onoff
 spron: lda SPENA //turn sprite on
- ora $bf //$a4
+ ora $bf
 onoff: sta SPENA
  jsr chkcomm
 scr: jsr comck2
  beq smcr
  jsr skip73
- lda $be //$a3       //sprite number 0-7
+ lda $be       //sprite number 0-7
  tay
  lda $14
  sta SP0COL,y  //sprite y's color
  jsr chkcomm
 smcr: jsr comck2
  beq spntr
- jsr skip73
+ jsr skip73   //get multicolor flag 0 or 1
  bne setm
- lda SPMC     //mcol off
- ora $bf //$a4
+ lda SPMC     //mc off
+ ora $bf      //2^sprite
  sec
- sbc $bf //$a4
+ sbc $bf
  jmp skipmc
 setm: cmp #1
  beq setmul
- jmp FCERR     //illegal quantity error
-setmul: lda SPMC //mcol on
- ora $bf //$a4
+ jmp FCERR    //illegal quantity error
+setmul: lda SPMC //mc on
+ ora $bf
 skipmc: sta SPMC
  jsr chkcomm
 spntr: jsr comck2
@@ -2286,20 +2282,20 @@ spntr: jsr comck2
  lda #$f8       //lobyte of offset to first byte of sprite data ptrs
  sta $fb        //pointer to first byte of sprite data ptr, ie: bank 0 with 1K offset is $04F8
  lda $14
- ldy $be //$a3
+ ldy $be
  sta ($fb),y    //sprite y's data ptr
 //
 prorty: jsr chkcomm  //if end of statement then do not return here
  jsr getval  //get priority
  bne ontop
- lda $bf //$a4
+ lda $bf
  ora SPBGPR
  sta SPBGPR
  rts
 ontop: cmp #1
  beq okpri
  jmp FCERR
-okpri: lda $bf //$a4
+okpri: lda $bf
  eor #$ff
  and SPBGPR
  sta SPBGPR
@@ -2351,35 +2347,35 @@ chrmap: lda SCROLX  //horiz fine scrolling and control reg
 //
 //*******************
 expand:
- jsr sprnum  //get sprite# and store in $a3 and 2^sprite# in $a4
+ jsr sprnum  //get sprite# and store in $be and 2^sprite# in $bf
  jsr ckcom2  //throw misop if current char is not comma
  jsr comck2  //get next char and compare with comma
  beq magx2
  jsr skip73
  bne onchk
  lda $d01d //x expand off
- ora $bf //$a4
+ ora $bf
  sec
- sbc $bf //$a4
+ sbc $bf
  jmp magx
 onchk: cmp #$01
  beq doit
 illqty2: jmp FCERR //illegal quan.
 doit: lda $d01d
- ora $bf //$a4
+ ora $bf
 magx: sta $d01d //x expand on
  jsr chkcomm
 magx2: jsr getval
  bne magchk
  lda YXPAND
- ora $bf //$a4
+ ora $bf
  sec
- sbc $bf //$a4
+ sbc $bf
  jmp magy
 magchk: cmp #$01
  bne illqty2
 sety: lda YXPAND //y expand
- ora $bf //$a4
+ ora $bf
 magy: sta YXPAND
  rts
 cls: lda #$93   //clear screen
@@ -2458,20 +2454,20 @@ design:
  sta $bc
  lda #$00
  sta $bb
- sta $be //$a3
+ sta $be
  lda #$d0    //source location 4K CHAREN at $D000-$DFFF
- sta $bf //$a4
+ sta $bf
  lda $01
  pha
  and #%11111011 //bit2=0 switch out I/O and bring in CHAREN ROM into bank $d000-$dfff
  sei
  sta $01
 nex256: ldy #0
-nexbyt: lda ($be),y //($a3),y
+nexbyt: lda ($be),y
  sta ($bb),y
  iny
  bne nexbyt
- inc $bf //$a4
+ inc $bf
  inc $bc
  bne nex256
  pla
@@ -2480,18 +2476,18 @@ nexbyt: lda ($be),y //($a3),y
  jmp CHRGET
 dodesign:
  lda #$f0      //perfrom design pokecode,d1,d2,...,d8
- sta $bf //$a4       //$f000 = location of char bit data
+ sta $bf       //$f000 = location of char bit data
  lda #$00
- sta $be //$a3
+ sta $be
  jsr skip73    //get pokecode
  beq skipcopy
  tay
 
- lda $be //$a3
- ldx $bf //$a4
+ lda $be
+ ldx $bf
  jsr times8   //calc ptr (8 bytes per char)
- sta $be //$a3
- stx $bf //$a4
+ sta $be
+ stx $bf
 
 skipcopy:
  jsr ckcom2    //throw misop if current text is not a comma
@@ -2499,7 +2495,7 @@ skipcopy:
 gtdata: sty $02
  jsr getval
  ldy $02
- sta ($be),y //($a3),y
+ sta ($be),y
  jsr ckcom2
  iny 
  cpy #7
@@ -2507,7 +2503,7 @@ gtdata: sty $02
  jsr getval
  ldy $02
  iny 
- sta ($be),y //($a3),y
+ sta ($be),y
  rts
 //
 //*******************
@@ -2526,16 +2522,16 @@ NOTE: when in mc mode graphics cmds use color index 1-3 (not color value 0-15) a
 bitmap:
  cmp #TOKEN_CLR
  bne bitscr
-bitclr: lda #$e0 //bitmap located at $e000 ptr is ($a3)
- sta $bf //$a4
+bitclr: lda #$e0 //bitmap located at $e000 ptr is ($be)
+ sta $bf
  lda #$00
- sta $be //$a3
+ sta $be
 nxpart: ldy #0
  lda #0          //clear bitmap page
-clrbyt: sta ($be),y //($a3),y
+clrbyt: sta ($be),y
  iny
  bne clrbyt
- inc $bf //$a4
+ inc $bf
  bne nxpart
  jmp CHRGET
 illqty6: jmp FCERR //illegal qty
@@ -3263,14 +3259,14 @@ getscroll:
  bcc goodscroll
 badscroll: jmp FCERR //illegal quantity error
 goodscroll: sta $fb
- sta $be //$a3
+ sta $be
  lda HIBASE   //top page of screen memory
  sta $fc
  jsr ckcom2   //throw misop if current char is not comma
  jsr getval   //y1
  cmp #25      //max rows
  bcs badscroll
- sta $bf //$a4
+ sta $bf
  tay 
  beq notime40
  lda $fb
@@ -3288,15 +3284,15 @@ foundto: jsr getval //x2
  cmp #40
  bcs badscroll
  sec 
- sbc $be //$a3
- sta $be //$a3
+ sbc $be
+ sta $be
  jsr ckcom2
  jsr getval //y2
  cmp #25
  bcs badscroll
  sec 
- sbc $bf //$a4
- sta $bf //$a4
+ sbc $bf
+ sta $bf
  rts 
 //
 //*******************
@@ -3499,7 +3495,7 @@ play:
  jmp CHRGET 
 playy:
  jsr getstr0
- beq endplay   //quit now if string is empty
+ beq play-1   //quit now if string is empty
  ldy #0
 cpystr: lda ($50),y
  sta playbuf1,y
@@ -3515,31 +3511,23 @@ cpystr: lda ($50),y
  lda #1
  sta playtime   //initial wait
 
- lda #<playit
+ ldx #<playit
  ldy #>playit
- sei 
- sta $0314
- sty $0315
- cli
-endplay: rts 
+ jmp setirqvec
 
 playit:
  dec playtime
  bne jea31
- 
  lda $01
  pha
  and #%11111110
  sta $01
-
  jsr notegot
  beq stoplay
  jsr nextn
-
 playgo:
  pla
  sta $01
-
 jea31: jmp $ea31
 stoplay:
  jsr playstop
@@ -3549,13 +3537,7 @@ playstop:
  ldx playvoice  //SID reg offset
  lda playwave   //select current waveform; start release cycle
  sta VCREG1,x   //start decay cycle
- lda #$31
- ldy #$ea
- sei 
- sta $0314
- sty $0315
- cli
- rts
+ jmp irqea31
 
 initvoice:
  sta playvoice  //voice register offset
@@ -4005,16 +3987,16 @@ romerr: lda $a326,x  //$A328-$A364 Error Message Vector Table
  lda $a327,x
 hibyer: sta $23
  jsr norm
- lda #$80   //only control messages - SEARCHING, SAVING, FOUND, etc.
+ lda #$80    //only control messages - SEARCHING, SAVING, FOUND, etc.
  jsr SETMSG
- jsr CLRCHN //restore default devices
+ jsr CLRCHN  //restore default devices
  lda #$00
  sta $13
- jsr $aad7  //perform print 
+ jsr $aad7   //perform print 
  ldy $3a
  iny
  beq nipm
- jsr cls //lda #$93 jsr CHROUT
+ jsr cls     //clear screen
 nipm: jsr $ab45
  ldy #$00    //loop: print all chars in err msg
 prterr: lda ($22),y
@@ -4031,7 +4013,7 @@ prterr: lda ($22),y
  ldy $3a
  iny
  bne inline
- jmp READY  //print READY. then continue with BASIC main loop
+ jmp READY   //print READY. then continue with BASIC main loop
 inline: jsr $bdc2 //display text IN {line#}
  lda $39
  sta $14
@@ -4051,7 +4033,7 @@ inline: jsr $bdc2 //display text IN {line#}
 //
 keychk: lda $9d //prg mode?
  beq nokey
- lda $d4       //quote mode?
+ lda $d4        //quote mode?
  bne nokey
  lda SHFLAG
  bne lgoshf
@@ -4089,11 +4071,10 @@ fkey: sec
 getlet: lda keybuf,y //get letter
  beq prnkey
  sta KEYD,x  //keyboard buffer
-// inc $c6     //# keys in keyboard buffer
  iny
  inx
  bne getlet
-prnkey: stx $c6 
+prnkey: stx $c6 //set num chars in keyboard buffer
  pla
  sta $01
  ldx #$ff
@@ -4103,65 +4084,40 @@ prnkey: stx $c6
 //* color flash irq *
 //*******************
 flash:
- dec blinkdly    //blink delay
- bne irqdone     //did we count down to zero? if so execute flashing code
- lda #20         //reset flash delay
- sta blinkdly    //global variable for flash delay
-
- lda $fb         //save global variables of $fb,$fc,$fd,$fe used by other routines
- pha
- lda $fc
- pha
- lda $fd
- pha
- lda $fe
- pha
-
- lda HIBASE      //color page of 1K each (1024) page (hi byte)
- sta $fc         //$fb, $fc hold pointer to text mem
- lda #$00
- sta $fb
- sta $fd         //$fd, $fe hold pointer to color mem at $d800
+ dec blinkdly     //blink delay
+ bne irqdone      //did we count down to zero? if so execute flashing code
+ lda #20          //reset flash delay
+ sta blinkdly     //global variable for flash delay
+ lda blinktyp     //get current flash type
+ eor #%10000000   //alternate bit 7 on every flash 
+ sta blinktyp     //new value to OR into screen RAM
+//init mem pointers
  lda #$d8
- sta $fe
+ sta mem1+2
+ lda HIBASE
+ sta mem2+2
+ sta mem3+2
+//process 4 blocks of 256 bytes of screen text & color
  ldy #0
-bcolor:
- ldx #0          //assume lobyte
- lda ($fd),y     //get color of text
- and #15         //text color is lo nibble, background color is hi nibble
- cmp #8
- bcc blinkcol2_
- inx            //focus on hibyte
- lsr            //convert value 8-15 to 0-7
- lsr
- lsr
-blinkcol2_: tay
- lda bitweights,y   //bit y weight is 2^y
- ldy #0
- and blinkcol,x     //is bit y of byte x set to 1?
- beq nxtblk         //no so skip it
- lda ($fb),y        //get text char
- eor #%10000000     //flip bit 7 on text char to alternate foreground and background
- sta ($fb),y        //apply new text char
-nxtblk: inc $fb     //text pointer lo byte - move to next text char
- inc $fd
- bne bcolor
- inc $fc            //text pointer hi byte
- inc $fe
-lastch: lda $fe     //color pointer hibyte
- cmp #$dc           //color ram stops at $DBFF
- bne bcolor         //last text mem to stop is when ($fb) = $07E7
-
- pla                //restore regsiters $fb,$fc,$fd,$fe to original values
- sta $fe
- pla
- sta $fd
- pla
- sta $fc
- pla
- sta $fb
-
-irqdone: jmp $ea31          //orgininal irq vector
+mem1: lda $d800,y  //get color of text
+ and #%00001111    //text color is in lo nibble, hi nibble may be random value so remove it
+ tax
+ lda blinkcol,x
+ beq nxtblk        //no so skip it
+mem2: lda $0400,y  //get text char to flash
+ and #%01111111    //ensure bit 7 is off
+ ora blinktyp      //apply alternating value for bit 7
+mem3: sta $0400,y  //apply new text char in screen RAM
+nxtblk: iny
+ bne mem1          //last text mem to stop is when ($fb) = $07E7
+ lda mem1+2
+ cmp #$db          //last color mem hibyte
+ beq irqdone
+ inc mem1+2
+ inc mem2+2
+ inc mem3+2
+ bne mem1          //always branches
+irqdone: jmp $ea31 //orgininal irq vector
 //
 //*******************************
 //* general purpose subroutines *
@@ -4186,8 +4142,8 @@ nxt7: clc
  bne nxt7    //stop adding once x is 0
 t7done: rts  //result in accumulator
 //*******************
-//add 8 to the double byte binary value in $a3 and $a4 yreg times
-//assumes y > 0; if y = 0 then adds 8, 256 times
+//add 8 to the double byte binary value in A (lobyte) and X (hibyte), Y times
+//assumes caller will not multiply by 0 or exceed result of 65535
 times8:
  clc
  adc #8
@@ -4200,8 +4156,8 @@ times8:
  bne times8
  rts
 //*******************
-//add 40 to the double byte binary value in A(lobyte) and X(hibyte), Y times
-//assumes y > 0; if y = 0 then adds 40, 256 times
+//add 40 to the double byte binary value in A (lobyte) and X (hibyte), Y times
+//assumes caller will not multiply by 0 or exceed result of 65535
 times40:
  clc
  adc #40
@@ -4310,10 +4266,10 @@ sprnum:
  bcc less8
  ldx #33           //illegal sprite number
  jmp ($0300)
-less8: sta $be //$a3
+less8: sta $be
  tay
  lda bitweights,y
- sta $bf //$a4           //2^sprite#
+ sta $bf          //2^sprite#
  rts
 //*******************
 getvoc:
@@ -4400,29 +4356,29 @@ keyptr:      .word 0 //basic txt ptr of statement for ON KEY GOSUB line#
 keyline:     .word $FFFF //line number for ON KEY subroutine
 
 //SOUND COMMAND:
-md417:      .byte 0  //holds current filter control and resonance
-md418:      .byte 0  //holds current volume (lo nibble) and filter type (hi nibble)
+md417:      .byte 0   //holds current filter control and resonance
+md418:      .byte 0   //holds current volume (lo nibble) and filter type (hi nibble)
 
 //blink flag for each color (when bit 7 is 1 then blink is off)
-blinkcol:   .word 0  //16 bits, each bit indicates which of the 16 colors (0-15) flash: 1=on, 0=off
+blinkcol:   .fill 16,0 //16 bytes indicates which of the 16 colors (0-15) flash: 0=flash, non-zero=no flash
 blinkdly:   .byte 20  //color blink delay countdown temp var
-
+blinktyp:   .byte 0   //bits to OR into screen ram to blink text; bit 7 flips on/off every flash
 //GENERAL GRAPHICS COMMANDS (Shared):
-lastplotx:  .word 0  //last plotted dot's x coord
-lastploty:  .byte 0  //last plotted dot's y coord
-lastplott:  .byte 1  //last plot type used
+lastplotx:  .word 0   //last plotted dot's x coord
+lastploty:  .byte 0   //last plotted dot's y coord
+lastplott:  .byte 1   //last plot type used
 mapcolc1c2: .byte $15 //current plot color; hi nibble = c1 (white), lo nibble = c2 (green)
-mapcolc3:   .byte 7  //c3 (1-3) multicolor mode color for bit pattern 11 (default yellow)
-mapcolbits: .byte 8  //(values 8,16,24) used for plotting a dot on a multi-color bitmap
+mapcolc3:   .byte 7   //c3 (1-3) multicolor mode color for bit pattern 11 (default yellow)
+mapcolbits: .byte 8   //(values 8,16,24) used for plotting a dot on a multi-color bitmap
 
-moveflag:   .byte 0  //flag for LINE function for which cmd is executing; 0=LINE, otherwise MOVE
+moveflag:   .byte 0   //flag for LINE function for which cmd is executing; 0=LINE, otherwise MOVE
 
-autonum:    .word 10 //hold 2-byte value of auto line numbering setting
+autonum:    .word 10  //hold 2-byte value of auto line numbering setting
 
 //PLAY command use only - used during IRQ
-playtime:  .byte 0  //current jiffies till next note for each voice
+playtime:  .byte 0  //,0,0  //current jiffies till next note for each voice
 playvoice: .byte 0  //,2,4  //SID register offset for each voice
-playwave:  .byte 0  //waveform for each voice
+playwave:  .byte 0  //,0,0  //waveform for each voice
 
 //*****************************************************************
 //*** Temp variables needed during subroutine execution only (local variables)
@@ -4539,10 +4495,10 @@ keylistt: lda #13 //cr
  sta $bb //key#
  lda #<keybuf
  sta $fb //odd keys F1, F3, F5, F7
- sta $be //$a3
+ sta $be
  lda #>keybuf
  sta $fc  //hi byte for odd keys
- sta $bf //$a4
+ sta $bf
  sta $fe  //bi byte for even keys is same hi byte since all keys live inside 64 bytes
  lda #<keybuf+$40
  sta $fd //even keys offset F2, F4, F6, F8
@@ -4552,9 +4508,9 @@ nextke: jsr kprnt
  adc #$10
  sta $fb
  lda $fd
- sta $be //$a3
+ sta $be
  lda $fe
- sta $bf //$a4
+ sta $bf
  inc $bb //key#+1
  jsr kprnt
  lda $fd
@@ -4566,9 +4522,9 @@ nextke: jsr kprnt
  jsr CHRGET
  jmp r6510 //switch LORAM back to LOROM
 exchng: lda $fb
- sta $be //$a3
+ sta $be
  lda $fc
- sta $bf //$a4
+ sta $bf
  inc $bb
  jmp nextke
 //--------
@@ -4586,7 +4542,7 @@ kprnt: ldy #$ff
  lda #'"'
  jsr CHROUT
 nextlt: iny
- lda ($be),y //($a3),y
+ lda ($be),y
  beq stoppr
  cmp #13 //cr?
  bne nocr
@@ -4599,7 +4555,7 @@ nextch: lda addcr,x //+chr$(13)
  cpx #$09
  bne nextch
  iny
- lda ($be),y //($a3),y
+ lda ($be),y
  bne chrprs
  dey
  jmp prntit
@@ -4609,10 +4565,10 @@ chrprs: lda #'+'
  jsr CHROUT
  dey
  jmp nextlt
-prntit: lda ($be),y //($a3),y
+prntit: lda ($be),y
  jsr CHROUT
  rts
-nocr: lda ($be),y //($a3),y
+nocr: lda ($be),y
  jsr CHROUT
  jmp nextlt
 stoppr: lda #'"'
@@ -4922,10 +4878,10 @@ texter: lda $58 //y size
  beq texter-1
 nextchar: lda #0
  sta $59        //index variable for current byte of dot data in char
- sta $be //$a3
+ sta $be
  
  lda $26        //charset 0 at $d000, charset 1 at $d800
- sta $bf //$a4        //charset ptr hibyte
+ sta $bf        //charset ptr hibyte
 
 readstr: ldy #0
  lda ($50),y    //get character to display on bitmap
@@ -4944,11 +4900,11 @@ goodalpha: sec
  sbc #$40
 lessthana: tay 
  beq doloop3
- lda $be //$a3
- ldx $bf //$a4
+ lda $be
+ ldx $bf
  jsr times8
- sta $be //$a3
- stx $bf //$a4
+ sta $be
+ stx $bf
 doloop3: lda $58
  sta $5a    //temp var for y size multiplication by decrement loop
 doloop2: lda #128
@@ -4961,7 +4917,7 @@ doloop: ldy $59
  and #%11111011 //bit2=0 switch in CHAREN ROM into bank $d000-$dfff
  sei 
  sta $01     //use chargen (rom char images)
- lda ($be),y //($a3),y read CHAREN byte data for character (8 bytes, y=byte#) 
+ lda ($be),y //read CHAREN byte data for character (8 bytes, y=byte#) 
  tax
  pla
  sta $01     //back to normal
@@ -6220,7 +6176,7 @@ aldone: lda SCROLY
 //***********************
 //scroll up
 scroll0: jsr wrapit
- ldy $be //$a3
+ ldy $be
  lda $fb
  clc 
  adc #40
@@ -6235,7 +6191,7 @@ scroll0: jsr wrapit
  lda $fe
  adc #0
  sta $af
- dec $bf //$a4
+ dec $bf
  bpl cpyup
  lda $ff      //wrap?
  beq nowrapup
@@ -6269,7 +6225,7 @@ cpyup: lda ($ac),y
  sta $fe
  jmp scroll0+3
 //scroll down
-scroll1: ldy $bf //$a4
+scroll1: ldy $bf
  beq notimes40
  lda $fb
  ldx $fc
@@ -6279,7 +6235,7 @@ scroll1: ldy $bf //$a4
 notimes40:
  jsr addoffset
  jsr wrapit
-nxtdwn: ldy $be //$a3
+nxtdwn: ldy $be
  lda $fb
  sec 
  sbc #40
@@ -6294,7 +6250,7 @@ nxtdwn: ldy $be //$a3
  lda $fe
  sbc #0
  sta $af
- dec $bf //$a4
+ dec $bf
  bpl cpydwn
  lda $ff
  beq nowrapup
@@ -6329,14 +6285,14 @@ cpyleft: iny
  dey 
  sta ($fd),y
  iny 
- cpy $be //$a3
+ cpy $be
  bne cpyleft
  jsr scrollh
- dec $bf //$a4
+ dec $bf
  bpl scroll2
  jmp r6510 //switch LORAM back to LOROM
 //scroll right
-scroll3: ldy $be //$a3
+scroll3: ldy $be
  lda ($fb),y
  sta bufchar
  lda ($fd),y
@@ -6352,7 +6308,7 @@ cpyright: dey
  dey 
  bne cpyright
  jsr scrollh
- dec $bf //$a4
+ dec $bf
  bpl scroll3
  bmi scroll3-3
 //--scroll subs--
@@ -6384,7 +6340,7 @@ shiftcolor: sta ($fd),y
  sta $fe
  rts 
 //--------------
-wrapit: ldy $be //$a3
+wrapit: ldy $be
 cpybuf: lda ($fb),y
  sta bufchar,y //char mem buffer
  lda ($fd),y
@@ -6393,8 +6349,6 @@ cpybuf: lda ($fb),y
  bpl cpybuf
  rts
 //
-
-
 nextn2:
  jsr notegot
  beq nextn2-1
