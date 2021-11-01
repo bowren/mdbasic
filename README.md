@@ -1,6 +1,6 @@
 # MDBASIC
 MDBASIC is an extension to the Commodore 64 BASIC interpreter.<br>
-MDBASIC version 2021.10.3<br>
+MDBASIC version 2021.10.30<br>
 <br>
 Download the MS Word document mdbasic.doc for details about each command.<br>
 <br>
