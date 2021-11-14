@@ -307,6 +307,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 
 *=$8000 ;"MDBASIC RAM Memory Block"
 
+;cartridge identifier
 .word resvec,runstp        ;new reset and runstop vectors
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
@@ -315,31 +316,6 @@ mesge .byte 147
 .byte 13
 .text "(c)1985-2021 mark bowren"
 .byte 13,0
-;
-;table for calculating 2^n
-bitweights .byte 1,2,4,8,16,32,64,128
-;
-;token list that use line numbers that need to be renumbered when using renum
-; goto,gosub,then,else,resume,trace,delete,run,restore
-gotok .byte TOKEN_GOTO,$8d,TOKEN_THEN,TOKEN_ELSE,TOKEN_RESUME,$f2,$f4,TOKEN_RUN,TOKEN_RESTORE
-;
-;SOUND command use SOUND voc#, frequency
-;REG_VAL=FREQUENCY/(CLOCK/16777216)
-;FREQUENCY=(REG_VALUE*CLOCK/16777216)Hz
-;where CLOCK NTSC=1022730, PAL=985250
-;NTSC 1Hz Freq Value = 1022730/16777216 = 0.0609594583
-;PAL  1Hz Freq Value =  985250/16777216 = 0.0587254763
-;below are the FAC values for 1 unit in Hz for both CLOCK speeds
-;
-ntsc .byte $7c,$79,$b0,$9f,$fc
-pal  .byte $7c,$70,$8a,$20,$03
-;
-;PULSE command use PULSE voc#, width%
-;used for converting register value to frequency in Hz
-;Formula REG_VALUE = 40.95 * width%
-m4095 .byte $86,$23,$cc,$cc,$cc ;FAC binary representation of 40.95
-;FILTER command use FILTER frequency, resonance, type
-five8 .byte $83,$39,$99,$99,$99  ;FAC binary representation of 5.8
 ;
 ;Text for New Commands
 ;string values of command w/ last chr having bit 7 = on
@@ -426,12 +402,6 @@ funtab
 .word csr, pen, joy, pot, hex, instr   ;$f9,$fa,$fb,$fc,$fd,$fe tokens for func
 ;token $ff is reserved for PI
 ;
-;CSR mem locs $d3=logical column, $d6=physical line, $cc=blink enabled, $d5=max columns for current line (39 or 79), $ce=char under csr (when blinking)
-csrbytes .byte $d3,$d6,$cc,$d5,$ce
-;
-;scroll direction vectors up,down,left,right
-scrolls .word scroll0,scroll1,scroll2,scroll3
-;
 ;*** error messages ***
 ;To invoke, load x register with error# then jmp ($0300)
 ;CBM BASIC ERROR MESSAGES:
@@ -475,10 +445,6 @@ cantre .shift "can't resume"          ;35
 ;
 erradd .word misop, ilvne, illspr, illfun, cantre
 ;
-;*** miscelaneous data ***
-direc .text "$"
-nolin .null "65535"
-;
 newvec jsr nwvec2
  lda #<mesge
  ldy #>mesge
@@ -492,6 +458,7 @@ nwvec2 lda #0
 noblink sta blinkcol,y   ;all colors turn off flash flag
  dey
  bpl noblink
+ jsr sidclr
  lda #$80       ;value to enable all keys to repeat
  sta $028A      ;which keys will repeat 0=only cursor, insert, delete and spacebar keys, 64 = no keys, 128=all keys
  lda #14        ;light blue
@@ -784,7 +751,7 @@ ok1new sec       ;prepare for subtraction operation (set carry flag)
  sta $55          ;lobyte for indirect addressing
  lda funtab+1,y   ;hibyte value of address for function
  sta $56          ;hibyte for indirect addressing
- jsr $0054
+ jsr $0054        ;execute function
  jmp FRMNUM2      ;ensure numeric expression in FAC1, error if not
 instr1 jmp instr ;perform INSTR
 ;----------------
@@ -1964,7 +1931,7 @@ seterrvec
 ;*******************************************
 ; error trap routine - x reg hold error #
 ;*******************************************
-resumenext
+resumenext     ;ON ERROR RESUME NEXT
  lda $9d       ;0=suppress msgs (program running mode) 
  bne olerr
  txa
@@ -1974,15 +1941,7 @@ resumenext
  sta errline+1
  lda $39
  sta errline
-nxtstmt
- jsr DATAN     ;Search Program Text for the End of the Current BASIC Statement
- tya           ;apply offset to text ptr
- clc 
- adc $7a
- sta $7a
- bcc nxtstmtok
- inc $7b
-nxtstmtok rts
+ jmp nnnn
 quitrun
  jsr detrap    ;disable error trapping
  jmp $a480     ;MAIN BASIC program loop
@@ -1995,11 +1954,11 @@ trap lda $9d   ;MSGFLG Flag Kernal Message Control, #$C0=kernel & ctrl, #$80=ctr
  jsr detrap    ;disable error trapping
  lda #3        ;3 plus the 2 for this next call = 5 bytes
  jsr GETSTK    ;check for space on stack
- lda $7b       ;save basic text ptr
- pha           ;of the statement that 
- lda $7a       ;caused the error
- pha           ;and it's
- lda $3a       ;basic line# for resume
+ lda $3e       ;save the BASIC text ptr
+ pha           ;of the beginning of the stmt 
+ lda $3d       ;that caused the error
+ pha           ;and save the BASIC
+ lda $3a       ;line# for resume
  sta errline+1
  pha
  lda $39
@@ -2015,16 +1974,12 @@ trap lda $9d   ;MSGFLG Flag Kernal Message Control, #$C0=kernel & ctrl, #$80=ctr
  sta $39
  lda errtrap+1
  sta $3a
- jmp NEWSTT     ;setup nxt statement for execution
+ jmp NEWSTT   ;setup nxt statement for execution and continue BASIC main loop
 ;
 ;*******************
 resume
+ pla          ;discard calling subroutine
  pla
- sta $fd   ;save calling subroutine address
- pla
- sta $fe
- lda #$ff
- sta $4a
  tsx
  lda $0101,x 
  cmp #TOKEN_ERROR ;ERROR token?
@@ -2035,70 +1990,55 @@ okresu
  jsr clearerr ;clear last error info
  jsr CHRGOT
  beq resum    ;no token or digit, then resume with statement that caused the error
- cmp #":"
- beq resum
  cmp #TOKEN_NEXT ;next token?
  bne resume0
 ;perform RESUME NEXT - next statement after the one that caused the error 
- pla         ;discard ERROR token
+ pla          ;discard ERROR token
  pla 
- sta $39     ;pull line number from stack and make current
+ sta $39      ;pull line number from stack and make current
  pla 
  sta $3a
  pla 
- sta $7a     ;pull text ptr from stack and make current
+ sta $7a      ;pull text ptr from stack and make current
  pla 
  sta $7b
- pla         ;discard address of calling subtroutine
+ jsr CHRGET   ;step into stmt
+ jsr $a8f8    ;find end of current BASIC stmt
+pullit
  pla
- jsr nxtstmt ;set txt ptr to next statement
-continu
- jsr entrap  ;enable error trapping
- lda $fe     ;restore the address pointer on stack
- pha         ;of the calling subroutine
- lda $fd
- pha
- rts
+ cmp #<nocmd-1
+ bne pullit
+ pla
+ cmp #>nocmd-1
+ bne pullit
+ lda #$19     ;25=empty temp string index value
+ sta $16      ;reset temp string stack 
+ lda #0
+ sta $10      ;SUBFLG Subscript Reference to an Array or User-Defined Function Call (FN)
+ jsr entrap   ;enable error trapping then return to calling subroutine
+ jmp ($0308)  ;read and execute the next statement
 ;perform RESUME linenum
 resume0
- pla       ;discard ERROR token
- pla       ;discard line number that caused the error
+ pla          ;discard ERROR token
+ pla          ;discard line number that caused the error
  pla
- pla       ;discard txt ptr of error 
- pla 
- pla       ;discard address of calling subtroutine
- pla       ;NOTE line number specified may or may not be from inside a subroutine
-           ;jsr $a67a to empty stack might be needed to prevent stack overflow or return without GOSUB 
+ pla          ;discard txt ptr of error
+ pla
  jsr CHRGOT
- jsr GOTO    ;perform goto (adjust txt ptr to given line num)
- jmp continu
+ jsr GOTO     ;perform goto (adjust txt ptr to given line num)
+nnnn jsr nextstmt ;prepare next stmt for execution
+ jmp pullit
 ;perform RESUME - with statement that caused the error
-resum pla    ;discard ERROR token
- pla         ;pull line number from stack and make current
+resum pla     ;discard ERROR token
+ pla          ;pull line number from stack and make current
  sta $39
  pla 
- sta $3A
- pla         ;pull text ptr from stack and make current
- sta $7A
+ sta $3a
+ pla          ;pull text ptr from stack and make current
+ sta $7a
  pla 
  sta $7b
- pla         ;discard address of calling subtroutine
- pla
- jsr prevtxt
-goerr
- jsr entrap     ;enable error trapping
- jmp ($0308)    ;read and execute the next statement
-prevtxt
- ldy #$00
-look7a lda $7a  ;backup to the beginning of statement that caused the error
- bne dec7a
- dec $7b
-dec7a dec $7a
- lda ($7a),y    ;get char on program line
- beq txtdone    ;statement was the first one on the line
- cmp #":"       ;did statement began at a colon?
- bne look7a     ;no, keep looking
-txtdone rts
+ jmp pullit
 ;
 ;*******************
 ; COLOR [foregndColor (0-31)], [backgndColor (0-15)], [borderColor (0-15)]
@@ -2734,6 +2674,16 @@ waveit
  rts
 badwav jmp FCERR
 ;
+;subroutine to clear SID
+sidclr
+ ldy #$18        ;clear all 24 SID registers
+ lda #0
+clrsid sta FRELO1,y
+ dey
+ bpl clrsid
+ sta md417       ;clear mirror mem for register $d417 Filter Cutoff Frequency (high byte)
+ sta md418       ;clear mirror mem for register $d418 Filter Resonance Control Register
+ rts
 ;*******************
 ;NTSC and PAL hold the value of 1Hz (based on clock speed)
 ;REG_VAL=FREQUENCY/NTSC
@@ -2741,14 +2691,7 @@ badwav jmp FCERR
 sound
  cmp #TOKEN_CLR  ;clr token?
  bne getfreq
- ldy #$18        ;clear all SID registers
- lda #0
-clrsid sta FRELO1,y
- dey
- bpl clrsid
- sta md417       ;clear mirror mem for register $d417 Filter Cutoff Frequency (high byte)
- sta md418       ;clear mirror mem for register $d418 Filter Resonance Control Register
- ;jsr CHRGET
+ jsr sidclr
  jmp CHRGET
 getfreq
  jsr ppw         ;returns SID register offset (voice#-1)*7 in accumulator
@@ -4348,6 +4291,45 @@ prtnum jsr FOUT  ;convert fac1 to ascii
  rts
 
 ;********************************************************************
+;* Global Constant Storage
+;********************************************************************
+
+;CSR mem locs $d3=logical column, $d6=physical line, $cc=blink enabled, $d5=max columns for current line (39 or 79), $ce=char under csr (when blinking)
+csrbytes .byte $d3,$d6,$cc,$d5,$ce
+
+;scroll direction vectors up,down,left,right
+scrolls .word scroll0,scroll1,scroll2,scroll3
+
+direc .text "$"
+nolin .null "65535"
+
+;table for calculating 2^n where n=0-7
+bitweights .byte 1,2,4,8,16,32,64,128
+;
+;token list that use line numbers that need to be renumbered when using renum
+; goto,gosub,then,else,resume,trace,delete,run,restore
+gotok .byte TOKEN_GOTO,$8d,TOKEN_THEN,TOKEN_ELSE,TOKEN_RESUME,$f2,$f4,TOKEN_RUN,TOKEN_RESTORE
+;
+;SOUND command use SOUND voc#, frequency
+;REG_VAL=FREQUENCY/(CLOCK/16777216)
+;FREQUENCY=(REG_VALUE*CLOCK/16777216)Hz
+;where CLOCK NTSC=1022730, PAL=985250
+;NTSC 1Hz Freq Value = 1022730/16777216 = 0.0609594583
+;PAL  1Hz Freq Value =  985250/16777216 = 0.0587254763
+;below are the FAC values for 1 unit in Hz for both CLOCK speeds
+;
+ntsc .byte $7c,$79,$b0,$9f,$fc
+pal  .byte $7c,$70,$8a,$20,$03
+;
+;PULSE command use PULSE voc#, width%
+;used for converting register value to frequency in Hz
+;Formula REG_VALUE = 40.95 * width%
+m4095 .byte $86,$23,$cc,$cc,$cc ;FAC binary representation of 40.95
+;FILTER command use FILTER frequency, resonance, type
+five8 .byte $83,$39,$99,$99,$99  ;FAC binary representation of 5.8
+;
+
+;********************************************************************
 ;* Global Variable Storage
 ;********************************************************************
 
@@ -4359,6 +4341,7 @@ errnum     .byte 0 ;last error number that occured, default 0 (no error)
 errline    .word $FFFF ;last line number causing error, default -1 (not applicable)
 errtrap    .word 0 ;error handler line number
 txtptr     .word 0 ;basic txt ptr of statement causing error
+stackptr   .byte 0 ;stack ptr before cmd execution for use by ON ERROR
 keyptr     .word 0 ;basic txt ptr of statement for ON KEY GOSUB line#
 keyline    .word $FFFF ;line number for ON KEY subroutine
 
@@ -4452,6 +4435,18 @@ snotes .word 3824,4051,4547,5104,5407,6069,6813
 ;
 ;align tables to the nearest page boundary (saves a cycle on read)
 * = (* & $ff00)+$0100
+
+;align to the nearest page boundary
+playbuf1 .repeat 256,0
+;playbuf2 .repeat 256,0
+;playbuf3 .repeat 256,0
+
+;temp storage for PAINT and SCROLL command
+paintbuf1 .repeat 256,0
+paintbuf2 .repeat 256,0
+paintbuf3 .repeat 256,0
+
+;tables for plotting dots on a bitmap
 bmdt
 .byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
 .byte $f2,$1a,$02,$12,$97,$20,$20,$20,$f2,$1a,$03,$20,$20,$20,$f2,$1b
@@ -4461,10 +4456,10 @@ bmdt
 .byte $a1,$bb,$f2,$1a,$08,$20,$20,$20,$f2,$09,$09,$be,$a1,$92,$bb,$f2
 .byte $1a,$09,$12,$20,$92,$20,$12,$20,$f2,$1a,$0a,$20,$92,$20,$12,$20
 .byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
-;*** plot tables ***
+
 lbtab .byte 0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0
 hbtab .byte 224,225,226,227,229,230,231,232,234,235,236,237,239,240,241,242,244,245,246,247,249,250,251,252,254
-;
+
 ptab2
 .byte %10000000,%01000000,%00100000,%00010000,%00001000,%00000100,%00000010,%00000001
 .byte %01000000,%00000000,%00010000,%00000000,%00000100,%00000000,%00000001,%00000000
@@ -6597,15 +6592,4 @@ octend
  lda temp1
  ldy temp2
 octdone rts
-;
-;align to the nearest page boundary
-* = (* & $ff00)+$0100
-playbuf1 .repeat 256,0
-;playbuf2 .repeat 256,0
-;playbuf3 .repeat 256,0
-
-;temp storage for PAINT and SCROLL command
-paintbuf1 .repeat 256,0
-paintbuf2 .repeat 256,0
-paintbuf3 .repeat 256,0
-
+;end
