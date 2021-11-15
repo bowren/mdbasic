@@ -1861,10 +1861,12 @@ undef ldx #17 ;UNDEF'D STATEMENT
 ;
 ; ERROR e  where e = error number (1-33)
 error
- bcc raiseerr
  cmp #TOKEN_CLR
- bne baderr
- jsr clearerr
+ beq errclr
+ cmp #TOKEN_OFF
+ bne raiseerr
+ jsr detrap
+errclr jsr clearerr
  jmp CHRGET
 raiseerr
  jsr skip73_  ;valid error number is 1-127
