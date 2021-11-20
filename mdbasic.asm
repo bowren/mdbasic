@@ -112,6 +112,7 @@ NEWSTT = $a7ae ;setup next statement for execution
 RUN    = $a871 ;peform RUN
 GOTO   = $a8a0 ;perform GOTO
 DATAN  = $a906 ;search BASIC text for the end of the current statement
+ONGOTO = $a94b ;perform ON
 LINGET = $a96b ;convert an ASCII decimal number to a 2-byte binary line number
 STROUT = $ab1e ;print msg from str whose addr is in the Y (hi byte) and A (lo byte) registers
 FRMNUM = $ad8a ;evaluate a numeric expression and/or check for data type mismatch, store result in FAC1
@@ -136,6 +137,7 @@ MOVFM  = $bba2 ;move a floating point number from memory to FAC1
 MOVEF  = $bc0f ;copy FAC1 to FAC2 without rounding
 ROUND  = $bc1b ;round FAC1 to whole number
 FINLOG = $bd7e ;add signed integer to FAC1
+LINPRT = $bdcd ;print 2-byte number stored in A (hibyte), X (lobyte)
 FOUT   = $bddd ;convert contents of FAC1 to ASCII String
 
 ;CBM BASIC error message display functions
@@ -312,7 +314,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 21.11.08"
+.text "mdbasic 21.11.19"
 .byte 13
 .text "(c)1985-2021 mark bowren"
 .byte 13,0
@@ -723,7 +725,7 @@ oknew
 ;
 ;Evalutate functions via vector ($030A) originaly IEVAL $AE86
 ;
-newfun lda #$00  ;0=number, 255=string - all funcs take a one numeric parameter
+newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
  sta $0d          ;Flag Type of Data (String or Numeric) to enforce data type
  jsr CHRGET
  cmp #"$"         ;hex value literal?
@@ -739,7 +741,7 @@ notbin cmp #FIRST_FUN_TOK  ;CBM basic max token for functions?
  bcc ok1new       ;less than $FF
 oldfun jsr CHRGOT ;process func as usual
  jmp $ae8d        ;execute original CBM basic func
-ok1new sec       ;prepare for subtraction operation (set carry flag)
+ok1new sec        ;prepare for subtraction operation (set carry flag)
  sbc #FIRST_FUN_TOK  ;calc index for first mdbasic func starting at 0
  asl              ;index * 2 for word pointer indexing
  pha              ;save index on stack
@@ -761,7 +763,7 @@ nexth jsr CHRGET
  bcc digit  ;numeric digits
  cmp #"a"   ;ensure chars A thru F
  bcc end1
- cmp #"F"+1
+ cmp #"f"+1
  bcs end1   ;bad hex value
  sec        ;prepare char A-F for index conversion 
  sbc #7     ;'0'=0,'1'=1,...'A'=10,...'F'=15
@@ -911,43 +913,66 @@ setnaminf jsr SETNAM
  jsr OPEN       ;perform OPEN 127,8,0,S$
  bcc noerr
  jmp clos7f
-noerr ldx $b8 ;#$7f
- jsr CHKIN        ;designate a Logical file as the current input channel (255)
- jsr CHRIN        ;skip 2 bytes file header
+noerr
+ lda #$FF       ;start file count at -1 to not count footer
+ sta $50
+ sta $51
+ ldx $b8        ;current file number
+ jsr CHKIN      ;designate a Logical file as the current input channel
+ jsr CHRIN      ;skip 2-byte file header
  jsr CHRIN
-blocks jsr CHRIN  ;skip 2 byte line header
- jsr CHRIN        ;
- jsr CHRIN        ;get 2-byte block size
- sta $63          ;and store in FAC1
- jsr CHRIN        ;to later convert to string
- sta $62          ;and print to screen
- lda $90          ;Kernal I/O Status Word (ST)
- beq prblok
- and #64          ;end of file?
- bne clse7f
+ jsr prtlin     ;get and print directory header (label & id)
+ bne chkeof
+ lda #$92       ;RVS off
+ jsr CHROUT
+blocks
+ jsr prtlin
+ beq chkshft
+chkeof and #64  ;end of file?
+ bne filecnt
  jsr clse7f
- ldx #4           ;file not found
- jmp ($0300)      ;raise error
-prblok jsr $bdd1  ;output number in FAC1 to screen
- lda #" "
-fprint jsr CHROUT
- jsr CHRIN        ;print zero-terminated string in file
- bne fprint
-ename lda #$0d    ;CR
- jsr CHROUT
- lda #$92         ;RVS off
- jsr CHROUT
- lda #$01
+ ldx #4         ;file not found
+ jmp ($0300)    ;raise error
+chkshft  lda #$01
 shift2 bit SHFLAG ;shift key?
  bne shift2
- lda $91          ;stop key?
+ inc $50
+ bne nxtfile
+ inc $51
+nxtfile lda $91   ;stop key?
  bmi blocks
+ bpl clse7f
+filecnt
+ ldx $50
+ lda $51
+ jsr LINPRT       ;print 2-byte binary number in FAC1
+ lda #<filestr
+ ldy #>filestr
+ jsr STROUT       ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
 clse7f lda $b8
  jsr CLOSE        ;close file # in A register
  ldx #0           ;designate default output channel (0 = screen)
  jsr CHKOUT       ;$b8 = current std out file number, 0=default (screen)
  clc
  rts
+prtlin
+ jsr CHRIN        ;skip 2 byte line header
+ jsr CHRIN
+ lda $90          ;Kernal I/O Status Word (ST)
+ bne prtdone
+ jsr CHRIN        ;get 2-byte block size
+ sta $63          ;and store in FAC1
+ jsr CHRIN        ;to later convert to string
+ sta $62          ;and print to screen
+ jsr LINPRT+4     ;$bdd1 output 2-byte binary number in FAC1 to screen
+ lda #" "
+fprint jsr CHROUT
+ jsr CHRIN        ;print zero-terminated string in file
+ bne fprint
+ lda #$0d         ;CR
+ jsr CHROUT
+ lda $90
+prtdone rts
 ;
 ;*******************
 ;
@@ -1372,14 +1397,12 @@ xf4bf ldx $b9 ;current secondary address
  bpl lodone ;don't display load addresses
  lda #" "
  jsr CHROUT
- jsr $bdd1  ;output int in FAC1 to screen
+ jsr LINPRT+4 ;$bdd1 print 2-byte binary value in FAC1
  lda #"-"
  jsr CHROUT
- lda $ae    ;ptr to end addr of loaded file
- sta $63
+ ldx $ae    ;ptr to end addr of loaded file
  lda $af
- sta $62
- jsr $bdd1  ;output int in FAC1 to screen
+ jsr LINPRT
 lodone
  pla
  tay
@@ -1473,9 +1496,12 @@ prgyes
 dofind cmp #"""
  bne noquo
  jsr CHRGET
-noquo lda #$05
+noquo lda $2b
+ clc
+ adc #4
  sta $fd
- lda #$08
+ lda $2c
+ adc #0
  sta $fe
 check ldy #$00
  lda ($7a),y
@@ -1885,7 +1911,7 @@ on jsr CHRGET
  beq onerror
  cmp #TOKEN_KEY
  beq onkey
- jmp $a94b    ;perform ON
+ jmp ONGOTO   ;perform ON
 onkey jsr CHRGET
  cmp #TOKEN_GOSUB
  bne baderr
@@ -3957,10 +3983,10 @@ prterr lda ($22),y
  iny
  pla
  bpl prterr  ;bit 7 not set on last char so keep going
- jsr $a67a
- lda #$69
+ jsr $a67a   ;empty the stack
+ lda #$69    ;address of the zero-terminated string ($a369) = "  ERROR"
  ldy #$a3
- jsr STROUT
+ jsr STROUT  ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
  ldy $3a
  iny
  bne inline
@@ -4287,7 +4313,7 @@ rom1 inc $01     ;switch to rom (a000-bfff)
  jmp prtnum
 rom2 inc $01     ;switch to LOROM (a000-bfff)
  jsr MOVFM       ;move a float from memory to fac1
-prtnum jsr FOUT  ;convert fac1 to ascii
+prtnum jsr FOUT  ;convert fac1 to ascii with str ptr in a,y registers
  jsr STROUT      ;print string ptr (a=lobyte y=hibyte)
  dec $01         ;switch to LORAM (a000-bfff)
  rts
@@ -4304,6 +4330,7 @@ scrolls .word scroll0,scroll1,scroll2,scroll3
 
 direc .text "$"
 nolin .null "65535"
+filestr .null " files."
 
 ;table for calculating 2^n where n=0-7
 bitweights .byte 1,2,4,8,16,32,64,128
