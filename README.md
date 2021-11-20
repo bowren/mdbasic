@@ -1,23 +1,18 @@
 # MDBASIC
-MDBASIC is an extension to the Commodore 64 BASIC interpreter.<br>
-MDBASIC version 2021.10.30<br>
+MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
+MDBASIC version 2021.11.19<br>
 <br>
 Download the MS Word document mdbasic.doc for details about each command.<br>
 <br>
 Download the VICE emulator for the Commodore 64:<br>
 http://vice-emu.sourceforge.net/<br>
 <br>
-Download KickAssembler to compile source:<br>
-https://www.c64-wiki.com/wiki/KickAssembler<br>
+Download Turbo Assembler to compile source:<br>
+https://style64.org/file/TMPx_v1.1.0-STYLE.zip<br>
 <br>
-Add these options to your KickAss.cfg file to automatically launch & reset after compile:<br>
 <br>
--showmem<br>
--symbolfile<br>
--execute "{ViceDir}\bin\x64sc.exe +autostartwithcolon -chdir {startDir} -keybuf sys64738\n"<br>
+See the shell script "compile.sh" for an example of how to compile using Turbo Assembler and execute with Vice.
 <br>
-Compile source using KickAssembler in a command shell:<br>
-java -jar kickass.jar mdbasic.asm<br>
 <br>
 <br>
 <br>
