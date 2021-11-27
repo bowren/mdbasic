@@ -146,6 +146,7 @@ BSERR  = $b245 ;bad subscript error
 FCERR  = $b248 ;illegal quanity
 
 ;Commodore 64 Kernal functions
+LP2    = $e5b4 ;get a character from the keyboard buffer
 RESET  = $fce2 ;power-on reset
 SETMSG = $ff90 ;set kernal msg ctrl flag
 SETLFS = $ffba ;set logical file parameters
@@ -279,7 +280,6 @@ TOKEN_INPUT   = $85
 TOKEN_DIM     = $86
 TOKEN_GOTO    = $89
 TOKEN_RUN     = $8a
-TOKEN_IF      = $8b
 TOKEN_RESTORE = $8c
 TOKEN_GOSUB   = $8d
 TOKEN_STOP    = $90
@@ -615,7 +615,7 @@ nextstmt
  lda ($7a),y
  clc
  bne _a7ce
- jmp $a84b
+ jmp $a84b  ;return control to main BASIC loop
 _a7ce iny
  lda ($7a),y
  sta $39
@@ -630,33 +630,37 @@ _a7ce iny
 _a7e1 rts
 _a807 cmp #$3a
  beq _a7e1
- jmp $af08
+ jmp SNERR
 ;
-;after ON KEY RETURN re-enable key trapping then fall through to main routine
+;after ON KEY RETURN re-enable key trapping
 onkey1
  lda keyflag   ;if key trapping turned off manually during subroutine
  beq exccmd    ;then no need to switch pause to on
  dec keyflag   ;otherwise switch from paused (2) to on (1)
- bne execut    ;always branches allows the interrupted statement to execute
+ jmp NEWSTT    ;find beginning of next statment and execute
 ;
 ;Evaluate tokens via vector ($0308)
 ;
 exccmd
  lda traceflag
- beq notrace
- jsr trace1
-notrace
- ldy keyflag    ;0=off,1=on,2=pause
- beq execut     ;key trapping is off
- dey
- bne execut     ;key trapping is paused
- lda $c6        ;num chars in keyboard buffer
  beq execut
- jsr $E5B4      ;get char in keyboard buffer
- sta keyentry   ;use K=KEY(0) to get value
- inc keyflag    ;pause key trapping
+ jsr trace1
+execut
+ jsr CHRGET
+ beq nocmd     ;occurs when line ends with a colon
+xcmd jsr tstcmd
+;if key trapping is enabled then proccess it
+ ldy keyflag   ;0=off,1=on,2=pause
+ beq nocmd     ;key trapping is off
+ dey
+ bne nocmd     ;key trapping is paused
+ lda $c6       ;num chars in keyboard buffer
+ beq nocmd
+ jsr LP2       ;$E5B4 get char in keyboard buffer
+ sta keyentry  ;use K=KEY(0) to get value
+ inc keyflag   ;pause key trapping
  lda #3
- jsr GETSTK     ;check for space on stack
+ jsr GETSTK    ;check for space on stack
  lda #>onkey1-1
  pha
  lda #<onkey1-1
@@ -679,11 +683,6 @@ notrace
  sta $39
  lda keyline+1
  sta $3a
- jsr nextstmt
-execut
- jsr CHRGET
- beq nocmd   ;occurs when line ends with a colon
- jsr tstcmd
 nocmd jmp NEWSTT
 tstcmd
  cmp #FIRST_CMD_TOK
@@ -2034,10 +2033,10 @@ okresu
  jsr $a8f8    ;find end of current BASIC stmt
 pullit
  pla
- cmp #<nocmd-1
+ cmp #<xcmd+2
  bne pullit
  pla
- cmp #>nocmd-1
+ cmp #>xcmd+2
  bne pullit
  lda #$19     ;25=empty temp string index value
  sta $16      ;reset temp string stack 
@@ -2978,6 +2977,9 @@ copyer lda $0200,y ;copy string to variable storage
  iny
  lda $36      ;get hi byte of str ptr
  sta ($49),y  ;save it to variable's str ptr info
+ jsr CHRGOT
+ cmp #","
+ beq readline
  rts
 ;
 ; LINE x1,y1 TO x2, y2, plotType, color
@@ -3584,7 +3586,7 @@ keylist dec $01
 ;"I0:"                           - initialize disk (clears last error and moves head to track 0, sector 0)
 ;"C0:sourceFile=destinationFile" - copy a file
 ;"R0:newfileName=oldfileName"    - rename a file
-;"V0:"                           - defragment disk
+;"V0:"                           - validate (defragment) disk
 donehere rts
 disk
  jsr getstr0     ;get DOS string
