@@ -635,8 +635,9 @@ _a807 cmp #$3a
 ;after ON KEY RETURN re-enable key trapping
 onkey1
  lda keyflag   ;if key trapping turned off manually during subroutine
- beq exccmd    ;then no need to switch pause to on
+ beq nocmd     ;then no need to switch pause to on
  dec keyflag   ;otherwise switch from paused (2) to on (1)
+nocmd
  jmp NEWSTT    ;find beginning of next statment and execute
 ;
 ;Evaluate tokens via vector ($0308)
@@ -683,7 +684,8 @@ xcmd jsr tstcmd
  sta $39
  lda keyline+1
  sta $3a
-nocmd jmp NEWSTT
+ jmp NEWSTT     ;find beginning of next statment and execute
+;
 tstcmd
  cmp #FIRST_CMD_TOK
  bcs oknew      ;if token is greater than or equal to FIRST_CMD_TOK then MDBASIC
@@ -697,9 +699,9 @@ notrestore
  bcc oldcmd2
  jmp if
 do_run
- jsr detrap  ;turn off error trapping incase it was enabled in previous run
+ jsr detrap     ;turn off error trapping incase it was enabled in previous run
  lda #0
- sta keyflag ;ensure key trapping is off
+ sta keyflag    ;ensure key trapping is off
  jsr CHRGOT
  sec
  jmp newrun
@@ -720,7 +722,6 @@ oknew
  lda cmdtab,x   ;lobyte
  pha
  jmp CHRGET
- 
 ;
 ;Evalutate functions via vector ($030A) originaly IEVAL $AE86
 ;
