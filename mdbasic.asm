@@ -2,6 +2,13 @@
 ; by Mark D Bowren
 ; (c)1985-2021 Bowren Consulting, Inc. (www.bowren.com)
 ;
+;TODO add the following commands/functions:
+;ON SPRITE GOSUB line#      (sprite-sprite collision)
+;ON SPRITE TEXT GOSUB line# (sprite-text collision)
+;P = PLOT(x,y)              (get point on BITMAP screen; result P: 0=clear, 1=set)
+;SORT(array_var_name)       (sort a single dimensioned array in ascending order)
+;IDEA: consider making the PLAY command take a string array of length 1, 2 or 3 then play together on 1, 2 or 3 voices
+;
 COLOR  = $0286 ;Current Foreground Color for Text
 HIBASE = $0288 ;(648) Top Page of Screen Memory
 SHFLAG = $028d ;SHIFT/CTRL/Logo Keypress flags Bit0 SHIFT, Bit1 Commodore Logo Key, Bit2 Ctrl Key
@@ -123,6 +130,7 @@ CHKCLS = $aef7 ;check for and skip closing parentheses
 CHKOPN = $aefa ;check for and skip opening parentheses 
 CHKCOM = $aeff ;check for and skip comma
 PTRGET = $b08b ;search for a variable & setup if not found
+AYINT  = $b1bf ;convert FAC1 to a signed integer in FAC1
 GIVAYF = $b391 ;convert 16-bit signed integer to floating point (a=hibyte y=lobyte)
 ERRDIR = $b3a6 ;check if prg is running in direct mode/cause error
 STRLIT = $b487 ;scan and setup pointers to a string in memory
@@ -133,9 +141,11 @@ GETADR = $b7f7 ;convert FAC1 to unsigned 16-bit integer; result in $14 lobyte, $
 OVERR  = $b97e ;print overflow error message
 FMULT  = $ba28 ;multiply FAC1 by value in memory pointed to by A (lobyte) and Y (hibyte) registers
 FDIVT  = $bb12 ;divide FAC2 by FAC1 FAC1 = (FAC2/FAC1)
-MOVFM  = $bba2 ;move a floating point number from memory to FAC1
+MOVFM  = $bba2 ;move a 5-byte floating point number from memory to FAC1, ptr = A=lobyte, Y=hibyte
+MOV2F  = $bbca ;move a 5-byte floating point number from FAC1 to memory $57-$5B BASIC numeric work area
 MOVEF  = $bc0f ;copy FAC1 to FAC2 without rounding
 ROUND  = $bc1b ;round FAC1 to whole number
+INT    = $bccc ;perform INT
 FINLOG = $bd7e ;add signed integer to FAC1
 LINPRT = $bdcd ;print 2-byte number stored in A (hibyte), X (lobyte)
 FOUT   = $bddd ;convert contents of FAC1 to ASCII String
@@ -149,6 +159,9 @@ FCERR  = $b248 ;illegal quanity
 LP2    = $e5b4 ;get a character from the keyboard buffer
 RESET  = $fce2 ;power-on reset
 SETMSG = $ff90 ;set kernal msg ctrl flag
+TKSA   = $ff96 ;send secondary address after TALK
+ACPTR  = $ffa5 ;input byte from serial bus
+TALK   = $ffb4 ;command serial bus device to TALK
 SETLFS = $ffba ;set logical file parameters
 SETNAM = $ffbd ;set file name parameters
 OPEN   = $ffc0 ;open a logical file
@@ -302,9 +315,9 @@ TOKEN_TEXT    = $e6
 TOKEN_SCREEN  = $e7
 TOKEN_RESUME  = $e8
 TOKEN_SOUND   = $eb
-TOKEN_KEY     = $f7
-FIRST_FUN_TOK = $f7  ;first MDBASIC function
-TOKEN_ERROR   = $f8
+FIRST_FUN_TOK = $f5  ;first MDBASIC function
+TOKEN_KEY     = $f6
+TOKEN_ERROR   = $f7
 TOKEN_PI      = $ff  ;PI symbol token
 
 *=$8000 ;"MDBASIC RAM Memory Block"
@@ -314,7 +327,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 21.11.19"
+.text "mdbasic 21.12.05"
 .byte 13
 .text "(c)1985-2021 mark bowren"
 .byte 13,0
@@ -351,7 +364,7 @@ newcmd
 .shift "line"
 .shift "paint"
 .shift "draw"
-.shift "cls"
+.shift "renum"
 .shift "text"
 .shift "screen"
 .shift "resume"
@@ -367,15 +380,13 @@ newcmd
 .shift "trace"
 .shift "find"
 .shift "delete"
-.shift "renum"
-
-;reserved for future use
-.shift "reset"
-
+;functions
+.shift "round"
 ;statement and a function
 .shift "key"
 .shift "error"
 ;functions only CSR PEN JOY POT HEX$ INSTR
+.shift "ptr"
 .shift "csr"
 .shift "pen"
 .shift "joy"
@@ -387,21 +398,24 @@ newcmd
 ;mdbasic command tokens starting at FIRST_CMD_TOK
 cmdtab
 ;keywords
-.word SNERR-1 ;$cb token - placeholder for OFF token (has no address to call)
-.word else-1  ;$cc token
+.rta SNERR ;$cb token - placeholder for OFF token (has no address to call)
+.rta else  ;$cc token - using this cmd by itself behaves like the REM statement
 ;commands
 .rta merge,  dump,   vars,    circle, fill           ;$d1 token
 .rta scroll, swap,   locate,  disk,   delay,   files ;$d7
 .rta color,  move,   sprite,  multi,  expand,  RESET ;$dd
 .rta design, bitmap, mapcol,  plot,   line,    paint ;$e3
-.rta draw,   cls,    text,    screen, resume,  adsr  ;$e9
+.rta draw,   renum,  text,    screen, resume,  adsr  ;$e9
 .rta wave,   sound,  pulse,   vol,    filter,  play  ;$ef
-.rta auto,   old,    trace,   find,   delete,  renum ;$f5
-.rta RESET,  key,    error                           ;$f8
-;functions
-funtab 
-.word _key, err                        ;$f7, $f8 are both a command and a function
-.word csr, pen, joy, pot, hex, instr   ;$f9,$fa,$fb,$fc,$fd,$fe tokens for func
+.rta auto,   old,    trace,   find,   delete         ;$f4
+;funcs & cmds
+.rta SNERR                        ;$f5 placeholder for round (not a command, func only)
+.rta key,    error                ;$f6,$f7 are cmds and funcs
+funtab
+.word round                       ;$f5 (this entry not used by executor)
+.word _key, err                   ;$f6,$f7 are both a command and a function
+.word ptr,csr, pen, joy, pot, hex ;$f8,$f9,$fa,$fb,$fc,$fd
+;note: instr ($fe this entry not used by executor)
 ;token $ff is reserved for PI
 ;
 ;*** error messages ***
@@ -638,7 +652,7 @@ onkey1
  beq nocmd     ;then no need to switch pause to on
  dec keyflag   ;otherwise switch from paused (2) to on (1)
 nocmd
- jmp NEWSTT    ;find beginning of next statment and execute
+ jmp NEWSTT    ;find beginning of next statement and execute
 ;
 ;Evaluate tokens via vector ($0308)
 ;
@@ -684,7 +698,7 @@ xcmd jsr tstcmd
  sta $39
  lda keyline+1
  sta $3a
- jmp NEWSTT     ;find beginning of next statment and execute
+ jmp NEWSTT     ;find beginning of next statement and execute
 ;
 tstcmd
  cmp #FIRST_CMD_TOK
@@ -723,25 +737,48 @@ oknew
  pha
  jmp CHRGET
 ;
-;Evalutate functions via vector ($030A) originaly IEVAL $AE86
+;evaluate inline octal value denoted by @
+octal jsr clrfac
+nexto jsr CHRGET
+ sec
+ sbc #"0"
+ bmi end1
+ cmp #8
+ bcs end1
+ pha
+ lda $61    ;exponent
+ beq zero3
+ adc #3     ;increase by 2^3 = 8
+ sta $61
+ beq over
+zero3 pla
+ beq nexto
+ jsr FINLOG
+ jmp nexto
 ;
+;Evalutate functions via vector IEVAL ($030A) originaly pointing to EVAL $AE86
+;
+pi jmp $ae9e        ;move value of PI into FAC1
 newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
  sta $0d          ;Flag Type of Data (String or Numeric) to enforce data type
  jsr CHRGET
+ cmp #"@"
+ beq octal        ;octal value
+ bcs funtok
+ cmp #"%"         ;binary value literal?
+ beq binary
  cmp #"$"         ;hex value literal?
- bne nothex
- jmp hexa
-nothex cmp #"%"   ;binary value literal?
- bne notbin
- jmp binary
-notbin cmp #FIRST_FUN_TOK  ;CBM basic max token for functions?
- bcc oldfun       ;original basic func token
- cmp #$FE         ;$FE=INSTR, $FF=PI token
- beq instr1
- bcc ok1new       ;less than $FF
+ beq hexa
 oldfun jsr CHRGOT ;process func as usual
  jmp $ae8d        ;execute original CBM basic func
-ok1new sec        ;prepare for subtraction operation (set carry flag)
+funtok
+ cmp #FIRST_FUN_TOK  ;CBM basic max token for functions?
+ bcc oldfun       ;original basic func token
+ beq rounder      ;perform ROUND
+ cmp #$FE         ;$FE=INSTR, $FF=PI token
+ beq instr1
+ bcs pi
+ sec        ;prepare for subtraction operation (set carry flag)
  sbc #FIRST_FUN_TOK  ;calc index for first mdbasic func starting at 0
  asl              ;index * 2 for word pointer indexing
  pha              ;save index on stack
@@ -754,8 +791,35 @@ ok1new sec        ;prepare for subtraction operation (set carry flag)
  lda funtab+1,y   ;hibyte value of address for function
  sta $56          ;hibyte for indirect addressing
  jsr $0054        ;execute function
- jmp FRMNUM2      ;ensure numeric expression in FAC1, error if not
-instr1 jmp instr ;perform INSTR
+end1 jmp FRMNUM2  ;ensure numeric expression in FAC1, error if not
+instr1 jmp instr  ;perform INSTR
+rounder jmp round ;perform ROUND
+over jmp OVERR
+;clear $5d-$60 work area and $61-$66 FAC1 
+clrfac lda #0
+ ldx #10
+loop sta $5d,x
+ dex
+ bpl loop
+ rts
+;----------------
+;evaluate inline binary value denoted by %
+binary jsr clrfac
+nextb jsr CHRGET
+ sec
+ sbc #"0"
+ bmi end1
+ cmp #2
+ bcs end1
+ pha
+ lda $61    ;exponent
+ beq zero2
+ inc $61    ;increase by 2^1 = 2
+ beq over
+zero2 pla
+ beq nextb
+ jsr FINLOG
+ jmp nextb
 ;----------------
 ;evaluate inline hex value denoted by $
 hexa jsr clrfac
@@ -780,33 +844,6 @@ zero pla
  beq nexth
  jsr FINLOG ;add signed int to FAC1
  jmp nexth
-end1 jmp FRMNUM2  ;ensure FAC1 is numeric, error if not
-over jmp OVERR
-;clear $5d-$60 work area and $61-$66 FAC1 
-clrfac lda #0
- ldx #10
-loop sta $5d,x
- dex
- bpl loop
- rts
-;-------------------
-;evaluate inline binary value denoted by %
-binary jsr clrfac
-nextb jsr CHRGET
- sec
- sbc #"0"
- bmi end1
- cmp #2
- bcs end1
- pha
- lda $61    ;exponent
- beq zero2
- inc $61    ;increase by 2^1 = 2
- beq over
-zero2 pla
- beq nextb
- jsr FINLOG
- jmp nextb
 ;
 ;******************************************
 ;LIST command re-write to decode new tokens via vector ($0306)
@@ -1305,7 +1342,7 @@ lodrun lda #$00 ;prepare for load
  jsr $e16f      ;perform load
  jsr old
  lda #>NEWSTT-1 ;vector to $a7ae on stack for rts
- pha            ;setup next statment for execution
+ pha            ;setup next statement for execution
  lda #<NEWSTT-1
  pha
 runit jmp $a659
@@ -1372,17 +1409,17 @@ xf4bf ldx $b9 ;current secondary address
  sta $b9    ;current secondary address
  jsr $f3d5  ;open file
  lda $ba    ;current device number
- jsr $ffb4  ;$ed09  ;send talk to a device on the serial bus
+ jsr TALK   ;send talk to a device on the serial bus
  lda $b9    ;current secondary address
- jsr $ff96  ;$edc7  ;send a secondary address to a device on the serial bus after talk
- jsr $ffa5  ;$ee13  ;receive a byte of data from a device on the serial bus
+ jsr TKSA   ;send a secondary address to a device on the serial bus after talk
+ jsr ACPTR  ;receive a byte of data from a device on the serial bus
  sta $63    ;store in FAC1
  sta $ae    ;low byte of address for load
  lda $90    ;kernal i/o status word (st) 0=Ok
  lsr        ;128=Device not present, 64=EOF
  lsr        ;shifted left 2 times will set the carry flag
  bcs xf530  ;stop now
- jsr $ffa5  ;$ee13  ;receive a byte of data from a device on the serial bus
+ jsr ACPTR  ;receive a byte of data from a device on the serial bus
  sta $62    ;store in FAC1
  jsr $f4e3  ;continue with original LOAD subroutine
 ;
@@ -1903,9 +1940,6 @@ raiseerr
 baderr2 jmp FCERR ;illegal qty err
 baderr jmp SNERR  ;syntax err
 ; ON hack to support ON ERROR, ON KEY
-;TODO add the following capabilities:
-;ON SPRITE GOSUB line#      (sprite-sprite collision)
-;ON SPRITE TEXT GOSUB line# (sprite-text collision)
 on jsr CHRGET
  cmp #TOKEN_ERROR
  beq onerror
@@ -3608,7 +3642,7 @@ noeror lda $b8 ;#$7f  ;file handle 127
  jmp CLOSE       ;close file handle in accumulator
 ;
 ;******************************************
-;* mdbasic functions instr(), csr(), pen(), joy(), pot(), hex$() *
+;* mdbasic functions instr(), ptr(), csr(), pen(), joy(), pot(), hex$() *
 ;******************************************
 badsubscript
  ldx #18      ;BAD SUBSCRIPT ERROR
@@ -3664,7 +3698,7 @@ hack cmp $ffff,x ;hack writing to this mem loc to set address
  iny          ;BASIC string index begins at 1 (not 0)
 instrend
  jsr GIVAYF   ;convert 16-bit signed int value to FAC then return 
- jmp CHKCLS   ;Check for and Skip Opening Parentheses
+ jmp CHKCLS   ;Check for and Skip Closing Parentheses
 nextchr2
  inc $02      ;advance forward 1 char in source
  bne tryagain ;it should always be not equal to zero here!
@@ -3673,16 +3707,89 @@ notfound
  tya
  beq instrend
 ;
+ptr
+ lda $48
+ ldy $47
+ jmp GIVAYF
+
+; V = ROUND(N,D)  where N=num to round, D=num of decimal places
+round
+ jsr CHRGET
+ jsr CHKOPN     ;Check for and Skip Opening Parentheses
+ jsr FRMNUM     ;get numeric param1 - number to round
+;save param1
+ jsr MOV2F      ;move a 5-byte floating point number from FAC1 to memory $57-$5B BASIC numeric work area
+;get param2
+ lda #0
+ sta $14        ;default 0 decimal places (round to whole number)
+ sta $15        ;default first direction right
+ jsr comchk
+ bne round1
+;get param2
+ jsr CHRGET
+ jsr FRMNUM     ;$AD8A
+ jsr AYINT      ;convert FAC1 to a signed integer in FAC1
+ lda $66        ;sign, $00=Positive, $FF=Negative
+ sta $15
+ beq round2
+ jsr $B947      ;NEGFAC Replace FAC1 with Its 2's Complement
+round2
+ lda $64        ;hi byte
+ bne illqty7
+ lda $65        ;lo byte
+ cmp #10
+ bcs illqty7    ;range is -9 to +9
+ sta $14
+round1
+ jsr CHKCLS     ;check for and skip closing parentheses
+;restore param1 to FAC1
+ lda #$57
+ ldy #$00
+ jsr MOVFM      ;move a 5-byte floating point number from memory to FAC1 A=lo, Y=hi
+ ldx $14
+ beq addhalf
+;move decimal point to the right or left based on sign of num places
+ jsr movedec
+ lda $15
+ eor #$ff       ;toggle move direction for 2nd call
+ sta $15
+addhalf
+;add 0.5 to FAC1
+ lda #<$BF11    ;the constat 0.5 in 5-byte FAC format
+ ldy #>$BF11
+ jsr $B867      ;add fac1 with a number in memory: fac1 = mem+fac1
+;truncate fraction
+ jsr INT        ;perform INT
+;move decimal point to the left
+ ldx $14
+ beq nomul
+ jmp movedec
+;move decimal point
+movedec
+ txa
+ beq nomul
+ pha
+ lda $15          ;direction: 0=right else left
+ beq xmul10
+ jsr $BAFE        ;divide FAC1 by 10
+ jmp xmul10+3
+xmul10 jsr $BAE2  ;multiply FAC1 by 10
+ pla
+ tax
+ dex
+ bne movedec
+nomul rts
+illqty7 jmp FCERR ;display illegal qty error
+;
 ; J% = JOY(n) where n=joystick number 1 or 2
 joy jsr GETADR
  lda $15
- bne nojoy
+ bne illqty7
  lda $14
- beq nojoy
+ beq illqty7
  cmp #3
- bcc okjoy
-nojoy jmp FCERR
-okjoy tay
+ bcs illqty7
+ tay
  dey
  tya
  eor #%00000001
