@@ -1469,40 +1469,43 @@ newsav
 ;*******************
 ; SWAP A, B    SWAP A%, B%    SWAP A$, B$
 swap
- jsr PTRGET ;1st variable
+ jsr PTRGET  ;get param1
  sta $14
  sty $15
- lda $0d ;$ or #
- sta $fd
- lda $0e ;data type int or float
- sta $fe ;var 1 int or float
+ lda $0d       ;data type string or numeric
+ sta $fd       ;save param1 data type
+ lda $0e       ;numeric type int or float
+ sta $fe       ;save param1 numeric type
  jsr ckcom2
  jsr CHRGET
- jsr PTRGET  ;search for a variable & setup if not found
- lda $0e     ;var 2 numeric data type, int or float
- cmp $fe     ;v2 has same numeric type as var 1?
- beq match   ;same type, good to go
+ jsr PTRGET    ;get param2
+ lda $0e       ;param 2 numeric type, int or float
+ cmp $fe       ;does param2 have the same numeric type as var 1?
+ beq match     ;same type, good to go
 nomtch ldx #22 ;TYPE MISMATCH ERROR
- jmp ($0300)  ;raise error
-match lda $fd ;param1 data type $ or #
- cmp $0d      ;param2 data type $ or #
+ jmp ($0300)   ;raise error
+match ldx $fd  ;param1 data type $ or #
+ cpx $0d       ;param2 data type $ or #
  bne nomtch
- ldy #$04   ;numeric use 5 bytes 0-4
- cmp #$ff   ;string?
- bne bytes  ;swap numeric data using FAC1 as buffer
- ldy #$02   ;strings only use 3 bytes 0-2
-bytes sty $02
-cpyvar lda ($14),y ;var1 to fac2
+ lda #2        ;strings only use 3 bytes 0-2
+ inx           ;$FF=string so $FF+1 = 0
+ beq bytes     ;it is a string
+ asl           ;numeric use 5 bytes 0-4
+bytes tax      ;hold that value
+ tay
+cpyvar lda ($14),y ;save param1 in FAC2
  sta $0069,y
  dey
  bpl cpyvar
- ldy $02
-cpyvr2 lda ($47),y ;swap 2 to 1
+ txa
+ tay
+cpyvr2 lda ($47),y ;param2->param1
  sta ($14),y
  dey
  bpl cpyvr2
- ldy $02
-faccpy lda $0069,y ;swap 1 to 2
+ txa
+ tay
+faccpy lda $0069,y ;param1->param2
  sta ($47),y
  dey
  bpl faccpy
