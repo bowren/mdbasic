@@ -2396,8 +2396,6 @@ sety lda YXPAND ;y expand
  ora $bf
 magy sta YXPAND
  rts
-cls lda #$93   ;clear screen
- jmp CHROUT    ;output char then rts
 ;
 ;*******************
 ; LOCATE col, row, [blink]
@@ -3196,20 +3194,27 @@ ne dec $01
  rts
 ;
 ;*******************
+; SCREEN CLR
 ; SCREEN ON|OFF
 ; SCREEN cols, rows where cols=38|40, rows=24|25
+cls lda #$93   ;clear screen
+ jmp CHROUT    ;output char then rts
 screen
  cmp #TOKEN_ON
+ bcc setscr
  bne scnoff
  lda SCROLY
  ora #%00010000  ;bit4 = 0 screen on
- sta SCROLY
- jmp CHRGET
+ bne setscrly    ;always branches
 scnoff cmp #TOKEN_OFF ;off token?
- bne setscr
+ bne clrscrn
  lda SCROLY
  and #%11101111  ;bit4 = 1 screen off
- sta SCROLY
+setscrly sta SCROLY
+ jmp CHRGET
+clrscrn cmp #TOKEN_CLR
+ bne setscr
+ jsr cls
  jmp CHRGET
 setscr jsr comchk
  beq cklast+3
