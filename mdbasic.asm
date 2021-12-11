@@ -1479,19 +1479,20 @@ swap
  jsr ckcom2
  jsr CHRGET
  jsr PTRGET    ;get param2
- lda $0e       ;param 2 numeric type, int or float
- cmp $fe       ;does param2 have the same numeric type as var 1?
- beq match     ;same type, good to go
-nomtch ldx #22 ;TYPE MISMATCH ERROR
- jmp ($0300)   ;raise error
-match ldx $fd  ;param1 data type $ or #
- cpx $0d       ;param2 data type $ or #
- bne nomtch
- lda #2        ;strings only use 3 bytes 0-2
+ lda $0e       ;param2 numeric type, int or float
+ cmp $fe       ;does param2 have the same numeric type as param1?
+ bne nomtch    ;mismatch
+ ldx $fd       ;param1 numeric type, int or float
+ cpx $0d       ;does param2 have the same num/string type as param1
+ bne nomtch    ;mismatch
+ lda #1
  inx           ;$FF=string so $FF+1 = 0
- beq bytes     ;it is a string
- asl           ;numeric use 5 bytes 0-4
-bytes tax      ;hold that value
+ beq isstr     ;string uses 3 bytes 0-2
+ ldx $0e       ;int or float?
+ bne isint     ;int uses 2 bytes 0-1
+ asl           ;float uses 5 bytes 0-4
+isstr asl
+isint tax      ;hold that value
  tay
 cpyvar lda ($14),y ;save param1 in FAC2
  sta $0069,y
@@ -1510,6 +1511,7 @@ faccpy lda $0069,y ;param1->param2
  dey
  bpl faccpy
  rts
+nomtch jmp $ad99 ;TYPE MISMATCH ERROR
 ;
 ;*******************
 ;Perform FIND in BASIC program text
