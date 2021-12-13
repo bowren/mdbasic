@@ -1153,13 +1153,17 @@ nextp lda $bb
 old lda #$08
  sta $0802
  jsr LINKPRG
- clc
  lda $22   ;apply calculated end-of-prg pointer
+ clc
  adc #$02
- sta $2d
+ sta $2d   ;Pointer to the Start of the BASIC Variable Storage Area
+ sta $2f   ;Pointer to the Start of the BASIC Array Storage Area
+ sta $31   ;Pointer to End of the BASIC Array Storage Area (+1), and the Start of Free RAM
  lda $23
  adc #$00
  sta $2e
+ sta $30
+ sta $32
  rts
 ;
 ;*******************
