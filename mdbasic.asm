@@ -162,6 +162,7 @@ SETMSG = $ff90 ;set kernal msg ctrl flag
 TKSA   = $ff96 ;send secondary address after TALK
 ACPTR  = $ffa5 ;input byte from serial bus
 TALK   = $ffb4 ;command serial bus device to TALK
+READST = $ffb7 ;read I/O status word
 SETLFS = $ffba ;set logical file parameters
 SETNAM = $ffbd ;set file name parameters
 OPEN   = $ffc0 ;open a logical file
@@ -327,7 +328,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 21.12.05"
+.text "mdbasic 21.12.18"
 .byte 13
 .text "(c)1985-2021 mark bowren"
 .byte 13,0
@@ -729,6 +730,8 @@ oldcmd2
  jmp $a7ed      ;execute CBM statement
 oknew
  sbc #FIRST_CMD_TOK ;first mdbasic cmd token for index calc start at 0
+ cmp #45        ;only 45 cmd tokens (0-44)
+ bcs oldcmd2
  asl            ;index * 2 for word pointer indexing
  tax
  lda cmdtab+1,x ;hibyte
@@ -1367,7 +1370,7 @@ merge
  lda #$00
  jsr LOAD    ;load from a device
  bcs brkerr
- jsr $ffb7   ;read i/o status word
+ jsr READST  ;read i/o status word
  and #$bf
  beq okmerg
  ldx #29     ;load error
@@ -1392,21 +1395,23 @@ romin inc $01
 newload
  sta $93     ;flag for load routine (see $93) 0=Load, 1=Verify
  ldx $b9     ;secondary address
+ stx $02     ;save for use after load to determine if mem ptrs need to be restored
  cpx #2
  bcs newlod  ;indicates MDBASIC load
 oldload
 ;CBM code from original vector location $f4a5 to perform load
  lda #0
- sta $90    ;kernal i/o status word (st)
+ sta $90    ;kernal I/O status
  lda $ba    ;get current device number
  bne xf4b2  ;0=keyboard
 xf4af jmp $f713 ;load from keyboard or screen
 xf4b2 cmp #3
  beq xf4af  ;3=screen
- bcc jf533  ;1=dataset, 2=rs-232
- ldy $b7    ;length of current filename
+ bcs xf4b8  ;4=printer,8-9=disk
+ jmp $f533  ;1=dataset, 2=rs-232
+xf4b8 ldy $b7 ;length of current filename
  bne xf4bf
- jmp $f710  ;load first file on device i guess???
+ jmp $f710  ;raise error #8 - MISSING FILE NAME ERROR
 xf4bf ldx $b9 ;current secondary address
  jsr $f5af  ;print SEARCHING
  lda #$60
@@ -1417,44 +1422,69 @@ xf4bf ldx $b9 ;current secondary address
  lda $b9    ;current secondary address
  jsr TKSA   ;send a secondary address to a device on the serial bus after talk
  jsr ACPTR  ;receive a byte of data from a device on the serial bus
- sta $63    ;store in FAC1
- sta $ae    ;low byte of address for load
- lda $90    ;kernal i/o status word (st) 0=Ok
- lsr        ;128=Device not present, 64=EOF
- lsr        ;shifted left 2 times will set the carry flag
- bcs xf530  ;stop now
+ sta $ae    ;low byte of address for load which will increment to the end address
+ sta $c1    ;remember start address
+ lda $90    ;kernal I/O status
+ lsr        ;bit 1 = serial read timeout
+ lsr        ;shift right into carry to detect timeout
+ bcc oklod
+ jmp $f704  ;raise read timeout error
+oklod
  jsr ACPTR  ;receive a byte of data from a device on the serial bus
- sta $62    ;store in FAC1
+ sta $c2    ;remember start address
  jsr $f4e3  ;continue with original LOAD subroutine
-;
- php        ;save result of processor flags and registers
- pha
- txa
- pha
- tya
- pha
-;
+ bcc oklod2 ;carry set indicates error
+ jmp $e0f9  ;handle load error
+oklod2
+ jsr READST ;Read the I/O Status Word
+ and #%10111111 ;did an error occur other than EOF/EOI (bit6)?
+ beq oklod3 ;no error
+ jmp $e19c  ;raise LOAD ERROR
+oklod3
  lda $9d    ;display message if not in prg mode, #$C0=kernel & ctrl, #$80=ctrl only
  bpl lodone ;don't display load addresses
  lda #" "
  jsr CHROUT
- jsr LINPRT+4 ;$bdd1 print 2-byte binary value in FAC1
+ ldx $2b    ;assume BASIC mem load
+ lda $2c
+ ldy $02    ;secondary device: 0=BASIC load, 1=binary
+ beq prtmem
+ ldx $c1    ;print mem ptr from file
+ lda $c2
+prtmem
+ jsr LINPRT ;print 2-byte binary value
  lda #"-"
  jsr CHROUT
  ldx $ae    ;ptr to end addr of loaded file
  lda $af
- jsr LINPRT
+ jsr LINPRT ;print 2-byte binary value
 lodone
- pla
- tay
- pla
- tax
- pla
- plp
+ lda $0a    ;load=0 or 1=verify
+ bne lodbas
+ lda $02    ;secondary address
+ bne lodbin
+lodbas
+ ldx $ae    ;restore x,y ptr to end of prg from load subroutine
+ ldy $af
+ clc        ;no error
  rts
-;
-jf533 jmp $f533 ;load from dataset or rs232 device
-xf530 jmp $F704 ;handle EOF or DEVICE NOT PRESENT as usual
+lodbin
+ lda $2c    ;check if binary load was actually a BASIC prg
+ cmp $c2    ;by comparing the start address of loaded binary
+ bne isbin  ;with the start address of BASIC prg mem
+ lda $c1    ;if it was loaded exactly in BASIC mem
+ cmp $2b    ;then finish load as usual to init mem ptrs
+ beq lodbas ;this will kill the current running BASIC prg
+isbin
+ lda $9d    ;display message if not in prg mode, #$C0=kernel & ctrl, #$80=ctrl only
+ bpl bindone;don't display load addresses
+ lda #$76   ;ptr to text "READY."
+ ldy #$a3
+ jsr STROUT ;print READY.
+bindone
+ pla
+ pla
+ rts
 ;
 ;*******************
 ;secondary address 2=SCREEN, 3=CHAREN, 4=BITMAP
@@ -2586,8 +2616,8 @@ bitmapon
                     ;bits 4-7 video matrix base offset = 0010=2 ->2K offset from base $c000+2K=$c800
  sta VMCSB          ;apply setting to control register
 
-; lda #$c8          ;hibyte of ptr to screen ram $c800
-; sta HIBASE        ;top page of screen memory for Kernel prints
+ lda #$c8          ;hibyte of ptr to screen ram $c800 for kernel prints
+ sta HIBASE        ;top page of screen memory for Kernel prints
  rts
 hiresmode 
  lda SCROLX         ;turn off mulicolor mode
