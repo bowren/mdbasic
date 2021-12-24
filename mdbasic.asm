@@ -1476,12 +1476,6 @@ lodbin
  cmp $2b    ;then finish load as usual to init mem ptrs
  beq lodbas ;this will kill the current running BASIC prg
 isbin
- lda $9d    ;display message if not in prg mode, #$C0=kernel & ctrl, #$80=ctrl only
- bpl bindone;don't display load addresses
- lda #$76   ;ptr to text "READY."
- ldy #$a3
- jsr STROUT ;print READY.
-bindone
  pla
  pla
  rts
