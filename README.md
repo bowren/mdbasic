@@ -1,8 +1,8 @@
 # MDBASIC
 MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
-MDBASIC version 2021.11.19<br>
+MDBASIC version 2021.12.18<br>
 <br>
-Download the MS Word document mdbasic.doc for details about each command.<br>
+Download the MS Word document mdbasic.odt for details about each command.<br>
 <br>
 Download the VICE emulator for the Commodore 64:<br>
 http://vice-emu.sourceforge.net/<br>
