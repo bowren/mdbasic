@@ -328,7 +328,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 21.12.18"
+.text "mdbasic 21.12.26"
 .byte 13
 .text "(c)1985-2021 mark bowren"
 .byte 13,0
@@ -3672,11 +3672,23 @@ disk
  jsr OPEN        ;performs OPEN 127,8,15, "string"
  bcc noeror
 clos7f pha       ;retain result of open file which is index of error msg
- jsr noeror      ;close 127
+ jsr closeit     ;close 127
  pla             ;retreive error msg index
  tax             ;x register holds index of error message
  jmp ($0300)     ;display error message
-noeror lda $b8 ;#$7f  ;file handle 127
+noeror
+ lda $9d         ;display message if not in prg mode, #$C0=kernel & ctrl, #$80=ctrl only
+ bpl closeit     ;don't display load addresses
+ ldx $b8         ;current file number
+ jsr CHKIN       ;designate a Logical file as the current input channel
+readio jsr CHRIN
+ pha
+ jsr CHROUT
+ pla
+ cmp #$0d
+ bne readio
+ jsr CLRCHN
+closeit lda $b8  ;file handle 127
  jmp CLOSE       ;close file handle in accumulator
 ;
 ;******************************************
