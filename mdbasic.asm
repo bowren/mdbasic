@@ -924,28 +924,28 @@ else jmp $a93b    ;perform REM (ignore rest of line, skip to next stmt)
 vars dec $01
  jmp varss
 ;
-;FILES {string expression optional)
+;FILES (string expression optional)
 files
  bne strng
-all0
- ldx #<direc    ;address of string
- ldy #>direc    ;for "$"
- lda #1         ;string len = 1 char
- bne setnaminf  ;always branches
+ lda #0
+ beq prepstr
 strng jsr getstr0
- beq all0       ;zero length string is same as no string
- lda $50        ;insert $ symbol at first char in string
- bne skpd51     ;backup 1 char
- dec $51        ;of string by using ptr-1
-skpd51 dec $50  ;TODO this is bad. writing byte outside string alloc!!
+prepstr tay
+ iny            ;add one more byte
+ sty $02        ;string length
+ tya
+ jsr GETSPA     ;alloc space in mem for string returning address ptr in $35,$36
+ lda #"$"       ;insert $ in front of string
  ldy #0
- lda #"$"
- sta ($50),y    ;ensure first char of string is $
- inc $52        ;force string length to be 1 more byte TODO bad!!!
- lda $52        ;str len
- ldx $50        ;str ptr lobyte
- ldy $51        ;str ptr hibyte
-setnaminf jsr SETNAM
+copystr sta ($35),y
+ lda ($50),y
+ iny
+ cpy $02
+ bne copystr
+ lda $02
+ ldx $35
+ ldy $36
+ jsr SETNAM
  lda #$7f       ;file handle 127
  ldx #$08       ;device 8
  ldy #$00       ;secondary 0
@@ -953,7 +953,7 @@ setnaminf jsr SETNAM
  jsr OPEN       ;perform OPEN 127,8,0,S$
  bcc noerr
  jmp clos7f
-noerr
+noerr jsr FRESTR
  lda #$FF       ;start file count at -1 to not count footer
  sta $50
  sta $51
@@ -4488,7 +4488,6 @@ csrbytes .byte $d3,$d6,$cc,$d5,$ce
 ;scroll direction vectors up,down,left,right
 scrolls .word scroll0,scroll1,scroll2,scroll3
 
-direc .text "$"
 nolin .null "65535"
 filestr .null " files."
 
