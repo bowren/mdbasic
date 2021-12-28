@@ -2,13 +2,6 @@
 ; by Mark D Bowren
 ; (c)1985-2021 Bowren Consulting, Inc. (www.bowren.com)
 ;
-;TODO add the following commands/functions:
-;ON SPRITE GOSUB line#      (sprite-sprite collision)
-;ON SPRITE TEXT GOSUB line# (sprite-text collision)
-;P = PLOT(x,y)              (get point on BITMAP screen; result P: 0=clear, 1=set)
-;SORT(array_var_name)       (sort a single dimensioned array in ascending order)
-;IDEA: consider making the PLAY command take a string array of length 1, 2 or 3 then play together on 1, 2 or 3 voices
-;
 COLOR  = $0286 ;Current Foreground Color for Text
 HIBASE = $0288 ;(648) Top Page of Screen Memory
 SHFLAG = $028d ;SHIFT/CTRL/Logo Keypress flags Bit0 SHIFT, Bit1 Commodore Logo Key, Bit2 Ctrl Key
@@ -149,11 +142,14 @@ FINLOG = $bd7e ;add signed integer to FAC1
 LINPRT = $bdcd ;print 2-byte number stored in A (hibyte), X (lobyte)
 FOUT   = $bddd ;convert contents of FAC1 to ASCII String
 
-;CBM BASIC error message display functions
+;CBM BASIC routines to raise a specific error
+UNDEFST= $a8e3 ;undef'd statement error
+TMERR  = $ad99 ;type mismatch error
 SNERR  = $af08 ;syntax error
 BSERR  = $b245 ;bad subscript error
-FCERR  = $b248 ;illegal quanity
-OVERR  = $b97e ;print overflow error message
+FCERR  = $b248 ;illegal quanity error
+OVERR  = $b97e ;overflow error
+LODERR = $e19c ;load error
 
 ;Commodore 64 Kernal functions
 HALT   = $e386 ;halt program and return to main BASIC loop
@@ -329,7 +325,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 21.12.26"
+.text "mdbasic 21.12.28"
 .byte 13
 .text "(c)1985-2021 mark bowren"
 .byte 13,0
@@ -1368,18 +1364,17 @@ merge
  tay
  lda #$00
  jsr LOAD    ;load from a device
- bcs brkerr
+ bcs ioerr   ;carry set indicates error
  jsr READST  ;read i/o status word
- and #$bf
- beq okmerg
- ldx #29     ;load error
- jmp ($0300) ;error
+ and #%10111111 ;did an error occur other than EOF/EOI (bit6)?
+ beq okmerg  ;no error
+ jmp LODERR  ;raise LOAD ERROR
 okmerg stx $2d
  sty $2e
- jsr $a659   ;clear all variables
+ jsr $a659   ;clear all variables and reset txt ptr to beginning of prg
  jsr LINKPRG ;relink lines of tokenized prg text
  jmp READY   ;main basic loop
-brkerr jmp $e0f9 ;kernal i/o routines
+ioerr jmp $e0f9 ;handle i/o error
 ;
 ;*******************
 ;secondary address 2=SCREEN, 3=CHAREN, 4=BITMAP
@@ -1410,7 +1405,7 @@ xf4b2 cmp #3
  jmp $f533  ;1=dataset, 2=rs-232
 xf4b8 ldy $b7 ;length of current filename
  bne xf4bf
- jmp $f710  ;raise error #8 - MISSING FILE NAME ERROR
+ jmp $f710  ;handle error #8 - MISSING FILE NAME ERROR
 xf4bf ldx $b9 ;current secondary address
  jsr $f5af  ;print SEARCHING
  lda #$60
@@ -1427,18 +1422,18 @@ xf4bf ldx $b9 ;current secondary address
  lsr        ;bit 1 = serial read timeout
  lsr        ;shift right into carry to detect timeout
  bcc oklod
- jmp $f704  ;raise read timeout error
+ jmp $f704  ;handle error #4 - FILE NOT FOUND
 oklod
  jsr ACPTR  ;receive a byte of data from a device on the serial bus
  sta $c2    ;remember start address
  jsr $f4e3  ;continue with original LOAD subroutine
  bcc oklod2 ;carry set indicates error
- jmp $e0f9  ;handle load error
+ jmp $e0f9  ;handle i/o error
 oklod2
- jsr READST ;Read the I/O Status Word
+ jsr READST ;read the I/O status
  and #%10111111 ;did an error occur other than EOF/EOI (bit6)?
  beq oklod3 ;no error
- jmp $e19c  ;raise LOAD ERROR
+ jmp LODERR ;raise LOAD ERROR
 oklod3
  lda $9d    ;display message if not in prg mode, #$C0=kernel & ctrl, #$80=ctrl only
  bpl lodone ;don't display load addresses
@@ -1496,7 +1491,7 @@ newsav
 ;*******************
 ; SWAP A, B    SWAP A%, B%    SWAP A$, B$
 swap
- jsr PTRGET  ;get param1
+ jsr PTRGET    ;get param1
  sta $14
  sty $15
  lda $0d       ;data type string or numeric
@@ -1538,7 +1533,7 @@ faccpy lda $0069,y ;param1->param2
  dey
  bpl faccpy
  rts
-nomtch jmp $ad99 ;TYPE MISMATCH ERROR
+nomtch jmp TMERR ;TYPE MISMATCH ERROR
 ;
 ;*******************
 ;Perform FIND in BASIC program text
@@ -1951,8 +1946,8 @@ clearerr
  sty errline   ;make last error line -1
  sty errline+1
  rts
-undef ldx #17 ;UNDEF'D STATEMENT
- jmp ($0300)
+undef
+ jmp UNDEFST   ;UNDEF'D STATEMENT
 ;
 ; ERROR e  where e = error number (1-33)
 error
