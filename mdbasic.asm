@@ -138,7 +138,6 @@ GETSPA = $b4f4 ;alloc space in mem for string
 FRESTR = $b6a3 ;discard a temporary string
 GETBYTC= $b79b ;input a parameter whose value is between 0 and 255
 GETADR = $b7f7 ;convert FAC1 to unsigned 16-bit integer; result in $14 lobyte, $15 hibyte
-OVERR  = $b97e ;print overflow error message
 FMULT  = $ba28 ;multiply FAC1 by value in memory pointed to by A (lobyte) and Y (hibyte) registers
 FDIVT  = $bb12 ;divide FAC2 by FAC1 FAC1 = (FAC2/FAC1)
 MOVFM  = $bba2 ;move a 5-byte floating point number from memory to FAC1, ptr = A=lobyte, Y=hibyte
@@ -154,8 +153,10 @@ FOUT   = $bddd ;convert contents of FAC1 to ASCII String
 SNERR  = $af08 ;syntax error
 BSERR  = $b245 ;bad subscript error
 FCERR  = $b248 ;illegal quanity
+OVERR  = $b97e ;print overflow error message
 
 ;Commodore 64 Kernal functions
+HALT   = $e386 ;halt program and return to main BASIC loop
 LP2    = $e5b4 ;get a character from the keyboard buffer
 RESET  = $fce2 ;power-on reset
 SETMSG = $ff90 ;set kernal msg ctrl flag
@@ -872,7 +873,6 @@ shift lda #$01 ;check mem ctrl reg
  jmp $a724      ;perform part of CLR cmd. done here.
 out jmp $a6f3  ;output byte as it is on cmd line
 newlst
-; sec
  sbc #FIRST_CMD_TOK-1  ;calc index
  tax          ;index to x reg soon to subtract 1 so 0-based index
  sty $49      ;store y reg value from CHRGET
@@ -946,6 +946,7 @@ copystr sta ($35),y
  ldx $35
  ldy $36
  jsr SETNAM
+ jsr FRESTR     ;dealloc temp string
  lda #$7f       ;file handle 127
  ldx #$08       ;device 8
  ldy #$00       ;secondary 0
@@ -953,7 +954,7 @@ copystr sta ($35),y
  jsr OPEN       ;perform OPEN 127,8,0,S$
  bcc noerr
  jmp clos7f
-noerr jsr FRESTR
+noerr
  lda #$FF       ;start file count at -1 to not count footer
  sta $50
  sta $51
@@ -1061,8 +1062,6 @@ dumplist jsr openprint00
  jsr $a6c9   ;perform list
  lda #$0d    ;carriage return?
  jsr CHROUT  ;print it
-; jsr SETMSG   ;SETMSG set kernal message control flag
-; jsr $aad7   ;perform print
  jmp clse7f
 dumpscreen dec $01 ;switch to LORAM ($a000-$bfff)
  jsr dumpscreen2
@@ -1642,7 +1641,7 @@ prgend lda #$0d
  jsr CHROUT
  pla
  pla
- jmp $e386
+ jmp HALT
 ;
 ;*******************
 delete jsr opget2
@@ -1699,7 +1698,7 @@ savex stx $2e
  jsr $a659
  pla
  pla
- jmp $e386
+ jmp HALT
 erenum jsr LINKPRG
  lda #$02
  sta $7b
@@ -1714,7 +1713,7 @@ ffff lda nolin,y
  jmp relink
 ;
 ;*******************
-renum ;jsr CHRGET
+renum
  bne renumm  ;get parameters
  lda #10     ;no params, set default
  sta $35     ;start at line 10, inc by 10
@@ -1742,7 +1741,7 @@ gaiv jsr CHRGET
  jmp FCERR    ;increment of 0 not allowed
 okinc lda $15
 hiinc sta $34
- jsr $a68e    ;reset ptr to beginning of basic prg
+ jsr RUNC     ;reset ptr to beginning of basic prg
 strt jsr chrget
  jsr chrget
  bne serch
@@ -1865,7 +1864,7 @@ tofac lda $35
  sta $63
  lda $36
  sta $62
- jmp $a68e      ;reset ptr to current basic text to beginning
+ jmp RUNC       ;reset ptr to current basic text to beginning
 addinc lda $63
  clc
  adc $33
@@ -3682,9 +3681,7 @@ noeror
  ldx $b8         ;current file number
  jsr CHKIN       ;designate a Logical file as the current input channel
 readio jsr CHRIN
- pha
  jsr CHROUT
- pla
  cmp #$0d
  bne readio
  jsr CLRCHN
@@ -3695,8 +3692,7 @@ closeit lda $b8  ;file handle 127
 ;* mdbasic functions instr(), ptr(), csr(), pen(), joy(), pot(), hex$() *
 ;******************************************
 badsubscript
- ldx #18      ;BAD SUBSCRIPT ERROR
- jmp ($0300)  ;report error
+ jmp BSERR    ;BAD SUBSCRIPT ERROR
 ; I% = INSTR(offset,src$,find$)
 ;if first expression is int type then offset provided otherwise offset=1 (default)
 instr
@@ -3777,7 +3773,7 @@ round
  bne round1
 ;get param2
  jsr CHRGET
- jsr FRMNUM     ;$AD8A
+ jsr FRMNUM
  jsr AYINT      ;convert FAC1 to a signed integer in FAC1
  lda $66        ;sign, $00=Positive, $FF=Negative
  sta $15
@@ -4589,8 +4585,8 @@ keybuf .text "list"
 .byte 34,0,0,0,0,0,0,0,0,0,0,0   ;F4
 .text "text"
 .byte 13,0,0,0,0,0,0,0,0,0,0,0   ;F6
-.text "cls"
-.byte 13,0,0,0,0,0,0,0,0,0,0,0,0 ;F8
+.text "screenclr"
+.byte 13,0,0,0,0,0,0             ;F8
 ;
 ;strings for keylist
 addcr .null "+chr$(13)"
@@ -5000,7 +4996,7 @@ setdot jsr ydiv8
  bne flipit
 dotoff lda ptab2,x  ;read ptab2 and ptab3 in LORAM
  eor #$ff
- and ($c3),y         ;read bitmap in HIRAM
+ and ($c3),y        ;read bitmap in HIRAM
  jmp colorb
 doton lda ($c3),y
  and ptab3,x
@@ -5049,10 +5045,10 @@ noytim lda mapcolc1c2  ;hires dot color (hi nibble) and background color of 8x8 
  sta ($c3),y
  lda $c4
  clc
- adc #$10    ;calculate beginning of color RAM
+ adc #$10      ;calculate beginning of color RAM
  sta $c4
- lda mapcolc3   ;background color mem used for mc mode
- sta ($c3),y ;$d800
+ lda mapcolc3  ;background color mem used for mc mode
+ sta ($c3),y   ;$d800
  rts
 ;---
 ydiv8 lda $fd  ;y coordinate
@@ -5079,7 +5075,7 @@ ydiv8 lda $fd  ;y coordinate
  beq ydiv8x
  txa
  and #%11111110
- ora mapcolbits  ;apply color selection bit pattern
+ ora mapcolbits ;apply color selection bit pattern
  tax
 ydiv8x ldy #0
  rts
@@ -5241,7 +5237,6 @@ fdp1 inc $fd
  lda $fc
  adc #$00
  sta $fc
-; jsr STOP  ;check if STOP key was pressed - uses kernel ROM so don't use this
  lda $c5   ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
  cmp #$3f  ;STOP key?
  beq epant ;stop painting
@@ -6040,20 +6035,20 @@ savchr sei
  bne savchr
  jmp romin
 ;save a bitmap image with colors
-savbm jsr param3  ;4=BITMAP, prepare pointers for bitmap and color mem
+savbm jsr param3 ;4=BITMAP, prepare pointers for bitmap and color mem
 savbtm sei
- dec $01          ;read byte from bitmap under ROM
+ dec $01        ;read byte from bitmap under ROM
  lda ($c3),y
  inc $01
  cli
  jsr CHROUT
- jsr status  ;check for stop key or EOF and do not return here if so
+ jsr status     ;check for stop key or EOF and do not return here if so
  inc $c3
  bne savbtm
  inc $c4
  bne savbtm
- jsr param   ;prepare pointers for text and color mem
- lda #$c8    ;override hibyte to correct for bitmap mem at $C800
+ jsr param      ;prepare pointers for text and color mem
+ lda #$c8       ;override hibyte to correct for bitmap mem at $C800
  sta $c4
  jmp savscr+3   ;finish by saving the screen mem bytes
 ;
@@ -6095,8 +6090,8 @@ param3 ldy #0
 ;
 ;*********************
 varss lda $2d  ;vector ($2d,$2e) beginning of non-array variable storage
- cmp $2f        ;vector ($2f,$30) beginning of array variable storage
- bne copy2d     ;if both vectors point at same mem loc then no vars defined
+ cmp $2f       ;vector ($2f,$30) beginning of array variable storage
+ bne copy2d    ;if both vectors point at same mem loc then no vars defined
  lda $2e
  cmp $30
  bne copy2d
@@ -6119,7 +6114,7 @@ bitoff iny
  and #$80     ;check bit 7 flag for int type
  beq type
  inc $0d      ;set to type 3 int
-type lda $fb ;skip over 2 byte name
+type lda $fb  ;skip over 2 byte name
  clc
  adc #2
  sta $fb
@@ -6239,10 +6234,9 @@ add64 clc
  adc #64
  jmp dumpit
 big32 cmp #64
- bcc dumpit ;bcs big64  ;less than 64
-; jmp dumpit
+ bcc dumpit
 big64 cmp #96
- bcs add64   ;larger than 96
+ bcs add64    ;larger than 96
  clc
  adc #32
 dumpit sta $02
@@ -6259,7 +6253,7 @@ regchr lda $02
  jsr CHROUT
 nxchar inc $fe
  lda $fe
- cmp #40         ;40 columns?
+ cmp #40      ;40 columns?
  bne infbfc
  lda #13
  jsr CHROUT
@@ -6643,7 +6637,7 @@ nextoct
  cmp #8
  bcs prevoct
 nextn3
- inc playindex ;skip over char
+ inc playindex  ;skip over char
  jmp nextn2
 
 nonnote 
@@ -6653,7 +6647,7 @@ nonnote
  beq badvoc     ;voice 0 invalid
  cmp #4         ;voice 1,2 or 3 only
  bcc goodvoc
-badvoc lda #1  ;use default voice 1
+badvoc lda #1   ;use default voice 1
 goodvoc
  jsr ppw2       ;get SID register offset for voice 
  jsr initvoice
@@ -6673,7 +6667,6 @@ notelen
  cmp #"l"
  bne noteoct
  jsr getdigitval
-; bmi badnote  ;value 0-99 only
  sta playlen    ;apply new note length
  jmp nextn2
 
@@ -6684,7 +6677,7 @@ noteoct
  cmp #8
  bcs skipnote
  sta playoct
- bcc skipnote  ;always branches
+ bcc skipnote   ;always branches
  
 notewave
  cmp #"w"
@@ -6692,16 +6685,16 @@ notewave
  jsr getdigitval
  cmp #9
  bcs skipnote
- asl          ;convert to waveform bit pattern
+ asl            ;convert to waveform bit pattern
  asl
  asl
  asl
- sta playwave  ;set new waveform
+ sta playwave   ;set new waveform
  ldx playvoice
  sta VCREG1,x   ;bit0 = start release
 skipnote jmp nextn2
 
-getdigitval    ;get 2-digit value 0-99
+getdigitval     ;get 2-digit value 0-99
  jsr noteget
  beq digitdone2 ;end of string, assume 0 value
  sec            ;convert ascii digit to binary value
@@ -6736,7 +6729,7 @@ digit9
 digitdone
  lda temp1
 digitdone2
- rts            ;result is in A reg and $fb
+ rts            ;result returned in accumulator
 
 ;returns char in A reg; zero-flag set indicate no more notes
 noteget
