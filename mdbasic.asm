@@ -2604,8 +2604,8 @@ bitmapon
                     ;bits 4-7 video matrix base offset = 0010=2 ->2K offset from base $c000+2K=$c800
  sta VMCSB          ;apply setting to control register
 
- lda #$c8          ;hibyte of ptr to screen ram $c800 for kernel prints
- sta HIBASE        ;top page of screen memory for Kernel prints
+; lda #$c8          ;hibyte of ptr to screen ram $c800 for kernel prints
+; sta HIBASE        ;top page of screen memory for Kernel prints
  rts
 hiresmode 
  lda SCROLX         ;turn off mulicolor mode
