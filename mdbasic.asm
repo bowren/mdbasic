@@ -153,8 +153,12 @@ LODERR = $e19c ;load error
 
 ;Commodore 64 Kernal functions
 HALT   = $e386 ;halt program and return to main BASIC loop
+INIT   = $e3bf ;initialize BASIC
+CINT   = $ff81 ;initialize screen editor and video chip
+RAMTAS = $ff87 ;initialize RAM, tape buffer, screen
+RESTOR = $ff8a ;restore default I/O vectors
 LP2    = $e5b4 ;get a character from the keyboard buffer
-RESET  = $fce2 ;power-on reset
+IOINIT = $fda3 ;initialize CIA I/O devices
 SETMSG = $ff90 ;set kernal msg ctrl flag
 TKSA   = $ff96 ;send secondary address after TALK
 ACPTR  = $ffa5 ;input byte from serial bus
@@ -401,7 +405,7 @@ cmdtab
 ;commands
 .rta merge,  dump,   vars,    circle, fill           ;$d1 token
 .rta scroll, swap,   locate,  disk,   delay,   files ;$d7
-.rta color,  move,   sprite,  multi,  expand,  RESET ;$dd
+.rta color,  move,   sprite,  multi,  expand,  resvec ;$dd
 .rta design, bitmap, mapcol,  plot,   line,    paint ;$e3
 .rta draw,   renum,  text,    screen, resume,  adsr  ;$e9
 .rta wave,   sound,  pulse,   vol,    filter,  play  ;$ef
@@ -4050,17 +4054,21 @@ noadd7 clc
 ;* new reset vector *
 ;********************
 resvec ldx #$ff
+ sei
+ txs
+ cld
  stx SCROLX
- jsr $fda3
- jsr $fd50 ;restore
- jsr $fd15 ;routines
- jsr $ff5b
- jsr $e453
- jsr $e3bf
+ jsr IOINIT ;init CIA i/o devices
+ jsr RAMTAS ;init RAM, tape buffer & screen
+ jsr RESTOR ;restore default I/O vectors
+ jsr CINT   ;init screen editor and VIC-II chip
+ cli
+ jsr $e453  ;copy BASIC vectors to RAM
+ jsr INIT   ;initialize BASIC
  jsr newvec ;set vectors
- lda $2b    ;Pointer to the Start of BASIC Program Text
+ lda $2b    ;ptr to start of BASIC program text
  ldy $2c
- jsr REASON ;Check for Space in Memory
+ jsr REASON ;check free mem
  jsr $e430  ;prints the BYTES FREE message
  jmp $e39d  ;to basic main loop
 ;***********************
@@ -4076,7 +4084,7 @@ runstp lda #$7f
 ;********************
 ;* new BREAK vector *
 ;********************
-brkirq jsr $fda3
+brkirq jsr IOINIT
  lda #$04        ;initialize to 1024 ($0400)
  sta HIBASE      ;text page hi byte pointer
  jsr $e518       ;initialize screen and keyboard
