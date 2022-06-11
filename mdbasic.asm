@@ -84,7 +84,7 @@ CIDDRA = $dc02 ;Data Direction Register A
 CI2PRA = $dd00 ;Data Port Register A
 ;
 ;Bits 0-1 Select VIC-II 16K addressable memory bank (0-3)
-;  00 Bank 3 (49152-65535, $C000-$FFFF) 16K RAM / Memory mapped I/O, character ROM, 4K Kernel
+;  00 Bank 3 (49152-65535, $C000-$FFFF) 16K RAM / Memory mapped I/O, character ROM, 4K Kernal
 ;  01 Bank 2 (32768-49151, $8000-$BFFF) 16K RAM / BASIC text, 8K BASIC interpreter ROM
 ;  10 Bank 1 (16384-32767, $4000-$7FFF) 16K RAM / BASIC text
 ;  11 Bank 0 (    0-16383, $0   -$3FFF) 16K RAM / system variables, screen RAM, BASIC text
@@ -111,6 +111,7 @@ RUNC   = $a68e ;reset ptr of current text char to the beginning of prg text
 NEWSTT = $a7ae ;setup next statement for execution
 RUN    = $a871 ;peform RUN
 GOTO   = $a8a0 ;perform GOTO
+DATA   = $a8f8 ;perform DATA
 DATAN  = $a906 ;search BASIC text for the end of the current statement
 ONGOTO = $a94b ;perform ON
 LINGET = $a96b ;convert an ASCII decimal number to a 2-byte binary line number
@@ -150,6 +151,7 @@ BSERR  = $b245 ;bad subscript error
 FCERR  = $b248 ;illegal quanity error
 OVERR  = $b97e ;overflow error
 LODERR = $e19c ;load error
+;LOAD   = $e168 ;Perform LOAD
 
 ;Commodore 64 Kernal functions
 HALT   = $e386 ;halt program and return to main BASIC loop
@@ -329,9 +331,9 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 21.12.28"
+.text "mdbasic 22.06.10"
 .byte 13
-.text "(c)1985-2021 mark bowren"
+.text "(c)1985-2022 mark bowren"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -623,31 +625,6 @@ cont1 iny
  bne oldtst
  beq notfou
 ;
-nextstmt
- ldy #0
- lda ($7a),y
- bne _a807
- ldy #2
- lda ($7a),y
- clc
- bne _a7ce
- jmp $a84b  ;return control to main BASIC loop
-_a7ce iny
- lda ($7a),y
- sta $39
- iny
- lda ($7a),y
- sta $3a
- tya
- adc $7a
- sta $7a
- bcc _a7e1
- inc $7b
-_a7e1 rts
-_a807 cmp #$3a
- beq _a7e1
- jmp SNERR
-;
 ;after ON KEY RETURN re-enable key trapping
 onkey1
  lda keyflag   ;if key trapping turned off manually during subroutine
@@ -676,7 +653,7 @@ xcmd jsr tstcmd
  jsr LP2       ;$E5B4 get char in keyboard buffer
  sta keyentry  ;use K=KEY(0) to get value
  inc keyflag   ;pause key trapping
- lda #3
+ lda #3        ;actually 5 since jsr counts for 2
  jsr GETSTK    ;check for space on stack
  lda #>onkey1-1
  pha
@@ -715,11 +692,6 @@ notrestore
  bcc oldcmd2
  jmp if
 do_run
- jsr detrap     ;turn off error trapping incase it was enabled in previous run
- lda #0
- sta keyflag    ;ensure key trapping is off
- jsr CHRGOT
- sec
  jmp newrun
 oldcmd
  cmp #TOKEN_ON
@@ -1333,7 +1305,14 @@ weglst lda #$01
 endtrc jmp $a714
 ;
 ;*******************
-newrun beq oldrun
+newrun
+ jsr detrap     ;turn off error trapping incase it was enabled in previous run
+ jsr clearerr   ;clear last error info
+ lda #0
+ sta keyflag    ;ensure key trapping is off
+ jsr CHRGOT
+ sec
+ beq oldrun
  jsr CHRGET
  cmp #"""       ;literal string?
  beq lodrun
@@ -1346,12 +1325,10 @@ lodrun lda #$00 ;prepare for load
  jsr $e1d4      ;set parms for LOAD, VERIFY, and SAVE
  jsr RUNC       ;reset ptr to current text char to the beginning of program text
  jsr $e16f      ;perform load
- jsr old
- lda #>NEWSTT-1 ;vector to $a7ae on stack for rts
- pha            ;setup next statement for execution
- lda #<NEWSTT-1
- pha
-runit jmp $a659
+ jsr old        ;set BASIC prg ptrs
+ lda #0         ;run without line number
+ jsr RUN        ;set run mode and clear vars
+ jmp NEWSTT     ;enter loop for BASIC program processing
 ;
 ;*******************
 ; MERGE filename$   appends file to end of current BASIC program
@@ -1439,7 +1416,7 @@ oklod2
  beq oklod3 ;no error
  jmp LODERR ;raise LOAD ERROR
 oklod3
- lda $9d    ;display message if not in prg mode, #$C0=kernel & ctrl, #$80=ctrl only
+ lda $9d    ;display message if not in prg mode, #$C0=kernal & ctrl, #$80=ctrl only
  bpl lodone ;don't display load addresses
  lda #" "
  jsr CHROUT
@@ -2034,12 +2011,36 @@ resumenext     ;ON ERROR RESUME NEXT
  sta errline+1
  lda $39
  sta errline
- jmp nnnn
+nxtstmt        ;prepare next stmt for execution
+ ldy #0
+ lda ($7a),y
+ bne _a807
+ ldy #2
+ lda ($7a),y
+ clc
+ bne _a7ce
+ jmp HALT      ;return control to main BASIC loop
+_a7ce iny
+ lda ($7a),y
+ sta $39
+ iny
+ lda ($7a),y
+ sta $3a
+ tya
+ adc $7a
+ sta $7a
+ bcc _a7e1
+ inc $7b
+_a7e1 jmp pullit
+_a807 cmp #$3a
+ beq _a7e1
+ jmp SNERR
+;
 quitrun
  jsr detrap    ;disable error trapping
- jmp $a480     ;MAIN BASIC program loop
+ jmp READY     ;set BASIC immediate, print READY. then enter main loop
 olerr jmp errors
-trap lda $9d   ;MSGFLG Flag Kernal Message Control, #$C0=kernel & ctrl, #$80=ctrl only, #$40=kernel only, #$00=none
+trap lda $9d   ;MSGFLG Flag Kernal Message Control, #$C0=kernal & ctrl, #$80=ctrl only, #$40=kernal only, #$00=none
  bne olerr
  txa
  bmi quitrun
@@ -2096,19 +2097,18 @@ okresu
  pla 
  sta $7b
  jsr CHRGET   ;step into stmt
- jsr $a8f8    ;find end of current BASIC stmt
-pullit
- pla
- cmp #<xcmd+2
- bne pullit
- pla
+ jsr DATA     ;advance txtptr to beginning of next statement
+pullit pla    ;empty stack to the base call was made which
+ cmp #<xcmd+2 ;is the point where last command was executed
+ bne pullit   ;in the main MDBASIC loop via jsr tstcmd
+ pla          ;keep going till 2-byte ptr is found
  cmp #>xcmd+2
- bne pullit
+ bne pullit+1
  lda #$19     ;25=empty temp string index value
  sta $16      ;reset temp string stack 
  lda #0
  sta $10      ;SUBFLG Subscript Reference to an Array or User-Defined Function Call (FN)
- jsr entrap   ;enable error trapping then return to calling subroutine
+ jsr entrap   ;enable error trapping
  jmp ($0308)  ;read and execute the next statement
 ;perform RESUME linenum
 resume0
@@ -2119,8 +2119,7 @@ resume0
  pla
  jsr CHRGOT
  jsr GOTO     ;perform goto (adjust txt ptr to given line num)
-nnnn jsr nextstmt ;prepare next stmt for execution
- jmp pullit
+ jmp nxtstmt
 ;perform RESUME - with statement that caused the error
 resum pla     ;discard ERROR token
  pla          ;pull line number from stack and make current
@@ -2475,7 +2474,7 @@ designon
  lda #%00101100 ;video matrix offset %0010 (2*1K) = $0800; char dot data offset at %110 (6*1K) = $1800
  sta VMCSB      ;bit 0 unused; bits 1-3 char dot data base addr; bits 4-7 video matrix base addr
  lda #$c8       ;video matrix is at $c800
- sta HIBASE     ;let Kernel know video matrix is at $c800 so printed chars will be visible
+ sta HIBASE     ;let Kernal know video matrix is at $c800 so printed chars will be visible
  lda SCROLX
  and #%11101111 ;bit 4 off disable multicolor text/bitmap mode
  sta SCROLX
@@ -2608,8 +2607,8 @@ bitmapon
                     ;bits 4-7 video matrix base offset = 0010=2 ->2K offset from base $c000+2K=$c800
  sta VMCSB          ;apply setting to control register
 
-; lda #$c8          ;hibyte of ptr to screen ram $c800 for kernel prints
-; sta HIBASE        ;top page of screen memory for Kernel prints
+; lda #$c8          ;hibyte of ptr to screen ram $c800 for kernal prints
+; sta HIBASE        ;top page of screen memory for Kernal prints
  rts
 hiresmode 
  lda SCROLX         ;turn off mulicolor mode
@@ -3169,7 +3168,7 @@ norm
  lda CI2PRA
  ora #%00000011  ;select VIC-II 16K mem bank 0 ($0000-$4000)
  sta CI2PRA
- lda #$04        ;text page for kernel prints
+ lda #$04        ;text page for kernal prints
  sta HIBASE      ;top page of screen mem
  lda #%00010101  ;bit0 is always 1; bits1-3 text chr dot data base address in 1K chunks; bits 4-7 video matrix base address in 1K chunks
  sta VMCSB       ;VIC-II chip memory control register
@@ -3675,7 +3674,7 @@ clos7f pha       ;retain result of open file which is index of error msg
  tax             ;x register holds index of error message
  jmp ($0300)     ;display error message
 noeror
- lda $9d         ;display message if not in prg mode, #$C0=kernel & ctrl, #$80=ctrl only
+ lda $9d         ;display message if not in prg mode, #$C0=kernal & ctrl, #$80=ctrl only
  bpl closeit     ;don't display load addresses
  ldx $b8         ;current file number
  jsr CHKIN       ;designate a Logical file as the current input channel
@@ -4990,7 +4989,7 @@ setdot jsr ydiv8
  lda $01
  pha
  and #%11111101 ;bit1 0=HIRAM
- sei            ;disable IRQ since kernel HIROM is switching to HIRAM
+ sei            ;disable IRQ since kernal HIROM is switching to HIRAM
  sta $01
  lda lastplott  ;plot type 0=off, 1=on, 2=flip (use to be $fe)
  beq dotoff
@@ -5012,7 +5011,7 @@ flipit lda ptab3,x
  eor ($c3),y
 colorb sta ($c3),y ;write byte with bit pattern targeting the one bit in hires or 2 bits in mc mode
  pla
- sta $01    ;restore Kernel HIROM ($e000-$ffff)
+ sta $01    ;restore Kernal HIROM ($e000-$ffff)
  cli
 ;apply color
  lda $fb
@@ -5271,7 +5270,7 @@ readb jsr ydiv8
  stx $aa
  lda $01
  and #%11111101 ;bit1 0=HIRAM
- sei            ;disable IRQ since kernel HIROM is switching to HIRAM
+ sei            ;disable IRQ since kernal HIROM is switching to HIRAM
  sta $01
  lda ptab3,x
  eor #$ff
