@@ -17,7 +17,7 @@ See the shell script "compile.sh" for an example of how to compile using Turbo A
 <u><b>Example BASIC lines of code:</b></u><br>
 <br>
 <i>Immediate Mode:</i><br>
-<div style="font-family:'Courier New';white-space:pre;">
+<pre style="font-family:'Courier New'">
 RUN "MYPRG",8  :REM LOAD AND RUN MYPRG FROM DISK
 RENUM 10,10    :REM RENUMBER PRG START AT 10 INC BY 10
 DISK"S0:MYPRG" :REM ERASE FILE MYPRG - ALL DOS CMD SUPPORTED
@@ -25,10 +25,10 @@ FILES          :REM LIST ALL FILES
 FILES"M*"      :REM LIST ALL FILES STARTING WITH M
 AUTO 0,10      :REM AUTO LINE NUMBERING START 0 INC 10
 TRACE          :RUN PROGRAM WITH TRACE ENABLED
-</div>
+</pre>
 <br>
 <i>Program Mode:</i><br>
-<div style="font-family:'Courier New';white-space:pre;">
+<pre style="font-family:'Courier New'">
 0 SCREEN CLR              :REM CLEAR TEXT SCREEN
 1 BITMAP CLR              :REM CLEAR BITMAP
 5 ON ERROR GOTO 100       :REM JUST LIKE GWBASIC
@@ -57,7 +57,7 @@ TRACE          :RUN PROGRAM WITH TRACE ENABLED
 110 IF ERROR(0) = 29 THEN RESUME 65   :REM LOAD ERR, CONT AT LINE 65
 115 IF ERROR(0) = 15 THEN RESUME      :REM OVERFLOW, TRY STMT AGAIN
 120 ERROR 11                          :REM RAISE SYNTAX ERROR
-</div>
+</pre>
 <br>
 <br>
 <div>Legal:</div>
