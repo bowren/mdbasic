@@ -24,29 +24,29 @@ LPENY  = $d014 ;Light Pen Vertical Position (0-200) corresponds exactly to the c
 SPENA  = $d015 ;Sprite Enable Register - Bit 0  Enable Sprite 0 (1=sprite is on, 0=sprite is off)
 SCROLX = $d016 ;Horizontal Fine Scrolling and Multicolor Control Register
 ;
-; Bits 0-2 Fine scroll display horizontally by X dot positions (0-7)
-; Bit 3 Select a 38-column or 40-column text display (1=40 columns, 0=38 columns)
-; Bit 4 Enable multicolor text or multicolor bitmap mode (1=multicolor on, 0=multicolor off)
-; Bit 5 Video chip reset (0=normal operations, 1=video completely off)
-; Bits 6-7 Unused
+;Bits 0-2 Fine scroll display horizontally by X dot positions (0-7)
+;Bit 3 Select a 38-column or 40-column text display (1=40 columns, 0=38 columns)
+;Bit 4 Enable multicolor text or multicolor bitmap mode (1=multicolor on, 0=multicolor off)
+;Bit 5 Video chip reset (0=normal operations, 1=video completely off)
+;Bits 6-7 Unused
 ;
 
 YXPAND = $d017 ;Sprite Vertical Expansion Register - Bit 0-7 is Sprite 0-7 flag to expand sprite n vertically (1=double height, 0=normal height)
 
 VMCSB  = $d018 ;VIC-II Chip Memory Control Register
 ;
-; Bit 0 Unused,
-; Bits 1-3 Text character dot-data base address within VIC-II 16K addressable memory.
-;    The default is %100 (4) = 4 * 1K = $1000 (4096) the address of the Character Dot-Data area in ROM.
-;    The uppercase characters are the first 2K.  The alternate character set which contains both
-;    upper and lowercase characters are in the second 2K.  To shift to the alternate
-;    character set, you must change the value of this nybble to %110 (6) = 6 * 1K = $1800 (6144).
+;Bit 0 Unused,
+;Bits 1-3 Text character dot-data base address within VIC-II 16K addressable memory.
+;   The default is %100 (4) = 4 * 1K = $1000 (4096) the address of the Character Dot-Data area in ROM.
+;   The uppercase characters are the first 2K.  The alternate character set which contains both
+;   upper and lowercase characters are in the second 2K.  To shift to the alternate
+;   character set, you must change the value of this nybble to %110 (6) = 6 * 1K = $1800 (6144).
 ;
-; Bits 4-7 Video matrix base address within VIC-II 16K addressable memory
-;    The default is %0001 (1) = 1 * 1K = $0400 (1024).
-;    Select which 1024-byte area of memory will contain the screen codes for characters on screen.
-;    The last eight bytes of this 1K area are used as pointers to select the 64-byte block of memory
-;    for each sprite.
+;Bits 4-7 Video matrix base address within VIC-II 16K addressable memory
+;   The default is %0001 (1) = 1 * 1K = $0400 (1024).
+;   Select which 1024-byte area of memory will contain the screen codes for characters on screen.
+;   The last eight bytes of this 1K area are used as pointers to select the 64-byte block of memory
+;   for each sprite.
 ;
 SPBGPR = $d01b ;Sprite to Foreground Display Priority Register
 SPMC   = $d01c ;Sprite Multicolor Registers
@@ -72,8 +72,7 @@ CUTLO  = $d415 ;Filter Cutoff Frequency (lo byte)
 CUTHI  = $d416 ;Filter Cutoff Frequency (high byte)
 RESON  = $d417 ;Filter Resonance Control Register
 SIGVOL = $d418 ;Volume and Filter Select Register
-POTX   = $d419 ;Read Game Paddle 1 or 3 Position
-;POTY   = $d41a ;54298 Read Game Paddle 2 or 4 Position
+POTX   = $d419 ;Read Position of Game Paddle 1 or 3, POTX+1 ($d41a) = Paddle 2 or 4
 
 ;Complex Interface Adapter (CIA) #1 Registers ($DC00-$DC0F)
 CIAPRA = $dc00 ;Data Port Register A
@@ -97,7 +96,9 @@ CI2ICR = $dd0d ;Interrupt Control Register
 CHRGET = $0073 ;Get Next BASIC Text Character
 CHRGOT = $0079 ;Get Current BASIC Text Character
 KEYD   = $0277 ;Keyboard Buffer (Queue)
+IERROR = $0300 ;Vector to the Print BASIC Error Message Routine
 IMAIN  = $0302 ;Vector to the Main BASIC Program Loop
+IGONE  = $0308 ;Vector to the Routine That Executes the Next BASIC Program Token
 
 ;CBM BASIC functions
 GETSTK = $a3fb ;check for space on stack
@@ -132,12 +133,13 @@ GETSPA = $b4f4 ;alloc space in mem for string
 FRESTR = $b6a3 ;discard a temporary string
 GETBYTC= $b79b ;input a parameter whose value is between 0 and 255
 GETADR = $b7f7 ;convert FAC1 to unsigned 16-bit integer; result in $14 lobyte, $15 hibyte
+FADD   = $b867 ;Add FAC1 to a Number in Memory
+NEGFAC = $b947 ;replace FAC1 with its 2's complement (make it a negative number)
 FMULT  = $ba28 ;multiply FAC1 by value in memory pointed to by A (lobyte) and Y (hibyte) registers
 FDIVT  = $bb12 ;divide FAC2 by FAC1 FAC1 = (FAC2/FAC1)
 MOVFM  = $bba2 ;move a 5-byte floating point number from memory to FAC1, ptr = A=lobyte, Y=hibyte
 MOV2F  = $bbca ;move a 5-byte floating point number from FAC1 to memory $57-$5B BASIC numeric work area
 MOVEF  = $bc0f ;copy FAC1 to FAC2 without rounding
-ROUND  = $bc1b ;round FAC1 to whole number
 INT    = $bccc ;perform INT
 FINLOG = $bd7e ;add signed integer to FAC1
 LINPRT = $bdcd ;print 2-byte number stored in A (hibyte), X (lobyte)
@@ -151,7 +153,6 @@ BSERR  = $b245 ;bad subscript error
 FCERR  = $b248 ;illegal quanity error
 OVERR  = $b97e ;overflow error
 LODERR = $e19c ;load error
-;LOAD   = $e168 ;Perform LOAD
 
 ;Commodore 64 Kernal functions
 HALT   = $e386 ;halt program and return to main BASIC loop
@@ -183,7 +184,7 @@ PLOT   = $fff0 ;Read/Set Location of the Cursor
 RESLST = $a09e ;$A09E-$A19D List of Keywords
 
 ; 
-;Commodore 64 BASIC commands
+;Commodore 64 BASIC Command Tokens
 ;Token #   Statement  Routine Address   
 ;128 $80   END        43057 $A831
 ;129 $81   FOR        42818 $A742
@@ -221,7 +222,7 @@ RESLST = $a09e ;$A09E-$A19D List of Keywords
 ;161 $A1   GET        43899 $AB7B
 ;162 $A2   NEW        42562 $A642
 ;
-;Commodore 64 BASIC keywords
+;Commodore 64 BASIC Keyword Tokens
 ;Token #    Keyword
 ;163 $A3    TAB(
 ;164 $A4    TO
@@ -231,7 +232,7 @@ RESLST = $a09e ;$A09E-$A19D List of Keywords
 ;168 $A8    NOT
 ;169 $A9    STEP
 ;
-;Commodore 64 BASIC Operators
+;Commodore 64 BASIC Operator Tokens
 ;Token #   Operator           Routine Address
 ;170 $AA   + (ADD)            47210 $B86A
 ;171 $AB   - (SUBTRACT)       47187 $B853
@@ -244,7 +245,7 @@ RESLST = $a09e ;$A09E-$A19D List of Keywords
 ;178 $B2   = (EQUAL TO)       44756 $AED4
 ;179 $B3   < (LESS THAN)      45078 $B016
 ;
-;Commodore 64 BASIC Functions
+;Commodore 64 BASIC Function Tokens
 ;Token #   Function  Routine Address
 ;180 $B4   SGN       48185 $BC39
 ;181 $B5   INT       48332 $BCCC
@@ -271,16 +272,18 @@ RESLST = $a09e ;$A09E-$A19D List of Keywords
 ;202 $CA   MID$      46903 $B737
 ;203 $CB   GO        *This is not a statement or function. It allows GO TO instead of GOTO
 ;
-;MDBASIC Keywords
+;MDBASIC Keyword Tokens
 ;203 $CB   OFF       *Stole this token from CBM's GO token (obsolete)
 ;204 $CC   ELSE
 ;MDBASIC Command Tokens
-;204 $CD   MERGE
+;205 $CD   MERGE
 ;.
 ;.
-;250 $F8   ERROR
-;
 ;MDBASIC Function Tokens
+;245 $F5   ROUND
+;246 $F6   KEY    *Dual use as func & cmd
+;247 $F7   ERROR  *Dual use as func & cmd
+;248 $F8   PTR
 ;249 $F9   CSR
 ;250 $FA   PEN
 ;251 $FB   JOY
@@ -331,7 +334,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.06.10"
+.text "mdbasic 22.07.04"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -386,10 +389,10 @@ newcmd
 .shift "delete"
 ;functions
 .shift "round"
-;statement and a function
+;statement & function
 .shift "key"
 .shift "error"
-;functions only CSR PEN JOY POT HEX$ INSTR
+;functions only
 .shift "ptr"
 .shift "csr"
 .shift "pen"
@@ -460,10 +463,10 @@ funtab
 misop  .shift "missing operand"       ;31
 ilvne  .shift "illegal voice number"  ;32
 illspr .shift "illegal sprite number" ;33
-illfun .shift "illegal function call" ;34
+ilcoor .shift "illegal coordinate"    ;34
 cantre .shift "can't resume"          ;35
 ;
-erradd .word misop, ilvne, illspr, illfun, cantre
+erradd .word misop, ilvne, illspr, ilcoor, cantre
 ;
 newvec jsr nwvec2
  lda #<mesge
@@ -482,7 +485,7 @@ noblink sta blinkcol,y   ;all colors turn off flash flag
  lda #$80       ;value to enable all keys to repeat
  sta $028A      ;which keys will repeat 0=only cursor, insert, delete and spacebar keys, 64 = no keys, 128=all keys
  lda #14        ;light blue
- sta 646        ;current foreground color for text
+ sta COLOR      ;current foreground color for text
  lda #<toknew
  sta $0304
  lda #>toknew
@@ -496,9 +499,9 @@ noblink sta blinkcol,y   ;all colors turn off flash flag
  lda #>list
  sta $0307
  lda #<exccmd
- sta $0308
+ sta IGONE
  lda #>exccmd
- sta $0309
+ sta IGONE+1
  jsr detrap
  lda #<brkirq
  sta $0316
@@ -633,7 +636,7 @@ onkey1
 nocmd
  jmp NEWSTT    ;find beginning of next statement and execute
 ;
-;Evaluate tokens via vector ($0308)
+;Evaluate tokens via vector (IGONE)
 ;
 exccmd
  lda traceflag
@@ -734,7 +737,7 @@ zero3 pla
 ;
 ;Evalutate functions via vector IEVAL ($030A) originaly pointing to EVAL $AE86
 ;
-pi jmp $ae9e        ;move value of PI into FAC1
+pi jmp $ae9e      ;move value of PI into FAC1
 newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
  sta $0d          ;Flag Type of Data (String or Numeric) to enforce data type
  jsr CHRGET
@@ -751,7 +754,7 @@ funtok
  cmp #FIRST_FUN_TOK  ;CBM basic max token for functions?
  bcc oldfun       ;original basic func token
  beq rounder      ;perform ROUND
- cmp #$FE         ;$FE=INSTR, $FF=PI token
+ cmp #$fe         ;$FE=INSTR, $FF=PI token
  beq instr1
  bcs pi
  sec        ;prepare for subtraction operation (set carry flag)
@@ -904,9 +907,9 @@ files
 strng jsr getstr0
 prepstr tay
  iny            ;add one more byte
- sty $02        ;string length
  tya
  jsr GETSPA     ;alloc space in mem for string returning address ptr in $35,$36
+ sta $02        ;actual length allocated
  lda #"$"       ;insert $ in front of string
  ldy #0
 copystr sta ($35),y
@@ -945,7 +948,7 @@ chkeof and #64  ;end of file?
  bne filecnt
  jsr clse7f
  ldx #4         ;file not found
- jmp ($0300)    ;raise error
+ jmp (IERROR)   ;raise error
 chkshft  lda #$01
 shift2 bit SHFLAG ;shift key?
  bne shift2
@@ -1032,7 +1035,7 @@ dumplist jsr openprint00
  sta listflag
  jsr opget   ;calls CHRGET first thing!
  jsr $a6c9   ;perform list
- lda #$0d    ;carriage return?
+ lda #$0d    ;carriage return
  jsr CHROUT  ;print it
  jmp clse7f
 dumpscreen dec $01 ;switch to LORAM ($a000-$bfff)
@@ -1080,9 +1083,10 @@ getx2 jsr getval ;x2
  cmp #25
  bcs illqty
  sec
- sbc $bf   ;y2-y1
+ sbc $bf    ;y2-y1
  sta $bf
- jsr comck2
+ jsr CHRGET ;get next basic text chr
+ cmp #","
  beq srncol
  jsr pokchr
  jsr chkcomm
@@ -1181,9 +1185,10 @@ auto
  beq autooff
  cmp #TOKEN_ON
  bne autoset
- jsr CHRGET
- jmp applyauto
-autooff lda #$83
+ jsr applyauto
+ jmp CHRGET
+autooff
+ lda #$83     ;$A483 is original main loop
  sta IMAIN
  lda #$a4
  sta IMAIN+1
@@ -1204,6 +1209,7 @@ applyauto lda #<aline
  lda #>aline
  sta IMAIN+1
  rts
+;**auto line numbering routine**
 aline jsr INLIN
  stx $7a
  sty $7b
@@ -1234,12 +1240,14 @@ getnum lda $00ff,y ;Work Area for Floating Point to String Conversions
  sta KEYD-1,y   ;put char in keyboard buffer
  iny
  bne getnum
-endnum lda #32 ;space char
+endnum lda #32  ;space char
  sta KEYD-1,y
  sty $c6
-eauto jmp $a49f
+eauto jmp $a49f ;main loop for direct mode
 ;
 ;*******************
+; TRACE line#
+;runs the program with trace mode enabled
 trace pha ;save CHRGET value
  lda #$00
  sta $a5
@@ -1251,6 +1259,7 @@ trace pha ;save CHRGET value
  sta $9d
  pla     ;restore CHARGET value
  jmp RUN
+;**trace subroutine during prg execution
 trace1 lda $9d ;prg mode?
  beq trace2
  lda #$00
@@ -1271,7 +1280,7 @@ copyln lda $39 ;copy line#
  ldy #$4f
  lda HIBASE
  sta clrtop+2
- lda #$20
+ lda #" "
 clrtop sta $0400,y
  dey
  bpl clrtop
@@ -1297,12 +1306,12 @@ weglst lda #$01
  jsr FINDLN
  ldy #$01
  lda ($5f),y
- beq endtrc
+ beq endtrc ;end of program
  jsr $a82c  ;Test STOP Key for Break in Program
- lda #$13
- jsr $aad9
- jmp $a6d7
-endtrc jmp $a714
+ lda #19    ;chr 19 = Cursor Home
+ jsr CHROUT
+ jmp $a6d7  ;perform LIST of current line
+endtrc jmp HALT
 ;
 ;*******************
 newrun
@@ -1517,7 +1526,8 @@ faccpy lda $0069,y ;param1->param2
 nomtch jmp TMERR ;TYPE MISMATCH ERROR
 ;
 ;*******************
-;Perform FIND in BASIC program text
+; FIND cmd - tokenized search, ie: FIND FOR
+; FIND"chars - text search, ie: FIND"FOR
 find
  ldy #0
  lda ($2b),y ;should be $0801
@@ -1620,6 +1630,8 @@ prgend lda #$0d
  jmp HALT
 ;
 ;*******************
+; DELETE line  (delete one line)
+; DELETE start-end  (delete all lines from start to end)
 delete jsr opget2
 linadd lda $5f
  sta $24
@@ -1689,8 +1701,11 @@ ffff lda nolin,y
  jmp relink
 ;
 ;*******************
+; RENUM            :use defaults, start at 10 inc by 10
+; RENUM start      :start line specified, default inc 10 
+; RENUM start, inc :use both start and inc specified
 renum
- bne renumm  ;get parameters
+ bne renumm  ;param1 specified
  lda #10     ;no params, set default
  sta $35     ;start at line 10, inc by 10
  sta $33
@@ -1890,29 +1905,23 @@ pntreq lda $22
 gbhah rts
 ;
 ;******************
-oldrst jmp $a81d   ;original CBM RESTORE takes no params
+; RESTORE [line#] - set line# for next DATA READ stmt
 restor jsr CHRGET  ;no param means use original restore cmd
  beq oldrst
  jsr skp73
- jsr FINDLN        ;find line number to restore and place in $5F,$60
- bcc undef         ;can't find line number specified
- lda $5f           ;adjust data ptr to new line number
- bne dec5f         ;by backing up 1 byte
- dec $60
-dec5f dec $5f
- lda $5f
- sta $41           ;set DATA ptr to the line
- lda $60
- sta $42
+ jsr getlin        ;find the line specified
+ stx $41           ;set DATA ptr to the start of line
+ sty $42
  rts
+oldrst jmp $a81d   ;original CBM RESTORE takes no params
 ;
 ;*******************
 ;get BASIC line number ($14,$15) and text ptr-1 in X,Y
 getline
  jsr CHRGET
- jsr LINGET   ;convert an ascii # to 2 byte int
- jsr FINDLN   ;search for line#
- bcc undef 
+ jsr LINGET        ;convert an ascii # to 2 byte int
+getlin jsr FINDLN  ;search for line#
+ bcc undef
  ldy $60
  ldx $5f 
  bne dec5f2
@@ -1944,7 +1953,7 @@ raiseerr
  beq baderr2  ;0 is invalid
  bmi baderr2  ;128 and over is invalid
  tax
- jmp ($0300)
+ jmp (IERROR)
 baderr2 jmp FCERR ;illegal qty err
 baderr jmp SNERR  ;syntax err
 ; ON hack to support ON ERROR, ON KEY
@@ -1994,8 +2003,8 @@ detrap         ;enable error trapping
  ldx #<errors
  ldy #>errors
 seterrvec
- stx $0300
- sty $0301
+ stx IERROR
+ sty IERROR+1
  rts
 ;
 ;*******************************************
@@ -2071,6 +2080,8 @@ trap lda $9d   ;MSGFLG Flag Kernal Message Control, #$C0=kernal & ctrl, #$80=ctr
  jmp NEWSTT   ;setup nxt statement for execution and continue BASIC main loop
 ;
 ;*******************
+; RESUME line#
+; RESUME NEXT
 resume
  pla          ;discard calling subroutine
  pla
@@ -2079,7 +2090,7 @@ resume
  cmp #TOKEN_ERROR ;ERROR token?
  beq okresu
  ldx #35      ;can't resume error
- jmp ($0300)
+ jmp (IERROR)
 okresu
  jsr clearerr ;clear last error info
  jsr CHRGOT
@@ -2109,8 +2120,8 @@ pullit pla    ;empty stack to the base call was made which
  lda #0
  sta $10      ;SUBFLG Subscript Reference to an Array or User-Defined Function Call (FN)
  jsr entrap   ;enable error trapping
- jmp ($0308)  ;read and execute the next statement
-;perform RESUME linenum
+ jmp (IGONE)  ;read and execute the next statement
+;perform RESUME line#
 resume0
  pla          ;discard ERROR token
  pla          ;discard line number that caused the error
@@ -2143,8 +2154,9 @@ color
  cmp #16
  bcc nochar-3   ;if char color > 15 then setup irq to blink that color
  jsr blinker    ;toggle blink flag for this color
- jsr chkcomm
-nochar jsr comck2
+ jsr chkcomm    ;if no more params then stop now
+nochar jsr CHRGET  ;get next basic text chr
+ cmp #","
  beq noback
  jsr getval15   ;skip73
  sta BGCOL0     ;background color
@@ -2212,7 +2224,7 @@ getfrom
  beq bitof       ;msb off
  cmp #2          ;x coordinate hibyte can only be 0 or 1
  bcc biton
- jmp FCERR       ;illegal qty - a valid x coordinate is between 0 and 511
+ jmp hellno      ;illegal qty - a valid x coordinate is between 0 and 511
 biton lda MSIGX  ;Most Significant Bits of Sprites 0-7 Horizontal Position
  ora $bf         ;2^sprite# ie sprite0=1, sprite1=2, sprite3=4, etc.
  jmp msb
@@ -2260,11 +2272,12 @@ nosped lda #$ff
  jmp restorepoint
 ;
 ;*******************
-;SPRITE [sprite#], [on/off], [color], [multi], [data pointer], [priority]
+;SPRITE [sprite# 0-7], [0=on,1=off], [color 0-15], [0=normal,1=multicolor], [data pointer 0-255], [foreground priority 0=over,1=under]
 sprite
  jsr sprnum     ;sprite# returned in $be and 2^sprite# in $bf
  jsr ckcom2     ;throw misop if current char is not comma
- jsr comck2     ;get next char and compare to comma
+ jsr CHRGET     ;get next char and compare to comma
+ cmp #","
  beq scr        ;another comma so skip param
  jsr skip73     ;not a comma so get the value
  cmp #2         ;sprite visible 0=off, 1=on
@@ -2272,7 +2285,7 @@ sprite
  jmp FCERR      ;illegal qty for boolean value
 onezro lda $14  ;visible param
  bne spron
- lda $bf        ;turn sprite off
+ lda $bf        ;2^sprite#
  eor #$ff
  and SPENA
  jmp onoff
@@ -2280,34 +2293,35 @@ spron lda SPENA ;turn sprite on
  ora $bf
 onoff sta SPENA
  jsr chkcomm
-scr jsr comck2
+scr jsr CHRGET  ;get next basic text chr
+ cmp #","
  beq smcr
  jsr skip73
- lda $be        ;sprite number 0-7
+ lda $be        ;sprite# 0-7
  tay
  lda $14
  sta SP0COL,y   ;sprite y's color
  jsr chkcomm
-smcr jsr comck2
+smcr jsr CHRGET ;get next basic text chr
+ cmp #","
  beq spntr
  jsr skip73     ;get multicolor flag 0 or 1
  bne setm
- lda SPMC       ;mc off
- ora $bf        ;2^sprite
- sec
- sbc $bf
+ lda $bf        ;2^sprite#
+ eor #$FF       ;sprite# bit off
+ and SPMC       ;sprite multicolor flags
  jmp skipmc
 setm cmp #1
- beq setmul
- jmp FCERR      ;illegal quantity error
-setmul lda SPMC ;mc on
- ora $bf
+ bne badval
+ lda SPMC
+ ora $bf        ;2^sprite#
 skipmc sta SPMC
  jsr chkcomm
-spntr jsr comck2
+spntr jsr CHRGET
+ cmp #","
  beq prorty
  jsr skip73     ;get sprite data ptr 0-255 (ptr*64)=start address
-;TODO make a subroutine out of this to return base addr
+;determine VIC-II base addr
  lda CI2PRA     ;which VIC2 16K memory bank?
  and #%00000011 ;00=bank3, 01=bank2, 10=bank1, 11=bank0
  eor #%00000011 ;11=bank3, 10=bank2, 01=bank1, 00=bank0
@@ -2316,6 +2330,7 @@ spntr jsr comck2
  ror
  ror
  sta $62        ;VIC-II Base Address hibyte 0=$00, 1=$40, 2=$80 ,3=$C0
+;determine location of sprite data pointers
  lda VMCSB      ;calc screen RAM page offset (n*1K) 1=1024($0400), 2=2048($0800), 3=3072($0C00), etc.
  and #%11110000 ;upper nibble holds the number of 1K chunks
  lsr            ;convert to offset for hibyte, 1K=(4*256), 1=4, 2=8, 3=12, etc.
@@ -2327,23 +2342,57 @@ spntr jsr comck2
  lda #$f8       ;lobyte of offset to first byte of sprite data ptrs
  sta $61        ;pointer to first byte of sprite data ptr, ie bank 0 with 1K offset is $04F8
  lda $14
- ldy $be
+ ldy $be        ;sprite# 0-7
  sta ($61),y    ;sprite y's data ptr
-;
-prorty jsr chkcomm ;check for comma, if end of statement then do not return here
- jsr getval     ;get priority
- bne ontop
- lda $bf
- ora SPBGPR
- sta SPBGPR
+prorty
+ jsr chkcomm    ;check for comma, if end of statement then do not return here
+ jsr getval     ;get sprite to foreground graphics/text priority: 0=over, 1=under
+ bne under
+ lda $bf        ;2^sprite#
+ eor #$ff       ;prepare to turn off bit for sprite
+ and SPBGPR     ;turn off bit for sprite
+ sta SPBGPR     ;apply new value
  rts
-ontop cmp #1
- beq okpri
- jmp FCERR
-okpri lda $bf
+under cmp #1    ;enforce 0 or 1 value
+ bne badval
+okpri lda $bf   ;2^sprite#
+ ora SPBGPR     ;turn on bit for sprite
+ sta SPBGPR     ;apply new value
+ rts
+;
+badval jmp FCERR
+;
+;*******************
+; EXPAND sprite#, x (0=on, 1=off), y (0=on, 1=off)
+expand
+ jsr sprnum  ;get sprite# and store in $be and 2^sprite# in $bf
+ jsr ckcom2  ;throw misop if current char is not comma
+ jsr CHRGET  ;get next char and compare with comma
+ cmp #","
+ beq magx2
+ jsr skip73
+ bne onchk
+ lda $bf
  eor #$ff
- and SPBGPR
- sta SPBGPR
+ and XXPAND  ;x expand off
+ jmp magx
+onchk cmp #$01
+ bne badval
+ lda XXPAND
+ ora $bf
+magx sta XXPAND   ;x expand on
+ jsr chkcomm
+magx2 jsr getval
+ bne magchk
+ lda $bf
+ eor #$ff
+ and YXPAND
+ jmp magy
+magchk cmp #$01
+ bne badval
+sety lda YXPAND ;y expand
+ ora $bf
+magy sta YXPAND
  rts
 ;
 ;*******************
@@ -2391,41 +2440,7 @@ chrmap lda SCROLX  ;horiz fine scrolling and control reg
  rts
 ;
 ;*******************
-expand
- jsr sprnum  ;get sprite# and store in $be and 2^sprite# in $bf
- jsr ckcom2  ;throw misop if current char is not comma
- jsr comck2  ;get next char and compare with comma
- beq magx2
- jsr skip73
- bne onchk
- lda XXPAND  ;x expand off
- ora $bf
- sec
- sbc $bf
- jmp magx
-onchk cmp #$01
- beq doit
-illqty2 jmp FCERR ;illegal quan.
-doit lda XXPAND
- ora $bf
-magx sta XXPAND   ;x expand on
- jsr chkcomm
-magx2 jsr getval
- bne magchk
- lda YXPAND
- ora $bf
- sec
- sbc $bf
- jmp magy
-magchk cmp #$01
- bne illqty2
-sety lda YXPAND ;y expand
- ora $bf
-magy sta YXPAND
- rts
-;
-;*******************
-; LOCATE col, row, [blink]
+; LOCATE [col], [row], [blink] - param values can be omitted to use current value
 locate
  beq misngop
  pha
@@ -2436,21 +2451,22 @@ locate
  pla
  cmp #","
  beq row
- jsr skip73  ;get value as int
- cmp #40     ;>=40?
- bcc row_
-badloc
- jmp FCERR   ;illegal qty error
-row_ sta $bc
+ jsr skp73   ;get value as int: x=lobyte, y=hibyte
+ bne badloc  ;hibyte must be zero
+ cpx #40     ;>=40?
+ bcs badloc
+ stx $bc
  jsr CHRGOT
  beq column  ;end of statement
 row jsr CHRGET
  cmp #","
  beq column
-gavfy jsr skip73 ;get int value
- cmp #25     ;25 is max line number
- bcs badloc  ;illegal qty
- sta $bb
+gavfy
+ jsr skp73   ;get value as int: ;x=lobyte, y=hibyte
+ bne badloc  ;hibyte must be zero
+ cpx #25     ;25 is max line number
+ bcs badloc
+ stx $bb
 column
  ldx $bb
  ldy $bc     ;y holds the line (from temp storage area)
@@ -2459,12 +2475,14 @@ column
  jsr chkcomm ;if current char is a comma then continue otherwise quit now
  jsr getval  ;get int value for blink enable/disable
  cmp #2      ;0 or 1 is valid
- bcs badloc  ;illegal qty
+ bcs badbool ;illegal qty
  eor #1      ;flip value so that 1=on 0=off
  sta 204     ;Flash Cursor 0=Flash Cursor, non-zero No Cursor
  rts
 ;
 ;*****************
+badloc  jmp hellno  ;illegal coordinate error
+badbool jmp FCERR
 misngop jmp missop
 ;*******************
 designon
@@ -2485,6 +2503,10 @@ designon
 designoff jsr norm
  jmp CHRGET
 ;*****************
+; DESIGN ON
+; DESIGN OFF
+; DESIGN NEW
+; DESIGN scancode, d0,d1,d2,d3,d4,d5,d6,d7
 design
  beq misngop
  cmp #TOKEN_ON
@@ -2671,7 +2693,7 @@ getc2
  rts 
 ;
 ;*******************
-;syntax PULSE voc#, width%  ie PULSE 1,50 sets voice 1 to 50%
+; PULSE voc#(1-3), width%(0-100)
 pulse jsr ppw
  pha          ;save voice SID register offset (voice#-1)*7
  jsr ckcom2   ;throw misop if current char is not comma
@@ -2680,16 +2702,16 @@ pulse jsr ppw
  lda #<m4095  ;REGVAL=ROUND(40.95*WIDTH%) result in range 0-4095
  ldy #>m4095  ;y=hi byte, a=lo byte pointer to 5-byte FAC value
  jsr FMULT    ;multiply FAC1 by a value in memory ptr A=lo byte, Y=hi byte
- jsr ROUND    ;round FAC1 to whole number
+ jsr doround  ;round FAC1 to nearest whole number
  jsr GETADR   ;convert FAC1 to 2-byte integer in $14,$15
  pla
  tay          ;register offset for voice
- lda $15      ;$64
-; cmp #$10    ;0-4095 only
-; bcs badwav
- sta PWLO1,y  ;Pulse Waveform Width (lobyte)
+ lda $15
+ cmp #$10     ;0-4095 only (12-bit value)
+ bcs badwav
+ sta PWHI1,y  ;Pulse Waveform Width (hi nibble)
  lda $14
- sta PWHI1,y  ;Pulse Waveform Width (hibyte)
+ sta PWLO1,y  ;Pulse Waveform Width (lo byte)
  rts
 ;
 ;******************
@@ -2711,6 +2733,7 @@ pulse jsr ppw
 ; 8 noise
 ;WAVE [voice#], [waveform], [gate], [sync], [ring], [disable]
 ;
+badwav jmp FCERR
 wave jsr ppw  ;get voice SID register offset (voice#-1)*7
  sta $bb       ;save SID register offset
  jsr ckcom2    ;throw misop if current char is not a comma
@@ -2762,7 +2785,6 @@ waveit
  lda $02
  sta VCREG1,x ;select waveform and start release cycle if attac/decay/sustain is already started
  rts
-badwav jmp FCERR
 ;
 ;subroutine to clear SID
 sidclr
@@ -2777,7 +2799,7 @@ clrsid sta FRELO1,y
 ;*******************
 ;NTSC and PAL hold the value of 1Hz (based on clock speed)
 ;REG_VAL=FREQUENCY/NTSC
-;Max Frequency is 4095.3 for machines using the NTSC clock
+;SOUND voice#, frequency(0 to 3995 for NTSC machines)
 sound
  cmp #TOKEN_CLR  ;clr token?
  bne getfreq
@@ -2793,19 +2815,19 @@ getfreq
  beq is_ntsc
  lda #<pal
  ldy #>pal
- jmp memfac
+ bne memfac      ;always branches since hibyte of ptr could never be 0
 is_ntsc lda #<ntsc
  ldy #>ntsc
 memfac jsr MOVFM ;copy mem to FAC1 pointed by a & y
- jsr FDIVT       ;fac1 = (FAC2/FAC1)
- jsr ROUND       ;round FAC1 to whole number
+ jsr FDIVT       ;FAC1 = (FAC2/FAC1)
+ jsr doround     ;round FAC1 to nearest whole number
  jsr GETADR      ;convert FAC1 to unsigned 16-bit int
  pla
  tay
- lda $14
- sta FRELO1,y    ;store result in data control reg for voice
  lda $15
  sta FREHI1,y
+ lda $14
+ sta FRELO1,y    ;store result in data control reg for voice
  rts
 ;
 ;*******************
@@ -2988,6 +3010,7 @@ plotit dec $01
 ;*******************
 ; LINE INPUT ["prompt",] A$
 ; LINE INPUT# filenum, A$
+; LINE x1,y1 TO x2, y2, plotType, color
 line
  cmp #TOKEN_INPUT_ ;input# token (line input#)
  bcc liner     ;line x,y to a,z
@@ -3129,9 +3152,11 @@ xytim2
  rol
  tay
 theend rts
-hellno jmp FCERR ;throw illegal qty error
+hellno ldx #34
+ jmp (IERROR) ;throw illegal coordinate error
 ;
 ;*******************
+; PAINT x,y, [plotType], [color]
 paint jsr getpnt
  jsr types
  dec $01
@@ -3253,9 +3278,8 @@ setscr jsr comchk
  sta SCROLX
  jmp cklast
 chk38 cmp #38
- beq set38
-illqty3 jmp FCERR
-set38 lda SCROLX
+ bne illqty3
+ lda SCROLX
  and #%11110111  ;bit 3 off 38 columns
  sta SCROLX
 cklast jsr chkcomm
@@ -3273,29 +3297,29 @@ chk24 cmp #24
  sta SCROLY
  rts
 ;
+illqty3 jmp FCERR
+;
 ;*******************
-; SCROLL x1, y1 TO x2, y2, direction, color
+; SCROLL x1, y1 TO x2, y2, [direction 0-3], [wrap 0-1]
 scroll
  jsr getscroll
  jsr comchk
  beq okscroll1
- lda #0
- sta $ff
+ lda #0          ;default direction 0=up
+ sta $ff         ;default wrap 0=no wrap
  beq okscroll2
 okscroll1
  jsr getval      ;direction 0-3
  cmp #4
- bcc okscroll3
-noscroll
- jmp FCERR       ;illegal quantity error
-okscroll3 pha 
+ bcs illqty3
+ pha 
  jsr comchk
- bne okscroll4
+ bne okscroll3
  jsr getval      ;wrap? 0=no, 1=yes
  cmp #2
- bcs noscroll
+ bcs illqty3
  sta $ff
-okscroll4 pla    ;what was the direction?
+okscroll3 pla    ;what was the direction?
 okscroll2 asl    ;convert to 2 byte offset
  tay
  lda scrolls,y   ;scroll direction vector lobyte
@@ -3305,20 +3329,23 @@ okscroll2 asl    ;convert to 2 byte offset
  dec $01
  jmp $0054
 ;-----------
+badscroll jmp hellno ;illegal coordinate error
 getscroll
- jsr skip73    ;x1
- cmp #40       ;max columns
- bcc goodscroll
-badscroll jmp FCERR ;illegal quantity error
-goodscroll sta $fb
- sta $be
- lda HIBASE   ;top page of screen memory
- sta $fc
- jsr ckcom2   ;throw misop if current char is not comma
- jsr getval   ;y1
- cmp #25      ;max rows
+ jsr skp73     ;x1
+ bne badscroll ;hibyte should be 0
+ cpx #40       ;max columns
  bcs badscroll
- sta $bf
+ stx $fb
+ stx $be
+ lda HIBASE    ;top page of screen memory
+ sta $fc
+ jsr ckcom2    ;throw misop if current char is not comma
+ jsr dbyval    ;y1
+ bne badscroll ;hibyte must be 0
+ cpx #25       ;max rows
+ bcs badscroll
+ stx $bf
+ txa
  tay 
  beq notime40
  lda $fb
@@ -3332,16 +3359,21 @@ notime40 jsr addoffset
  beq foundto
  jmp SNERR       ;syntax error
  jsr ckcom2      ;throw misop if current char is not comma
-foundto jsr getval ;x2
- cmp #40
+foundto
+ jsr dbyval      ;x2
+ bne badscroll   ;hibyte must be 0
+ cpx #40
  bcs badscroll
+ txa
  sec 
  sbc $be
  sta $be
  jsr ckcom2
- jsr getval ;y2
- cmp #25
+ jsr dbyval      ;y2
+ bne badscroll   ;hibyte must be 0
+ cpx #25
  bcs badscroll
+ txa
  sec 
  sbc $bf
  sta $bf
@@ -3349,7 +3381,7 @@ foundto jsr getval ;x2
 ;
 ;*******************
 ; ENVELOPE voice#, attack, decay
-; ENVELOPE voice#, attack, decay, sustain release
+; ENVELOPE voice#, attack, decay, sustain, release
 adsr jsr ppw
  sta $bb       ;SID register offset for voice
  jsr ckcom2    ;raise error if current char is not a comma
@@ -3395,7 +3427,7 @@ adsr jsr ppw
 ;Summary of steps in code:
 ;1. get freq in FAC format
 ;2. divide by 5.8 using FAC DIV subroutine
-;3. round up the value to whole number using FAC ROUND subroutine
+;3. round up the value to whole number
 ;4. convert FAC value to a 2-byte binary value using FAC subroutine
 ;5. subtract 5 from binary value
 ;6. range check to ensure not larger than 2047, error if so
@@ -3436,7 +3468,7 @@ getfreq1
  ldy #>five8
  jsr MOVFM      ;copy mem to FAC1 pointed by a & y
  jsr FDIVT      ;fac1 = (FAC2/FAC1)
- jsr ROUND      ;round FAC1 to whole number
+ jsr doround    ;round FAC1 to nearest whole number
  jsr GETADR     ;convert FAC1 to unsigned 16-bit int
 ;now subtract 30/5.8 = 5.172...or just 5 (close enough)
  lda $14
@@ -3450,7 +3482,7 @@ getfreq1
 ;range check register value max from 0-2047 allowed
  cmp #8           ;2048 or larger is above SID's range
  bcc okfilt
-illqty5 jmp FCERR        ;illegal qty err
+illqty5 jmp FCERR ;illegal qty err
 okfilt
 ;11-bit value stored in a wacky way in filter registers
 ;   $15       $14     Source binary number
@@ -3604,11 +3636,12 @@ initvoice
  lda #4         ;default octave 4
  sta playoct
 
- lda #0         ;init voice's registers
-; sta FRELO1,x
-; sta FREHI1,x
+;init SID registers for selected voice
+ lda #0
+ sta FRELO1,x
+ sta FREHI1,x
  sta PWLO1,x    ;in case user select pulse waveform
- lda #$04       ;set the pulse duty cycle to 25% (12-bit reg val 0-4095, 25%=1024)
+ lda #$08       ;set the pulse duty cycle to 50% (12-bit reg val 0-4095, 25%=2048)
  sta PWHI1,x    ;lower nibble only, upper nibble is unused (12-bit value)
 
  lda #$10       ;set attack duraction to 8ms (hi nibble)
@@ -3622,7 +3655,6 @@ initvoice
  sta md418
  sta SIGVOL     ;SID main volume register
 vocrdy rts
-
 ;
 ;*******************
 ; KEY n, "string"  where n = (1-8)
@@ -3672,7 +3704,7 @@ clos7f pha       ;retain result of open file which is index of error msg
  jsr closeit     ;close 127
  pla             ;retreive error msg index
  tax             ;x register holds index of error message
- jmp ($0300)     ;display error message
+ jmp (IERROR)    ;display error message
 noeror
  lda $9d         ;display message if not in prg mode, #$C0=kernal & ctrl, #$80=ctrl only
  bpl closeit     ;don't display load addresses
@@ -3691,7 +3723,7 @@ closeit lda $b8  ;file handle 127
 ;******************************************
 badsubscript
  jmp BSERR    ;BAD SUBSCRIPT ERROR
-; I% = INSTR(offset,src$,find$)
+; I = INSTR(offset,src$,find$)
 ;if first expression is int type then offset provided otherwise offset=1 (default)
 instr
  jsr CHRGET   ;process next cmd text
@@ -3750,13 +3782,15 @@ notfound
  ldy #0
  tya
  beq instrend
-;
+;*******************
+; P=PTR(x) or P=PTR(x%) or P=PTR(x$) where x is the variable name
 ptr
  lda $48
  ldy $47
  jmp GIVAYF
-
-; V = ROUND(N,D)  where N=num to round, D=num of decimal places
+;*******************
+; V = ROUND(n)   where n=num to round to nearest whole number
+; V = ROUND(n,d) where n=num to round, d(-9 to +9) = num of places left (-) or right (+) of decimal point
 round
  jsr CHRGET
  jsr CHKOPN     ;Check for and Skip Opening Parentheses
@@ -3776,7 +3810,7 @@ round
  lda $66        ;sign, $00=Positive, $FF=Negative
  sta $15
  beq round2
- jsr $B947      ;NEGFAC Replace FAC1 with Its 2's Complement
+ jsr NEGFAC     ;replace FAC1 with its 2's complement
 round2
  lda $64        ;hi byte
  bne illqty7
@@ -3798,12 +3832,7 @@ round1
  eor #$ff       ;toggle move direction for 2nd call
  sta $15
 addhalf
-;add 0.5 to FAC1
- lda #<$BF11    ;the constat 0.5 in 5-byte FAC format
- ldy #>$BF11
- jsr $B867      ;add fac1 with a number in memory: fac1 = mem+fac1
-;truncate fraction
- jsr INT        ;perform INT
+ jsr doround    ;add 0.5 to FAC1 then truncate
 ;move decimal point to the left
  ldx $14
  beq nomul
@@ -3824,12 +3853,9 @@ xmul10 jsr $BAE2  ;multiply FAC1 by 10
  bne movedec
 nomul rts
 illqty7 jmp FCERR ;display illegal qty error
-;
-; J% = JOY(n) where n=joystick number 1 or 2
-joy jsr GETADR
- lda $15
- bne illqty7
- lda $14
+;*******************
+; J = JOY(n) where n=joystick number 1 or 2
+joy jsr fac2int ;get single byte int via GETADR
  beq illqty7
  cmp #3
  bcs illqty7
@@ -3853,7 +3879,7 @@ joy jsr GETADR
  ora #%10000000 ;fire flag
 nofire tay  ;lowbyte
  jmp nobutt
-;
+;*******************
 ; K% = KEY(n) where n=0 ascii, n=1 flags
 keybytes .word keyentry,SHFLAG,$00c5,$00cb,$00c6
 ;0 keyentry - used with ON KEY GOSUB to indicate key causing event
@@ -3875,8 +3901,8 @@ _key
  lda ($14),y
  tay
  jmp nobutt
-;
-;E% = ERROR(n) where n=0 Error Number, n=1 Error Line Number
+;*******************
+; E = ERROR(n) where n=0 Error Number, n=1 Error Line Number
 err
  jsr fac2int
  cmp #1
@@ -3888,17 +3914,14 @@ geterrline
  ldy errline
  lda errline+1
  jmp GIVAYF  ;convert binary int to FAC then return
-;
-;p% = POT(n) where n=potentiometer number (1-4)
-pot jsr GETADR
- lda $15
- bne badpot
- lda $14
- beq badpot
- cmp #$05
- bcc okpot
 badpot jmp FCERR
-okpot pha
+;*******************
+; P = POT(n) where n=potentiometer number (1-4)
+pot jsr fac2int ;get single byte value via GETADR
+ beq badpot
+ cmp #5         ;valid values 1 to 4
+ bcs badpot
+ pha
  ldx #%11000000 ;bits 0=input, 1=output, set bits 6 and 7 to output
  sei
  stx CIDDRA     ;data direction reg A
@@ -3908,17 +3931,17 @@ okpot pha
  ldy CIAPRB     ;data port reg B
  jmp setprt
 port2 lsr
- ldx #$80
+ ldx #$80       ;bit 7 set to read paddles on Port A or B
  ldy CIAPRA
 setprt stx CIAPRA
  sty $02
- ldy #$80
+ ldy #$80       ;wait for latch to fully engage
 wait dey
  bpl wait
  lsr
  tay
  lda POTX,y
- ldx #$ff
+ ldx #$ff       ;set data direction to output
  stx CIDDRA
  cli
  tay
@@ -3926,7 +3949,7 @@ wait dey
  lsr
  bcc b2or4
  lda #$04
- jmp and02
+ bne and02    ;always branches
 b2or4 lda #$08
 and02 and $02
  bne nobutt
@@ -3936,7 +3959,7 @@ nobutt lda #$00 ;hibyte
 endpot jmp GIVAYF  ;convert binary int to FAC then return
 ;
 ;*******************
-;C% = CSR(n) where n = 0 to 6 to select cursor info:
+; C = CSR(n) where n = 0 to 6 to select cursor info:
 ; 0=logical column, 1=physical line, 2=blink on/off, 3=max columns, 4=char under cursor
 ; 5=physical column, 6=color under cursor peek($0287), 7=address of csr line
 csr
@@ -3975,7 +3998,7 @@ goodcsr1 sta $14
 gocsr tay     ;y=lobyte
  jmp nobutt
 ;*******************
-;P% = PEN(n) where (n=0:x, n=1:y) to read $D013 (X) and $D014 (Y) Light Pen Registers.
+; P = PEN(n) where (n=0:x, n=1:y) to read $D013 (X) and $D014 (Y) Light Pen Registers.
 ;For PENY there are 200 visible scan lines possible so value is exact.
 ;For PENX there are only eight bits available for 320 possible horizontal
 ;screen positions, the value here is accurate only to every second dot position.
@@ -3983,7 +4006,7 @@ gocsr tay     ;y=lobyte
 ;to approximate the actual horizontal dot position of the light pen.
 ;
 pen
- jsr fac2int ;FAC1 to signle byte value returned in A reg
+ jsr fac2int ;FAC1 to single byte value returned in A reg
  beq penx
  cmp #2
  bcs badcsr
@@ -4052,11 +4075,12 @@ noadd7 clc
 ;********************
 ;* new reset vector *
 ;********************
-resvec ldx #$ff
- sei
- txs
- cld
- stx SCROLX
+resvec
+ ldx #$ff   ;highest stack ptr offset (empty stack)
+ sei        ;disable interrupts
+ txs        ;clear the stack
+ cld        ;ensure decimal mode is turned off
+ stx SCROLX ;reset video chip (bit5) visibly by using 38 cols (bit3) & mc mode (bit4)
  jsr IOINIT ;init CIA i/o devices
  jsr RAMTAS ;init RAM, tape buffer & screen
  jsr RESTOR ;restore default I/O vectors
@@ -4077,9 +4101,9 @@ runstp lda #$7f
  sta CI2ICR
  ldy CI2ICR
  bmi nothin
- jsr $f6bc
- jsr STOP
- bne nothin
+ jsr $f6bc       ;scan keyboard for STOP key with result in $91
+ jsr STOP        ;determine if STOP key was pressed
+ bne nothin      ;if not, continue with NMI handler
 ;********************
 ;* new BREAK vector *
 ;********************
@@ -4107,21 +4131,21 @@ errors lda listflag  ;is LIST currently executing?
 error2 txa
  bpl doerr    ;bit 7 off means error condition
  jmp READY    ;print READY. then continue with BASIC main loop
-doerr asl     ;calc index
+doerr asl     ;calc 2-byte index to message
  tax
  sec
  sbc #62
- bcc romerr
+ bcc romerr   ;CBM errors 1-30 (index 2-60)
  tax
  lda erradd,x
- sta $22
- lda erradd+1,x
- jmp hibyer
+ ldy erradd+1,x
+ bne hibyer   ;always branches since hi-byte would not be 0
 romerr lda $a326,x  ;$A328-$A364 Error Message Vector Table
+ ldy $a327,x
+hibyer
  sta $22
- lda $a327,x
-hibyer sta $23
- jsr norm
+ sty $23
+ jsr norm    ;set text mode normal display
  lda #$80    ;only control messages - SEARCHING, SAVING, FOUND, etc.
  jsr SETMSG
  jsr CLRCHN  ;restore default devices
@@ -4237,7 +4261,7 @@ flash
 mem1 lda $d800,y  ;get color of text
  and #%00001111   ;text color is in lo nibble, hi nibble may be random value so remove it
  tax
- lda blinkcol,x
+ lda blinkcol,x   ;color marked for blinking?
  beq nxtblk       ;no so skip it
 mem2 lda $0400,y  ;get text char to flash
  and #%01111111   ;ensure bit 7 is off
@@ -4343,10 +4367,6 @@ comchk jsr CHRGOT  ;get current basic text chr
  cmp #","
  rts
 ;*******************
-comck2 jsr CHRGET  ;get next basic text chr
- cmp #","
- rts
-;*******************
 chkcomm jsr CHRGOT ;check current basic text for comma
  cmp #","
  beq comma         ;return normally if comma exists
@@ -4359,7 +4379,7 @@ ckcom2 jsr CHRGOT
  cmp #","
  beq comma
 missop ldx #31     ;missing operand error
- jmp ($0300)       ;vector to print basic error message
+ jmp (IERROR)      ;vector to print basic error message
 ;*******************
 getstr jsr CHRGET  ;get next basic text chr
 getstr0 beq missop
@@ -4400,7 +4420,7 @@ sprnum
  cmp #8            ;valid sprite numbers 0-7
  bcc less8
  ldx #33           ;illegal sprite number
- jmp ($0300)
+ jmp (IERROR)
 less8 sta $be
  tay
  lda bitweights,y
@@ -4412,8 +4432,8 @@ getvoc
  beq iverr
  cmp #4
  bcc getvoc-1
-iverr ldx #32
- jmp ($0300)      ;illegal voice number
+iverr ldx #32     ;illegal voice number
+ jmp (IERROR)
 ;*******************
 addoffset lda $fb
  sta $fd
@@ -4475,7 +4495,14 @@ prtnum jsr FOUT  ;convert fac1 to ascii with str ptr in a,y registers
  jsr STROUT      ;print string ptr (a=lobyte y=hibyte)
  dec $01         ;switch to LORAM (a000-bfff)
  rts
-
+;
+;round FAC1 to the nearest whole number
+doround
+ lda #<$BF11    ;the constat 0.5 in 5-byte FAC format
+ ldy #>$BF11
+ jsr FADD       ;add FAC1 with a number in memory: FAC1 = MEM+FAC1
+ jmp INT        ;perform INT
+;
 ;********************************************************************
 ;* Global Constant Storage
 ;********************************************************************
@@ -4498,21 +4525,21 @@ gotok .byte TOKEN_GOTO,$8d,TOKEN_THEN,TOKEN_ELSE,TOKEN_RESUME,$f2,$f4,TOKEN_RUN,
 ;
 ;SOUND command use SOUND voc#, frequency
 ;REG_VAL=FREQUENCY/(CLOCK/16777216)
-;FREQUENCY=(REG_VALUE*CLOCK/16777216)Hz
+;FREQUENCY=REG_VALUE*(CLOCK/16777216)Hz
 ;where CLOCK NTSC=1022730, PAL=985250
-;NTSC 1Hz Freq Value = 1022730/16777216 = 0.0609594583
-;PAL  1Hz Freq Value =  985250/16777216 = 0.0587254763
+;NTSC 1Hz Freq Value = 1022730/16777216 = 0.060959458351
+;PAL  1Hz Freq Value =  985250/16777216 = 0.058725476326
 ;below are the FAC values for 1 unit in Hz for both CLOCK speeds
 ;
-ntsc .byte $7c,$79,$b0,$9f,$fc
-pal  .byte $7c,$70,$8a,$20,$03
+ntsc .byte $7c,$79,$b0,$a0,$00
+pal  .byte $7c,$70,$8a,$20,$00
 ;
 ;PULSE command use PULSE voc#, width%
 ;used for converting register value to frequency in Hz
 ;Formula REG_VALUE = 40.95 * width%
-m4095 .byte $86,$23,$cc,$cc,$cc ;FAC binary representation of 40.95
+m4095 .byte $86,$23,$cc,$cc,$cd ;FAC binary representation of 40.95
 ;FILTER command use FILTER frequency, resonance, type
-five8 .byte $83,$39,$99,$99,$99  ;FAC binary representation of 5.8
+five8 .byte $83,$39,$99,$99,$9a  ;FAC binary representation of 5.8
 ;
 
 ;********************************************************************
@@ -4698,7 +4725,7 @@ endass lda #0 ;terminate string with zero-byte
 ;***************
 ;KEY LIST (code in LORAM)
 ;
-keylistt lda #13 ;cr
+keylistt lda #$0d ;cr
  jsr CHROUT
  lda #$04
  sta $02
@@ -6092,17 +6119,19 @@ param3 ldy #0
 ;
 ;*********************
 varss lda $2d  ;vector ($2d,$2e) beginning of non-array variable storage
+ ldy $2e
+chk2d
  cmp $2f       ;vector ($2f,$30) beginning of array variable storage
  bne copy2d    ;if both vectors point at same mem loc then no vars defined
- lda $2e
- cmp $30
+ cpy $30
  bne copy2d
- jmp evar
-copy2d lda $2d
+evar jmp r6510 ;switch LORAM back to LOROM
+copy2d
  sta $fb
- lda $2e
- sta $fc
-xvar ldy #0
+ sty $fc
+ jsr STOP     ;was STOP key pressed
+ beq evar     ;yes, abort processing
+ ldy #0
  sty $0d      ;set default type to 0=float
  lda ($fb),y  ;first 2 bytes is variable name
  sta $45      ;first char of var name
@@ -6179,32 +6208,21 @@ prtstr lda ($50),y
  bne prtstr
 endquote lda #"""
  jsr CHROUT
-nxtvar lda #13
+nxtvar lda #$0d
  jsr CHROUT
- jsr STOP
- beq evar
 sft lda SHFLAG
  cmp #1
  beq sft
  lda $fb
  clc
  adc #5
- sta $fb
+ tax
  lda $fc
  adc #0
- sta $fc
- lda $fb
- cmp $2f
- bne jp
- lda $fc
- cmp $30
- bne jp
-evar
- jmp r6510 ;switch LORAM back to LOROM
-jp jmp xvar
+ tay
+ txa
+ jmp chk2d 
 ;
-;****************
-
 ;***************
 dumpscreen2
  ldy #$00        ;secondary parmeter 0 = assume upper case with symbols
@@ -6257,7 +6275,7 @@ nxchar inc $fe
  lda $fe
  cmp #40      ;40 columns?
  bne infbfc
- lda #13
+ lda #$0d
  jsr CHROUT
  lda #0
  sta $fe
@@ -6270,9 +6288,9 @@ stopyn lda $fc
  lda $fb
  cmp #232
  bne pchr
- lda #$0d
- jsr CHROUT
- rts
+ lda #$13
+ jmp CHROUT
+;
 dumpbitmap2 
  ldy #5   ;secondary param - binary graphic 
  jsr openprint
@@ -6363,7 +6381,7 @@ s1fbfc dec $fb
  lda $fc
  adc #$1f
  sta $fc
- lda #13
+ lda #$0d
  jsr CHROUT
  lda #10
  jsr CHROUT
