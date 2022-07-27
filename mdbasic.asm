@@ -114,6 +114,7 @@ RUN    = $a871 ;peform RUN
 GOTO   = $a8a0 ;perform GOTO
 DATA   = $a8f8 ;perform DATA
 DATAN  = $a906 ;search BASIC text for the end of the current statement
+REM    = $a93b ;perform REM
 ONGOTO = $a94b ;perform ON
 LINGET = $a96b ;convert an ASCII decimal number to a 2-byte binary line number
 STROUT = $ab1e ;print msg from str whose addr is in the Y (hi byte) and A (lo byte) registers
@@ -123,7 +124,7 @@ FRMEVL = $ad9e ;evaluate expression
 PARCHK = $aef1 ;eval expr inside parentheses
 CHKCLS = $aef7 ;check for and skip closing parentheses
 CHKOPN = $aefa ;check for and skip opening parentheses 
-CHKCOM = $aeff ;check for and skip comma
+CHKCOM = $aefd ;check for and skip comma
 PTRGET = $b08b ;search for a variable & setup if not found
 AYINT  = $b1bf ;convert FAC1 to a signed integer in FAC1
 GIVAYF = $b391 ;convert 16-bit signed integer to floating point (a=hibyte y=lobyte)
@@ -131,9 +132,8 @@ ERRDIR = $b3a6 ;check if prg is running in direct mode/cause error
 STRLIT = $b487 ;scan and setup pointers to a string in memory
 GETSPA = $b4f4 ;alloc space in mem for string
 FRESTR = $b6a3 ;discard a temporary string
-GETBYTC= $b79b ;input a parameter whose value is between 0 and 255
 GETADR = $b7f7 ;convert FAC1 to unsigned 16-bit integer; result in $14 lobyte, $15 hibyte
-FADD   = $b867 ;Add FAC1 to a Number in Memory
+FADDH  = $b849 ;add 0.5 to FAC1
 NEGFAC = $b947 ;replace FAC1 with its 2's complement (make it a negative number)
 FMULT  = $ba28 ;multiply FAC1 by value in memory pointed to by A (lobyte) and Y (hibyte) registers
 FDIVT  = $bb12 ;divide FAC2 by FAC1 FAC1 = (FAC2/FAC1)
@@ -142,6 +142,7 @@ MOV2F  = $bbca ;move a 5-byte floating point number from FAC1 to memory $57-$5B 
 MOVEF  = $bc0f ;copy FAC1 to FAC2 without rounding
 INT    = $bccc ;perform INT
 FINLOG = $bd7e ;add signed integer to FAC1
+INPRT  = $bdc2 ;print IN followed by a line number
 LINPRT = $bdcd ;print 2-byte number stored in A (hibyte), X (lobyte)
 FOUT   = $bddd ;convert contents of FAC1 to ASCII String
 
@@ -334,7 +335,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.07.04"
+.text "mdbasic 22.07.27"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -390,7 +391,7 @@ newcmd
 ;functions
 .shift "round"
 ;statement & function
-.shift "key"
+keystr .shift "key"
 .shift "error"
 ;functions only
 .shift "ptr"
@@ -406,7 +407,7 @@ newcmd
 cmdtab
 ;keywords
 .rta SNERR ;$cb token - placeholder for OFF token (has no address to call)
-.rta else  ;$cc token - using this cmd by itself behaves like the REM statement
+.rta REM   ;$cc else token - using this cmd by itself behaves like the REM statement
 ;commands
 .rta merge,  dump,   vars,    circle, fill           ;$d1 token
 .rta scroll, swap,   locate,  disk,   delay,   files ;$d7
@@ -498,9 +499,9 @@ noblink sta blinkcol,y   ;all colors turn off flash flag
  sta $0306
  lda #>list
  sta $0307
- lda #<exccmd
+ lda #<execut
  sta IGONE
- lda #>exccmd
+ lda #>execut
  sta IGONE+1
  jsr detrap
  lda #<brkirq
@@ -523,7 +524,7 @@ noblink sta blinkcol,y   ;all colors turn off flash flag
  sta $37    ;the highest address is now $7FFF (32767)
  lda #$7F   ;$37-$38 holds value of highest address used by BASIC, originally $9FFF (40959)
  sta $38
- jmp CLEAR  ;perform CLR
+ rts
 ;
 ;Program Tokenization process - text to tokens via vector ($0304)
 ;
@@ -682,30 +683,32 @@ xcmd jsr tstcmd
  sta $3a
  jmp NEWSTT     ;find beginning of next statement and execute
 ;
+_A804 jmp $a9a5 ;perform LET
 tstcmd
- cmp #FIRST_CMD_TOK
+ sec
+ sbc #$80
+ bcc _A804
+ cmp #FIRST_CMD_TOK-$80
  bcs oknew      ;if token is greater than or equal to FIRST_CMD_TOK then MDBASIC
- cmp #TOKEN_RESTORE
+ cmp #TOKEN_RESTORE-$80
  bne notrestore
  jmp restor
 notrestore
  bcs oldcmd
- cmp #TOKEN_RUN
+ cmp #TOKEN_RUN-$80
  beq do_run
  bcc oldcmd2
  jmp if
 do_run
  jmp newrun
 oldcmd
- cmp #TOKEN_ON
+ cmp #TOKEN_ON-$80
  bne oldcmd2
  jmp on
 oldcmd2
- jsr CHRGOT
- sec
- jmp $a7ed      ;execute CBM statement
+ jmp $a7f3      ;execute CBM statement
 oknew
- sbc #FIRST_CMD_TOK ;first mdbasic cmd token for index calc start at 0
+ sbc #FIRST_CMD_TOK-$80 ;first mdbasic cmd token for index calc start at 0
  cmp #45        ;only 45 cmd tokens (0-44)
  bcs oldcmd2
  asl            ;index * 2 for word pointer indexing
@@ -874,30 +877,88 @@ if jsr CHRGET
  cmp #TOKEN_GOTO ;GOTO token? syntax IF X=1 GOTO 10
  beq condit
  lda #TOKEN_THEN ;THEN token
- jsr CHKCOM      ;check for and skip over THEN, error if not there
+ jsr CHKCOM+2    ;check for and skip over THEN, error if not there
 condit
  lda $61         ;expression result 0=false, otherwise true
  bne istrue      ;non-zero means expression is true
- jsr DATAN+3     ;find end of current BASIC statement
- beq isfalse     ;now check for ELSE
+ ldx #TOKEN_ELSE
+ jsr DATAN+5     ;scan for end of line terminator (byte 0) or ELSE token
+ tax             ;a reg holds byte found, either 0 or ELSE token
+ beq nxtline     ;end of line so go to next line
+ tya             ;y holds num bytes to advance txtptr forward
+ clc             ;add offset to txtptr
+ adc $7a
+ sta $7a
+ lda $7b
+ adc #0
+ sta $7b
+ jsr CHRGET      ;skip over ELSE token to next char or token
+ bcc goto        ;ascii numerials indicate line number for GOTO
+endlin
+ jmp tstcmd      ;process statements on the rest of current line
 istrue
  jsr CHRGOT      ;check current char is numeric digit
  bcs endlin
-goto jmp GOTO       ;preform goto
-isfalse jsr CHRGOT  ;check next stmt
-garbag cmp #$00   ;end of statement (no else)
- beq endlin       ;we are done
- cmp #TOKEN_ELSE  ;else token
- beq elser        ;go to the ELSE expression
- jsr CHRGET       ;otherwise position for next char in line
- jmp garbag       ;process next stmt
-elser jsr CHRGET  ;process ELSE stmt
- bcc goto
-endlin jmp tstcmd
-else jmp $a93b    ;perform REM (ignore rest of line, skip to next stmt)
+goto jmp GOTO    ;preform goto
+nxtline jmp REM  ;perform REM to advance txtptr to next line
 ;
 vars dec $01
  jmp varss
+;
+;*******************
+;DISK "DOS command string"
+;"S0:myfile.bas"                 - delete a file
+;"N0:label,id"                   - full format disk with a label and id
+;"N0:label"                      - soft format (BAM only) with label
+;"I0:"                           - initialize disk (clears last error and moves head to track 0, sector 0)
+;"C0:sourceFile=destinationFile" - copy a file
+;"R0:newfileName=oldfileName"    - rename a file
+;"V0:"                           - validate (defragment) disk
+donehere rts
+disk
+ jsr getstr0     ;get DOS string
+ beq donehere
+ jsr SETNAM
+ lda #$7f        ;file handle 127
+ ldx #$08        ;device 8
+ ldy #$0f        ;secondary channel 15 = DOS channel
+ jsr SETLFS
+ jsr OPEN        ;performs OPEN 127,8,15, "string"
+ bcs err127
+ lda $9d         ;display message if not in prg mode, #$C0=kernal & ctrl, #$80=ctrl only
+ bpl closeit     ;don't display load addresses
+ ldx $b8         ;current file number
+ jsr CHKIN       ;designate a Logical file as the current input channel
+ bcs err127
+readio jsr CHRIN
+ jsr CHROUT
+ cmp #$0d
+ bne readio
+ jsr CLRCHN
+closeit
+ jmp clse7f
+;
+;Open MDBASIC file handle for printer
+openprint00
+ ldy #$00     ;secondary parameter $FF=not used, 5=binary graphic, 7=upper/lower case chars, 0=Upper case and symbol chars
+openprint
+ lda #$7f     ;file handle 127
+ ldx #$04     ;device 4
+ jsr SETLFS   ;set logical file parameters BASIC eq open 127,4,0
+ lda #$00     ;zero byte file name length (no name)
+ jsr SETNAM   ;set file name
+ jsr OPEN     ;perform OPEN 127,4,0,""
+ bcc prtopen  ;clear carry flag means success
+err127 pha
+ jsr clse7f
+ pla
+ tax
+ jmp (IERROR)
+prtopen
+ ldx #$7f     ;pass file handle param into CHKOUT via x reg
+ jsr CHKOUT   ;redirect std output to device on file 127
+ bcs err127
+ rts
 ;
 ;FILES (string expression optional)
 files
@@ -927,14 +988,13 @@ copystr sta ($35),y
  ldy #$00       ;secondary 0
  jsr SETLFS
  jsr OPEN       ;perform OPEN 127,8,0,S$
- bcc noerr
- jmp clos7f
-noerr
- lda #$FF       ;start file count at -1 to not count footer
+ bcs err127     ;handle error
+ lda #$ff       ;start file count at -1 to not count footer
  sta $50
  sta $51
  ldx $b8        ;current file number
  jsr CHKIN      ;designate a Logical file as the current input channel
+ bcs err127
  jsr CHRIN      ;skip 2-byte file header
  jsr CHRIN
  jsr prtlin     ;get and print directory header (label & id)
@@ -944,70 +1004,56 @@ noerr
 blocks
  jsr prtlin
  beq chkshft
-chkeof and #64  ;end of file?
- bne filecnt
- jsr clse7f
- ldx #4         ;file not found
- jmp (IERROR)   ;raise error
-chkshft  lda #$01
-shift2 bit SHFLAG ;shift key?
- bne shift2
- inc $50
+chkeof
+ and #%01000000 ;bit6=EOF/EOI, bit7=device not present, bits0-1 indicate device timeout
+ bne filecnt    ;bit6=1? EOF, print file count
+ lda #5         ;DEVICE NOT PRESENT
+ jmp err127
+chkshft lda #$01
+shift2 
+ bit SHFLAG     ;shift key?
+ bne shift2     ;wait till released
+ inc $50        ;increment file count
  bne nxtfile
  inc $51
-nxtfile lda $91   ;stop key?
+nxtfile
+ jsr STOP       ;stop key?
  bmi blocks
  bpl clse7f
 filecnt
  ldx $50
  lda $51
- jsr LINPRT       ;print 2-byte binary number in FAC1
+ jsr LINPRT     ;print 2-byte binary number in FAC1
  lda #<filestr
  ldy #>filestr
- jsr STROUT       ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
-clse7f lda $b8
- jsr CLOSE        ;close file # in A register
- ldx #0           ;designate default output channel (0 = screen)
- jsr CHKOUT       ;$b8 = current std out file number, 0=default (screen)
- clc
- rts
+ jsr STROUT     ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
+clse7f
+ lda #$7f
+ jsr CLOSE
+ jmp CLRCHN     ;input channel 0=keyboard, output channel 3=screen
 prtlin
- jsr CHRIN        ;skip 2 byte line header
+ jsr CHRIN      ;skip 2 byte line header
  jsr CHRIN
- lda $90          ;Kernal I/O Status Word (ST)
+ jsr CHRIN      ;get 2-byte block size
+ sta $63        ;and store in FAC1
+ jsr CHRIN      ;to later convert to string
+ sta $62        ;and print to screen
+ jsr READST     ;read i/o status word
  bne prtdone
- jsr CHRIN        ;get 2-byte block size
- sta $63          ;and store in FAC1
- jsr CHRIN        ;to later convert to string
- sta $62          ;and print to screen
- jsr LINPRT+4     ;$bdd1 output 2-byte binary number in FAC1 to screen
+ jsr LINPRT+4   ;$bdd1 output 2-byte binary number in FAC1 to screen
  lda #" "
-fprint jsr CHROUT
- jsr CHRIN        ;print zero-terminated string in file
- bne fprint
- lda #$0d         ;CR
+;print zero-terminated string in file then print CR
+fprint
  jsr CHROUT
- lda $90
+ jsr READST     ;Kernal I/O Status Word (ST)
+ bne prtdone
+ jsr CHRIN
+ bne fprint
+ jsr printcr 
+ jsr READST
 prtdone rts
 ;
 ;*******************
-;
-;Open MDBASIC file handle for printer
-openprint00 ldy #$00   ;secondary parameter $FF=not used, 5=binary graphic, 7=upper/lower case chars, 0=Upper case and symbol chars
-openprint lda #$7f     ;file handle 127
- ldx #$04     ;device 4
- jsr SETLFS   ;set logical file parameters BASIC eq open 127,4,0
- lda #$00     ;zero byte file name length (no name)
- jsr SETNAM   ;set file name
- jsr OPEN     ;perform OPEN 127,4,0,""
- bcc prtopen  ;clear carry flag means success
- tax          ;save a reg
- pla          ;do not return to caller
- pla
- txa          ;remember a reg
- jmp clos7f   ;close and report error
-prtopen ldx #$7f ;pass file handle param into CHKOUT via x reg
- jmp CHKOUT ;redirect std output to current open file, goes to $f250
 ;
 ;The DUMP command supports multiple options based on a second required token (or expression)
 ;DUMP LIST
@@ -1016,27 +1062,26 @@ prtopen ldx #$7f ;pass file handle param into CHKOUT via x reg
 ;DUMP VARS
 ;DUMP {expression}
 dump
- cmp #TOKEN_LIST   ;list token?
+ cmp #TOKEN_LIST
  beq dumplist
- cmp #TOKEN_SCREEN ;screen token?
+ cmp #TOKEN_SCREEN
  beq dumpscreen
- cmp #TOKEN_BITMAP ;bitmap token?
+ cmp #TOKEN_BITMAP
  beq dumpbitmap
- cmp #TOKEN_VARS   ;vars token
+ cmp #TOKEN_VARS
  bne dumpexpr
 dumpvars jsr openprint00
  jsr vars
- jmp clse7f
+ jmp closer+3
 dumpexpr jsr openprint00
  jsr $aa9d   ;perform print of expression
- jmp clse7f  ;close file handle 127
+ jmp clse7f
 dumplist jsr openprint00
  lda #$01
  sta listflag
  jsr opget   ;calls CHRGET first thing!
  jsr $a6c9   ;perform list
- lda #$0d    ;carriage return
- jsr CHROUT  ;print it
+ jsr printcr
  jmp clse7f
 dumpscreen dec $01 ;switch to LORAM ($a000-$bfff)
  jsr dumpscreen2
@@ -1249,21 +1294,24 @@ eauto jmp $a49f ;main loop for direct mode
 ; TRACE line#
 ;runs the program with trace mode enabled
 trace pha ;save CHRGET value
- lda #$00
- sta $a5
  lda #$ff
  sta $f9
  sta $fa
- sta traceflag
- lda #$00
- sta $9d
+ ldx #<exccmd
+ ldy #>exccmd
+ jsr settrace
  pla     ;restore CHARGET value
  jmp RUN
 ;**trace subroutine during prg execution
 trace1 lda $9d ;prg mode?
  beq trace2
  lda #$00
+ ldx #<execut
+ ldy #>execut 
+settrace
  sta traceflag
+ stx IGONE
+ sty IGONE+1
  rts
 trace2 lda $39
  cmp $f9
@@ -1284,34 +1332,38 @@ copyln lda $39 ;copy line#
 clrtop sta $0400,y
  dey
  bpl clrtop
- lda $d3
+ lda $d3    ;remember current cursor position
  pha
  lda $d6
  pha
- jsr weglst
- pla
+ jsr weglst ;find and display line number in $14,$15
+ pla        ;restore original cursor position
  tax
  pla
  tay
  clc
  jsr PLOT
-shftky jsr STOP
- beq etrace
+shftky
+ jsr STOP   ;check stop key
+ beq etrace ;stop now
  lda #$01
- bit SHFLAG
- beq shftky
+ bit SHFLAG ;is the shift key pressed?
+ beq shftky ;wait for it to be pressed
 etrace rts
-weglst lda #$01
- sta listflag
- jsr FINDLN
- ldy #$01
- lda ($5f),y
- beq endtrc ;end of program
- jsr $a82c  ;Test STOP Key for Break in Program
- lda #19    ;chr 19 = Cursor Home
+weglst 
+ jsr FINDLN ;find BASIC line number in $14,$15
+ bcc endprg ;line not found
+ jsr $a82c  ;test STOP key for break in program
+ lda #19    ;chr 19 = cursor home
  jsr CHROUT
+ ldy #$01
+ sty listflag
+; lda ($5f),y
+; beq endprg ;end of program
  jmp $a6d7  ;perform LIST of current line
-endtrc jmp HALT
+endprg
+ jsr $a67a  ;empty the stack
+ jmp HALT
 ;
 ;*******************
 newrun
@@ -1361,7 +1413,7 @@ merge
  jmp LODERR  ;raise LOAD ERROR
 okmerg stx $2d
  sty $2e
- jsr $a659   ;clear all variables and reset txt ptr to beginning of prg
+ jsr $a659   ;reset txt ptr to beginning of prg then perform CLR
  jsr LINKPRG ;relink lines of tokenized prg text
  jmp READY   ;main basic loop
 ioerr jmp $e0f9 ;handle i/o error
@@ -1377,7 +1429,7 @@ romin inc $01
  jmp clse7f
 ;
 newload
- sta $93     ;flag for load routine (see $93) 0=Load, 1=Verify
+ sta $93     ;flag for load routine 0=Load, 1=Verify
  ldx $b9     ;secondary address
  stx $02     ;save for use after load to determine if mem ptrs need to be restored
  cpx #2
@@ -1623,11 +1675,9 @@ linend lda $fb
  lda $fc
  ora $fb
  bne check
-prgend lda #$0d
- jsr CHROUT
- pla
- pla
- jmp HALT
+prgend
+ jsr printcr
+ jmp endprg
 ;
 ;*******************
 ; DELETE line  (delete one line)
@@ -1683,10 +1733,8 @@ relink jsr LINKPRG
  bcc savex
  inx
 savex stx $2e
- jsr $a659
- pla
- pla
- jmp HALT
+ jsr $a659  ;reset txt ptr to beginning of prg then perform CLR
+ jmp endprg
 erenum jsr LINKPRG
  lda #$02
  sta $7b
@@ -2012,9 +2060,9 @@ seterrvec
 ;*******************************************
 resumenext     ;ON ERROR RESUME NEXT
  lda $9d       ;0=suppress msgs (program running mode) 
- bne olerr
+ bne quitrun
  txa
- bmi quitrun
+ bmi olerr
  stx errnum    ;update last error number
  lda $3a       ;update last BASIC line# causing error
  sta errline+1
@@ -2028,7 +2076,7 @@ nxtstmt        ;prepare next stmt for execution
  lda ($7a),y
  clc
  bne _a7ce
- jmp HALT      ;return control to main BASIC loop
+ jmp endprg    ;return control to main BASIC loop
 _a7ce iny
  lda ($7a),y
  sta $39
@@ -2047,12 +2095,12 @@ _a807 cmp #$3a
 ;
 quitrun
  jsr detrap    ;disable error trapping
- jmp READY     ;set BASIC immediate, print READY. then enter main loop
 olerr jmp errors
+;
 trap lda $9d   ;MSGFLG Flag Kernal Message Control, #$C0=kernal & ctrl, #$80=ctrl only, #$40=kernal only, #$00=none
- bne olerr
+ bne quitrun
  txa
- bmi quitrun
+ bmi olerr
  stx errnum    ;set current error number
  jsr detrap    ;disable error trapping
  lda #3        ;3 plus the 2 for this next call = 5 bytes
@@ -2107,20 +2155,20 @@ okresu
  sta $7a      ;pull text ptr from stack and make current
  pla 
  sta $7b
- jsr CHRGET   ;step into stmt
- jsr DATA     ;advance txtptr to beginning of next statement
-pullit pla    ;empty stack to the base call was made which
- cmp #<xcmd+2 ;is the point where last command was executed
- bne pullit   ;in the main MDBASIC loop via jsr tstcmd
- pla          ;keep going till 2-byte ptr is found
- cmp #>xcmd+2
- bne pullit+1
- lda #$19     ;25=empty temp string index value
- sta $16      ;reset temp string stack 
- lda #0
- sta $10      ;SUBFLG Subscript Reference to an Array or User-Defined Function Call (FN)
- jsr entrap   ;enable error trapping
- jmp (IGONE)  ;read and execute the next statement
+ ldy #0       ;the first stmt on line will begin
+ lda ($7a),y  ;at the end marker of previous line.
+ bne skpstmt  ;zero here indicates previous line
+ lda $7a      ;preceded by the 4-byte line header
+ clc          ;which will be skipped over so that
+ adc #4       ;txtptr is on the byte that began
+ sta $7a      ;the stmt that caused the error.
+ lda $7b
+ adc #0
+ sta $7b
+skpstmt
+ jsr CHRGET   ;get current char at txtptr
+ jsr DATA     ;scan for start of next BASIC stmt
+ jmp nxtstmt  ;setup next stmt for execution
 ;perform RESUME line#
 resume0
  pla          ;discard ERROR token
@@ -2141,7 +2189,18 @@ resum pla     ;discard ERROR token
  sta $7a
  pla 
  sta $7b
- jmp pullit
+pullit pla    ;empty stack to the base call was made which
+ cmp #<xcmd+2 ;is the point where last command was executed
+ bne pullit   ;in the main MDBASIC loop via jsr tstcmd
+ pla          ;keep going till 2-byte ptr is found
+ cmp #>xcmd+2
+ bne pullit+1
+ lda #$19     ;25=empty temp string index value
+ sta $16      ;reset temp string stack 
+ lda #0
+ sta $10      ;SUBFLG Subscript Reference to an Array or User-Defined Function Call (FN)
+ jsr entrap   ;enable error trapping
+ jmp (IGONE)  ;read and execute the next statement
 ;
 ;*******************
 ; COLOR [foregndColor (0-31)], [backgndColor (0-15)], [borderColor (0-15)]
@@ -3020,7 +3079,8 @@ line
  bcc lineinput ;perfrom lineinput# num%, var$
 badinp jmp SNERR     ;syntax error
 lineinput
- jsr GETBYTC  ;eval expr into byte int value (returned in x reg)
+ jsr getval15_ ;get single byte param in a reg, misop err if missing
+ tax
  jsr CHKIN    ;redirect std input to file handle stored in x reg 
  jsr readline
  jmp $abb5    ;final part of input# to restore i/o channel
@@ -3119,7 +3179,7 @@ restorepoint  ;temp copy last plot coords and plot type used by graphics cmds
  rts
 ;
 point2 lda #TOKEN_TO
- jsr CHKCOM    ;skip over TO token, syntax error if not there
+ jsr CHKCOM+2  ;skip over TO token, syntax error if not there
  jsr savepoint ;move point 1 to last plot point acting as point 2
  jsr pntweg
  jmp swappoint
@@ -3249,8 +3309,6 @@ ne dec $01
 ; SCREEN CLR
 ; SCREEN ON|OFF
 ; SCREEN cols, rows where cols=38|40, rows=24|25
-cls lda #$93   ;clear screen
- jmp CHROUT    ;output char then rts
 screen
  cmp #TOKEN_ON
  bcc setscr
@@ -3266,7 +3324,8 @@ setscrly sta SCROLY
  jmp CHRGET
 clrscrn cmp #TOKEN_CLR
  bne setscr
- jsr cls
+ lda #147        ;clear screen
+ jsr CHROUT
  jmp CHRGET
 setscr jsr comchk
  beq cklast+3
@@ -3680,43 +3739,6 @@ onkeyoff lda #0
  jmp CHRGET
 keylist dec $01
  jmp keylistt
-;*******************
-;DISK "DOS command string"
-;"S0:myfile.bas"                 - delete a file
-;"N0:label,id"                   - full format disk with a label and id
-;"N0:label"                      - soft format (BAM only) with label
-;"I0:"                           - initialize disk (clears last error and moves head to track 0, sector 0)
-;"C0:sourceFile=destinationFile" - copy a file
-;"R0:newfileName=oldfileName"    - rename a file
-;"V0:"                           - validate (defragment) disk
-donehere rts
-disk
- jsr getstr0     ;get DOS string
- beq donehere
- jsr SETNAM
- lda #$7f        ;file handle 127
- ldx #$08        ;device 8
- ldy #$0f        ;secondary channel 15 = DOS channel
- jsr SETLFS
- jsr OPEN        ;performs OPEN 127,8,15, "string"
- bcc noeror
-clos7f pha       ;retain result of open file which is index of error msg
- jsr closeit     ;close 127
- pla             ;retreive error msg index
- tax             ;x register holds index of error message
- jmp (IERROR)    ;display error message
-noeror
- lda $9d         ;display message if not in prg mode, #$C0=kernal & ctrl, #$80=ctrl only
- bpl closeit     ;don't display load addresses
- ldx $b8         ;current file number
- jsr CHKIN       ;designate a Logical file as the current input channel
-readio jsr CHRIN
- jsr CHROUT
- cmp #$0d
- bne readio
- jsr CLRCHN
-closeit lda $b8  ;file handle 127
- jmp CLOSE       ;close file handle in accumulator
 ;
 ;******************************************
 ;* mdbasic functions instr(), ptr(), csr(), pen(), joy(), pot(), hex$() *
@@ -3832,7 +3854,7 @@ round1
  eor #$ff       ;toggle move direction for 2nd call
  sta $15
 addhalf
- jsr doround    ;add 0.5 to FAC1 then truncate
+ jsr doround    ;round FAC1 to nearest whole number
 ;move decimal point to the left
  ldx $14
  beq nomul
@@ -4130,8 +4152,27 @@ errors lda listflag  ;is LIST currently executing?
  rts
 error2 txa
  bpl doerr    ;bit 7 off means error condition
+ jsr detrap   ;ensure error trapping off
  jmp READY    ;print READY. then continue with BASIC main loop
-doerr asl     ;calc 2-byte index to message
+doerr
+ sta $02
+ jsr $a67a    ;empty the stack
+ jsr norm     ;set text mode normal display
+ lda $9d      ;0=prg mode
+ beq prgmode
+ lda #13      ;cr
+ bne prgmode+2
+prgmode lda #147 ;clr screen
+ jsr CHROUT
+ lda #$80     ;only control messages - SEARCHING, SAVING, FOUND, etc.
+ jsr SETMSG
+ jsr CLRCHN   ;restore default devices
+ lda #$00     ;channel for screen/keyboard
+ sta $13      ;set current I/O channel
+ lda #"?"
+ jsr CHROUT   ;print question mark '?'
+ lda $02
+ asl          ;calc 2-byte index to message
  tax
  sec
  sbc #62
@@ -4142,30 +4183,7 @@ doerr asl     ;calc 2-byte index to message
  bne hibyer   ;always branches since hi-byte would not be 0
 romerr lda $a326,x  ;$A328-$A364 Error Message Vector Table
  ldy $a327,x
-hibyer
- sta $22
- sty $23
- jsr norm    ;set text mode normal display
- lda #$80    ;only control messages - SEARCHING, SAVING, FOUND, etc.
- jsr SETMSG
- jsr CLRCHN  ;restore default devices
- lda #$00
- sta $13
- jsr $aad7   ;perform print 
- ldy $3a
- iny
- beq nipm
- jsr cls     ;clear screen
-nipm jsr $ab45
- ldy #$00    ;loop print all chars in err msg
-prterr lda ($22),y
- pha
- and #$7f    ;bit 7 is flag for last char in string, remove it to print actual char
- jsr $ab47
- iny
- pla
- bpl prterr  ;bit 7 not set on last char so keep going
- jsr $a67a   ;empty the stack
+hibyer jsr printstr
  lda #$69    ;address of the zero-terminated string ($a369) = "  ERROR"
  ldy #$a3
  jsr STROUT  ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
@@ -4173,31 +4191,33 @@ prterr lda ($22),y
  iny
  bne inline
  jmp READY   ;print READY. then continue with BASIC main loop
-inline jsr $bdc2 ;display text IN {line#}
+inline
+ jsr INPRT   ;display text IN {line#}
  lda $39
  sta $14
  lda $3a
  sta $15
  jsr FINDLN
- lda #$0d
- jsr CHROUT
+ jsr printcr
  lda #$01     ;set LIST flag on
  sta listflag
- jsr $a6c9
+ jsr $a6c9    ;perform LIST line#
  ldx #$02
  ldy #$00
  clc
  jsr PLOT
  jmp $a483  ;main BASIC loop
 ;
-keychk lda $9d ;prg mode?
- beq nokey
+; keypress decode intercept for function keys
+keychk
+ lda $9d        ;control messages enabled?
+ beq nokey      ;no func key, prg mode
  lda $d4        ;quote mode?
  bne nokey
  lda SHFLAG
  bne lgoshf
  lda #$81
- jmp bsky
+ bne bsky       ;always branches
 lgoshf cmp #$02
  bcs nokey
  lda #$c2
@@ -4496,12 +4516,27 @@ prtnum jsr FOUT  ;convert fac1 to ascii with str ptr in a,y registers
  dec $01         ;switch to LORAM (a000-bfff)
  rts
 ;
-;round FAC1 to the nearest whole number
+;round FAC1 to the nearest whole number by adding .5 then truncate
 doround
- lda #<$BF11    ;the constat 0.5 in 5-byte FAC format
- ldy #>$BF11
- jsr FADD       ;add FAC1 with a number in memory: FAC1 = MEM+FAC1
- jmp INT        ;perform INT
+ jsr FADDH       ;add .5 to value in FAC1
+ jmp INT         ;perform INT
+;
+printcr lda #$0d
+ jmp CHROUT
+;
+;print string ending with a chr having bit 7 = 1
+printstr
+ sta $22
+ sty $23
+ ldy #0          ;loop print all chars in err msg
+printer lda ($22),y
+ php
+ and #$7f
+ jsr CHROUT
+ iny
+ plp
+ bpl printer
+ rts
 ;
 ;********************************************************************
 ;* Global Constant Storage
@@ -4618,7 +4653,7 @@ keybuf .text "list"
 .byte 13,0,0,0,0,0,0             ;F8
 ;
 ;strings for keylist
-addcr .null "+chr$(13)"
+addcr .shift "+chr$(13)"
 ;
 ;PLAY command temp vars used during IRQ
 temp1     .byte 0
@@ -4725,8 +4760,8 @@ endass lda #0 ;terminate string with zero-byte
 ;***************
 ;KEY LIST (code in LORAM)
 ;
-keylistt lda #$0d ;cr
- jsr CHROUT
+keylistt
+ jsr printcr
  lda #$04
  sta $02
  lda #"1"
@@ -4766,53 +4801,42 @@ exchng lda $fb
  inc $bb
  jmp nextke
 ;--------
-kprnt ldy #$ff
- lda #"k"
- jsr CHROUT
- lda #"e"
- jsr CHROUT
- lda #"y"
- jsr CHROUT
+kprnt
+ lda #<keystr
+ ldy #>keystr
+ jsr printstr
+ ldy #$ff
  lda $bb
  jsr CHROUT
  lda #","
  jsr CHROUT
- lda #"""
+printq lda #"""
  jsr CHROUT
 nextlt iny
  lda ($be),y
  beq stoppr
  cmp #13 ;cr?
  bne nocr
+ sty $61
  lda #"""
  jsr CHROUT
- ldx #0
-nextch lda addcr,x ;print "+chr$(13)"
- beq addedcr
- jsr CHROUT
- inx
- bne nextch
-addedcr iny
+ lda #<addcr
+ ldy #>addcr
+ jsr printstr
+ ldy $61
+ iny
  lda ($be),y
- bne chrprs
- dey
- jmp prntit
-chrprs lda #"+"
- jsr CHROUT
- lda #"""
+ beq chrprs
+ lda #"+"
  jsr CHROUT
  dey
- jmp nextlt
-prntit lda ($be),y
- jsr CHROUT
- rts
+ bpl printq     ;always branches
 nocr lda ($be),y
  jsr CHROUT
  jmp nextlt
 stoppr lda #"""
  jsr CHROUT
- lda #$0d
- jmp CHROUT
+chrprs jmp printcr
 ;
 ;**************************
 linedraw
@@ -6087,7 +6111,7 @@ lodsav          ;real secondary device in x reg
  stx $b9        ;replace secondary device with desired real value
  jsr OPEN       ;perform OPEN
  bcc status-1   ;return if ok, close and fail if error
- jmp clos7f
+ jmp err127
 ;
  rts
 status jsr STOP
@@ -6208,8 +6232,8 @@ prtstr lda ($50),y
  bne prtstr
 endquote lda #"""
  jsr CHROUT
-nxtvar lda #$0d
- jsr CHROUT
+nxtvar
+ jsr printcr
 sft lda SHFLAG
  cmp #1
  beq sft
@@ -6226,8 +6250,8 @@ sft lda SHFLAG
 ;***************
 dumpscreen2
  ldy #$00        ;secondary parmeter 0 = assume upper case with symbols
- lda VMCSB       ;text mode upper case with symbols or upper/lower case?
- cmp #%00010111  ;23=upper/lower case, 44=upper case/symbols
+ lda #%00001000  ;bits1-3 determine dot matrix for chars
+ bit VMCSB       ;text mode upper case with symbols or upper/lower case?
  bne upcase      ;yes, use upper/lower case text
  ldy #$07        ;7=upper and lower case, 0 = upper case and symbols
 upcase jsr openprint
@@ -6275,8 +6299,7 @@ nxchar inc $fe
  lda $fe
  cmp #40      ;40 columns?
  bne infbfc
- lda #$0d
- jsr CHROUT
+ jsr printcr
  lda #0
  sta $fe
 infbfc inc $fb
@@ -6381,8 +6404,7 @@ s1fbfc dec $fb
  lda $fc
  adc #$1f
  sta $fc
- lda #$0d
- jsr CHROUT
+ jsr printcr
  lda #10
  jsr CHROUT
  lda $02
