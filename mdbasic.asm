@@ -2091,7 +2091,7 @@ _a7ce iny
 _a7e1 jmp pullit
 _a807 cmp #$3a
  beq _a7e1
- jmp SNERR
+ jmp REM
 ;
 quitrun
  jsr detrap    ;disable error trapping
@@ -2189,12 +2189,19 @@ resum pla     ;discard ERROR token
  sta $7a
  pla 
  sta $7b
-pullit pla    ;empty stack to the base call was made which
+;empty stack to the base call was made which
+pullit
+ pla
+pullit2
+ tsx
+ cpx #$ff
+ beq stoppull
  cmp #<xcmd+2 ;is the point where last command was executed
  bne pullit   ;in the main MDBASIC loop via jsr tstcmd
  pla          ;keep going till 2-byte ptr is found
  cmp #>xcmd+2
- bne pullit+1
+ bne pullit2
+stoppull
  lda #$19     ;25=empty temp string index value
  sta $16      ;reset temp string stack 
  lda #0
