@@ -316,13 +316,14 @@ FIRST_CMD_TOK = $cb  ;first MDBASIC token
 TOKEN_OFF     = $cb  ;OFF keyword token
 TOKEN_ELSE    = $cc
 TOKEN_VARS    = $cf
+TOKEN_FILL    = $d1
 TOKEN_COLOR   = $d8
 TOKEN_SPRITE  = $da
 TOKEN_BITMAP  = $df
 TOKEN_TEXT    = $e6
 TOKEN_SCREEN  = $e7
 TOKEN_RESUME  = $e8
-TOKEN_SOUND   = $eb
+TOKEN_VOICE   = $eb
 FIRST_FUN_TOK = $f5  ;first MDBASIC function
 TOKEN_KEY     = $f6
 TOKEN_ERROR   = $f7
@@ -335,7 +336,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.07.27"
+.text "mdbasic 22.08.08"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -378,7 +379,7 @@ newcmd
 .shift "resume"
 .shift "envelope"
 .shift "wave"
-.shift "sound"
+.shift "voice"
 .shift "pulse"
 .shift "vol"
 .shift "filter"
@@ -414,7 +415,7 @@ cmdtab
 .rta color,  move,   sprite,  multi,  expand,  resvec ;$dd
 .rta design, bitmap, mapcol,  plot,   line,    paint ;$e3
 .rta draw,   renum,  text,    screen, resume,  adsr  ;$e9
-.rta wave,   sound,  pulse,   vol,    filter,  play  ;$ef
+.rta wave,   voice,  pulse,   vol,    filter,  play  ;$ef
 .rta auto,   old,    trace,   find,   delete         ;$f4
 ;funcs & cmds
 .rta SNERR                        ;$f5 placeholder for round (not a command, func only)
@@ -1092,7 +1093,7 @@ dumpbitmap dec $01 ;switch LOROM to LORAM
  jsr dumpbitmap2
  jmp closer
 ;*******************
-; FILL x1,y TO x2,y2, scanCode, [color]
+; FILL x1,y1 TO x2,y2, scanCode, [color]
 fill
  lda HIBASE   ;top page of screen mem
  sta $fc
@@ -2640,6 +2641,7 @@ gtdata sty $02
 ;*******************
 ;
 ;BITMAP CLR (does not switch to bitmap mode)
+;BITMAP FILL x1,y1 TO x2,y2, [plotType], [color]
 ;BITMAP [colorMode], [bkgndColor]
 ;colorMode 0=hires, 1=mc (multicolor); bkgndColor (0-15) background color
 ;bkgndColor is applied based on colorMode:
@@ -2652,7 +2654,19 @@ gtdata sty $02
 ;
 bitmap
  cmp #TOKEN_CLR
+ beq bitclr
+ cmp #TOKEN_FILL
  bne bitscr
+; BITMAP FILL x1,y1 TO x2, y2, plotType, color
+ jsr CHRGET
+ jsr getpnt
+ jsr point2
+ jsr types
+ dec $01
+ jsr bitfil ;perform FILL on rect; put code under ROM
+ inc $01
+ rts
+;
 bitclr lda #$e0     ;bitmap located at $e000
  sta $bf
  lda #$00
@@ -2800,7 +2814,7 @@ pulse jsr ppw
 ;WAVE [voice#], [waveform], [gate], [sync], [ring], [disable]
 ;
 badwav jmp FCERR
-wave jsr ppw  ;get voice SID register offset (voice#-1)*7
+wave jsr ppw   ;get voice SID register offset (voice#-1)*7
  sta $bb       ;save SID register offset
  jsr ckcom2    ;throw misop if current char is not a comma
  jsr getval    ;get waveform single byte operand value into $14
@@ -2865,8 +2879,9 @@ clrsid sta FRELO1,y
 ;*******************
 ;NTSC and PAL hold the value of 1Hz (based on clock speed)
 ;REG_VAL=FREQUENCY/NTSC
-;SOUND voice#, frequency(0 to 3995 for NTSC machines)
-sound
+;VOICE CLR
+;VOICE voice#, frequency(0 to 3995 for NTSC machines)
+voice
  cmp #TOKEN_CLR  ;clr token?
  bne getfreq
  jsr sidclr
@@ -3187,9 +3202,9 @@ restorepoint  ;temp copy last plot coords and plot type used by graphics cmds
 ;
 point2 lda #TOKEN_TO
  jsr CHKCOM+2  ;skip over TO token, syntax error if not there
- jsr savepoint ;move point 1 to last plot point acting as point 2
- jsr pntweg
- jmp swappoint
+ jsr savepoint ;copy point 1 to last plot point acting as point 2
+ jsr pntweg    ;get the coordinates
+ jmp swappoint ;swap point1 and point2
 ;get x,y coordinates
 pntweg jsr skp73 ;get x coordinate, returns lobyte in x, hibyte in y
  jsr xytim2
@@ -3477,8 +3492,8 @@ adsr jsr ppw
 ;
 ;******************
 ;FILTER cutoff, [resonance], [type]
-;FILTER SOUND voice#, [boolean] 
-;  
+;FILTER VOICE voice#, [boolean] 
+;
 ;The cutoff frequency has an 11-bit range (which corresponds to the
 ;numbers 0 to 2047).  This is made up of a high-byte and three low
 ;bits. The range of cutoff freqnencies represented by these 2048 values
@@ -3500,9 +3515,9 @@ adsr jsr ppw
 ;7. store the result in SID registers
 ;
 filter
- cmp #TOKEN_SOUND ;SOUND token?
+ cmp #TOKEN_VOICE ;VOICE token?
  bne getfreq1
-;FILTER SOUND voice#, boolean
+;FILTER VOICE voice#, boolean
  jsr CHRGET
  jsr getvoc     ;get voice # 1-3
  cmp #3         ;convert voice# 1=1, 2=2, 3=4  bit values 001 010 100
@@ -3513,7 +3528,7 @@ filter
 notvoc3
  sta $02        ;remember for later
  jsr comchk     ;check if they supplied a boolean?
- bne filteron   ;missing boolean assumes on, syntax FILTER SOUND voice#
+ bne filteron   ;missing boolean assumes on, syntax FILTER VOICE voice#
  jsr getval     ;get on/off expression, 0=off, 1=on
  bne filteron
  eor $02        ;flip all bits to turn off voice# bit
@@ -4565,7 +4580,7 @@ bitweights .byte 1,2,4,8,16,32,64,128
 ; goto,gosub,then,else,resume,trace,delete,run,restore
 gotok .byte TOKEN_GOTO,$8d,TOKEN_THEN,TOKEN_ELSE,TOKEN_RESUME,$f2,$f4,TOKEN_RUN,TOKEN_RESTORE
 ;
-;SOUND command use SOUND voc#, frequency
+;VOICE command use VOICE voc#, frequency
 ;REG_VAL=FREQUENCY/(CLOCK/16777216)
 ;FREQUENCY=REG_VALUE*(CLOCK/16777216)Hz
 ;where CLOCK NTSC=1022730, PAL=985250
@@ -4600,7 +4615,7 @@ stackptr   .byte 0 ;stack ptr before cmd execution for use by ON ERROR
 keyptr     .word 0 ;basic txt ptr of statement for ON KEY GOSUB line#
 keyline    .word $FFFF ;line number for ON KEY subroutine
 
-;SOUND COMMAND:
+;VOICE COMMAND:
 md417      .byte 0   ;holds current filter control and resonance
 md418      .byte 0   ;holds current volume (lo nibble) and filter type (hi nibble)
 
@@ -6822,4 +6837,32 @@ octend
  lda temp1
  ldy temp2
 octdone rts
+;
+bitfil
+ lda lastploty
+ sec
+ sbc $fd
+ bcs filines
+ eor #$ff
+filines clc
+ adc #$01
+ sta $02
+ lda $fd
+ sta lastploty 
+linefil
+ lda $fb
+ sta $14
+ lda $fc
+ sta $15
+ jsr linedraw
+ lda $14
+ sta $fb
+ lda $15
+ sta $fc
+;
+ inc $fd
+ inc lastploty
+ dec $02
+ bne linefil
+ rts
 ;end
