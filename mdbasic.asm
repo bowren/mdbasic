@@ -336,7 +336,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.08.08"
+.text "mdbasic 22.08.15"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -2948,7 +2948,7 @@ drawloop
 chkplottype cmp #"p"
  bne godraw
  jsr getval15_  ;actually should be 0-3
- sta $fe ;lastplott
+ sta lastplott ;$fe
  jmp nxtmov2
 godraw
  pha
@@ -3003,7 +3003,7 @@ hdraw jsr drawdwn
 baddraw
  jmp SNERR
 dodraw
- lda $fe ;lastplott
+ lda lastplott ;$fe
  cmp #3
  bcs noplot
  jsr plotit
@@ -3161,21 +3161,21 @@ strtln
  inc $01
 ;fall through savepoint subroutine
 savepoint
- ldx #3
+ ldx #2
  lda $fb,x
  sta lastplotx,x
  dex
  bpl savepoint+2
  rts
 getpoint
- ldx #3
+ ldx #2
  lda lastplotx,x
  sta $fb,x
  dex
  bpl getpoint+2
  rts
 swappoint
- ldx #3
+ ldx #2
  lda $fb,x
  pha
  lda lastplotx,x
@@ -3186,14 +3186,14 @@ swappoint
  bpl swappoint+2
  rts
 backuppoint   ;make temp copy of last x,y coords, plot type used by graphics cmds
- ldy #3
+ ldy #2
  lda lastplotx,y
  sta lastplotx2,y
  dey
  bpl backuppoint+2
  rts
 restorepoint  ;temp copy last plot coords and plot type used by graphics cmds
- ldy #3
+ ldy #2
  lda lastplotx2,y
  sta lastplotx,y
  dey
@@ -3218,8 +3218,8 @@ okvalu stx $fb
  sty $fc
  jsr ckcom2  ;must have a comma before y coord value of 0-199 
  jsr dbyval  ;x=lobyte, y=hibyte
- bne hellno  ;y reg last loaded was not zero
- cpx #200    ;x reg has lobyte for y coordinate and must be between 0 and 199
+ bne hellno  ;y reg holds hibyte for y coordinate and must be zero
+ cpx #200    ;x reg holds lobyte for y coordinate and must be between 0 and 199
  bcs hellno
  stx $fd     ;y coordinate
  rts
@@ -3228,7 +3228,7 @@ xytim2
  and #%00010000 ;check if multicolor mode on or off
  beq theend ;hires mode
  txa  ;adjust offset to read ptab2/ptab3 for multicolor plot bits
- asl  ;multiply x and y registers * 2
+ asl  ;multiply x coordinate by 2
  tax
  tya
  rol
@@ -3246,23 +3246,25 @@ paint jsr getpnt
 ;
 ;*******************
 ; CIRCLE xcenter, ycenter, xsize, ysize, [plottype], [color]
-circle jsr getpnt ;center point x,y
+circle
+ jsr getpnt  ;center point x,y
  jsr ckcom2  ;throw misop if current char is not comma
  jsr getval  ;x radius size
+ bmi illqty8 ;max x radius 127
  sta $35
  jsr ckcom2  ;throw misop if current char is not comma
  jsr getval  ;y radius size
+ bmi illqty8 ;max y radius 127
  sta $36
  jsr types   ;get optional plot type and color; use last used values if not supplied
  lda $35
  ora $36
  beq endcir  ;x and y radius size are both zero
- dec $01     ;switch LOROM to LORAM
- cmp #3      ;smallest x radius size
+ cmp #2      ;smallest valid x,y radius size is 2,1 or 1,2
  bcs okcirc  ;plot the circle
- jsr setdot  ;plot just a dot
- jmp r6510
+ jmp plotit  ;just plot a dot
 okcirc
+ dec $01     ;switch LOROM to LORAM
  jsr circel
  jmp r6510   ;restore LOROM and HIROM
 endcir rts
@@ -3288,6 +3290,7 @@ r6510 lda $01
  sta $01
  rts
 ;
+illqty8 jmp FCERR     ;illegal quantity error
 ; TEXT x,y "string", [charset], [sizeX], [sizeY], [plotType], [color]
 text
  beq norm
@@ -3310,14 +3313,13 @@ sizes
  bne ne 
  jsr getval
  cmp #32      ;max size is 31
- bcc notspc
- jmp FCERR     ;illegal quantity error
-notspc sta $57 ;user specified x size
+ bcs illqty8
+ sta $57 ;user specified x size
  jsr comchk
  bne ne
  jsr getval
  cmp #32      ;max y size is 31
- bcs notspc-3
+ bcs illqty8
  sta $58      ;user specified y size
  jsr comchk
  bne ne
@@ -4491,15 +4493,15 @@ addoffset lda $fb
 ;********************
 ;this function entry point is called by commands PLOT,LINE,CIRCLE,PAINT
 getpnt
- lda lastplott
- sta $fe        ;default plot type
+; lda lastplott
+; sta $fe        ;default plot type
  jsr pntweg     ;get x,y, plot type
  jmp savepoint
 ;*******************
 types jsr comchk ;current char a comma?
  beq gettypes
- lda lastplott  ;get last plot type
- sta $fe        ;current plot type
+; lda lastplott  ;get last plot type
+; sta $fe        ;current plot type
  rts
 gettypes jsr CHRGET ;position to next char
  beq etypes     ;end of statement reached
@@ -5003,27 +5005,29 @@ b7no6e lda $59
  lda $fd
  clc
  adc $a7
- cmp #200     ;if y coord is out of bounds then we must be done
- bcs linedone ;done
-jmpout1 sta $fd      ;y coordinate
+ cmp #200       ;if y coord is out of bounds then we must be done
+ bcs linedone
+jmpout1 sta $fd ;y coordinate
 jmpout jmp starts
-linedone ldy moveflag ;sprites can have a y coord to 255
- bne jmpout1   ;moving a sprite so continue
+linedone
+ ldy moveflag   ;sprites can have a y coord to 255
+ bne jmpout1    ;moving a sprite so continue
  rts
-pokadd lda moveflag  ;flag 0=LINE cmd, >0=MOVE cmd
- beq reglin ;setdot
+pokadd
+ lda moveflag   ;flag 0=LINE cmd, >0=MOVE cmd
+ beq reglin
 ;hack to move a sprite instead of plot line
- lda $fc    ;temp var hibyte of x coord
- beq nod010 ;x is less than 256
- lda $07    ;temp var of sprite's bit#
- ora MSIGX  ;MSB of sprites 0-7 x coordinate 
+ lda $fc        ;temp var hibyte of x coord
+ beq nod010     ;x is less than 256
+ lda $07        ;temp var of sprite's bit#
+ ora MSIGX      ;MSB of sprites 0-7 x coordinate 
  bne std010
 nod010 lda $07
  eor #$ff
  and MSIGX
 std010 sta MSIGX
  lda $fb
- ldy $0f    ;temp var of sprite reg index
+ ldy $0f        ;temp var of sprite reg index
  sta SP0X,y
  lda $fd
  sta SP0Y,y
@@ -5044,7 +5048,8 @@ mowait dex
  dey
  bne movewait
 linedon rts
-;this section used by LINE plot only------------
+;this section used by LINE plot only
+;diangle lines need an extra dot when in multicolor mode
 reglin
  lda SCROLX
  and #%00010000 ;check if multicolor mode on or off
@@ -5385,26 +5390,34 @@ xy00 stx $5a
  sty $5b
  rts
 ;**************************
-circel lda $fb
+circel
+ lda SCROLX
+ and #%00010000 ;check if multicolor mode on or off
+ sta $29  ;0=hires mode, otherwise multicolor mode
+ lda $fb
+ asl
  sta $61
  lda $fc
+ rol
  sta $62
- asl $61
- rol $62
  lda $fd
+ asl
  sta $63
  lda #0
  sta $fe
+ rol
  sta $64
- asl $63
- rol $64
  lda $35
  clc
  adc $35
  sta $11
+ sta $57
+ sta $50
  lda #$00
  adc #$00
  sta $12
+ sta $58
+ sta $51
  lda $36
  clc
  adc $36
@@ -5412,16 +5425,6 @@ circel lda $fb
  lda #$00
  adc #$00
  sta $15
- ldx #1
-tcatb2 lda $11,x
- sta $57,x
- dex
- bpl tcatb2
- ldx #1
-tcataf lda $11,x
- sta $50,x
- dex
- bpl tcataf
  lda #2
  ldx #3
  ldy #1
@@ -5431,25 +5434,20 @@ tb6tc4 lda $59,x
  sta $22,x
  dex
  bpl tb6tc4
- ldx #1
-tcctb2 lda $14,x
- sta $57,x
- dex
- bpl tcctb2
- ldx #1
-tcctaf lda $14,x
- sta $50,x
- dex
- bpl tcctaf
+ lda $15
+ sta $58
+ sta $51
+ lda $14
+ sta $57
+ sta $50
  lda #2
  ldx #2
  ldy #1
  jsr curve
- ldx #1
-tb6tc7 lda $59,x
- sta $0E,x
- dex
- bpl tb6tc7
+ lda $5a
+ sta $0f
+ lda $59
+ sta $0e
  lda #0
  sta $65
  lda $15
@@ -5470,21 +5468,17 @@ ce00 jsr loops
  inc $66
 tfb2b2 lda $11
  sta $fb
+ sta $57
  lda $12
  sta $fc
+ sta $58
  lda #0
  sta $fd
  sta $fe
- ldx #1
-tfbtb2 lda $fb,x
- sta $57,x
- dex
- bpl tfbtb2
- ldx #1
-tc7taf lda $0E,x
- sta $50,x
- dex
- bpl tc7taf
+ lda $0f
+ sta $51
+ lda $0e
+ sta $50
  lda #2
  ldx #4
  ldy #1
@@ -5498,7 +5492,7 @@ tb6td8 lda $59,x
  ror $27
  ror $26
  ror $25
- lda lastplott
+ lda $fe
  beq be00
  jsr drwcir
  jmp fd512
@@ -5509,8 +5503,8 @@ be00 jsr tfb2d4
  sta $fb
  lda $fc
  adc $62
+ lsr
  sta $fc
- lsr $fc
  ror $fb
  lda $fd
  clc
@@ -5518,9 +5512,15 @@ be00 jsr tfb2d4
  sta $fd
  lda $fe
  adc $64
+ lsr
  sta $fe
- lsr $fe
  ror $fd
+ lda $29   ;hires mode?
+ beq plotc3
+ inc $fb
+ bne plotc3
+ inc $fc
+plotc3
  jsr plotc
  lda $61
  sec
@@ -5528,8 +5528,8 @@ be00 jsr tfb2d4
  sta $fb
  lda $62
  sbc $70
+ lsr
  sta $fc
- lsr $fc
  ror $fb
  jsr plotc
  jsr t2d4fb
@@ -5537,14 +5537,11 @@ fd512 lda $fd
  clc
  adc #2
  sta $fd
+ sta $57
  lda $fe
  adc #$00
  sta $fe
- ldx #1
-tfd2b2 lda $fd,x
- sta $57,x
- dex
- bpl tfd2b2
+ sta $58
  ldx #2
 tc4taf lda $22,x
  sta $50,x
@@ -5565,16 +5562,15 @@ d8pb6 lda $25,x
  bne d8pb6
  bcc dpcsym
  inc $28
-dpcsym ldx #1
- lda $fb,x
- sta $57,x
- dex
- bpl dpcsym+2
- ldx #1
-pc7af lda $0E,x
- sta $50,x
- dex
- bpl pc7af
+dpcsym
+ lda $fc
+ sta $58
+ lda $fb
+ sta $57
+ lda $0f
+ sta $51
+ lda $0e
+ sta $50
  lda #2
  ldx #3
  ldy #1
@@ -5615,11 +5611,10 @@ t2b669 lda $59,x
  sta $69,x
  dex
  bpl t2b669
- ldx #1
-tfdtb2 lda $fd,x
- sta $57,x
- dex
- bpl tfdtb2
+ lda $fe
+ sta $58
+ lda $fd
+ sta $57
  ldx #2
 tc4af lda $22,x
  sta $50,x
@@ -5726,8 +5721,8 @@ drwcir jsr tfb2d4
  sta $fb
  lda $fc
  adc $62
+ lsr
  sta $fc
- lsr $fc
  ror $fb
  lda $fd
  clc
@@ -5735,40 +5730,52 @@ drwcir jsr tfb2d4
  sta $fd
  lda $fe
  adc $64
+ lsr
  sta $fe
- lsr $fe
  ror $fd
- jsr plotc
+ lda $29   ;hires mode?
+ beq plotq4
+ inc $fb
+ bne plotq4
+ inc $fc
+plotq4
+ jsr plotc ;quad4
  lda $61
  sec
  sbc $6f
  sta $fb
  lda $62
  sbc $70
+ lsr
  sta $fc
- lsr $fc
  ror $fb
- jsr plotc
+ jsr plotc ;quad3
  lda $63
  sec
  sbc $71
  sta $fd
  lda $64
  sbc $72
+ lsr
  sta $fe
- lsr $fe
  ror $fd
- jsr plotc
+ jsr plotc ;quad2
  lda $61
  clc
  adc $6f
  sta $fb
  lda $62
  adc $70
+ lsr
  sta $fc
- lsr $fc
  ror $fb
- jsr plotc
+ lda $29   ;hires mode?
+ beq plotq1
+ inc $fb
+ bne plotq1
+ inc $fc
+plotq1
+ jsr plotc ;quad1
 t2d4fb lda $6f
  sta $fb
  lda $70
@@ -5787,18 +5794,16 @@ tfb2d4 lda $fb
  lda $fe
  sta $72
  rts
-loops lda $14
+loops
+ lda $14
  sta $fd
+ sta $57
  lda $15
  sta $fe
+ sta $58
  lda #0
  sta $fb
- sta $fc
- ldx #1
-respls lda $fd,x
- sta $57,x
- dex
- bpl respls
+ sta $fc 
  ldx #2
 c4af lda $22,x
  sta $50,x
@@ -5821,8 +5826,8 @@ b6d8 lda $59,x
  lda $61
  sta $fb
  lda $62
+ lsr
  sta $fc
- lsr $fc
  ror $fb
  lda $fd
  clc
@@ -5830,8 +5835,8 @@ b6d8 lda $59,x
  sta $fd
  lda $fe
  adc $64
+ lsr
  sta $fe
- lsr $fe
  ror $fd
  jsr plotc
  lda $63
@@ -5840,28 +5845,25 @@ b6d8 lda $59,x
  sta $fd
  lda $64
  sbc $72
+ lsr
  sta $fe
- lsr $fe
  ror $fd
  jsr plotc
  jsr t2d4fb
-loops2 lda $fb
+loops2
+ lda $fb
  clc
  adc #2
  sta $fb
+ sta $57
  lda $fc
  adc #0
  sta $fc
- ldx #1
-fbb2 lda $fb,x
- sta $57,x
- dex
- bpl fbb2
- ldx #1
-c7af lda $0e,x
- sta $50,x
- dex
- bpl c7af
+ sta $58
+ lda $0f
+ sta $51
+ lda $0e
+ sta $50
  lda #2
  ldx #3
  ldy #1
@@ -5877,11 +5879,10 @@ d8b6 lda $25,x
  bne d8b6
  bcc ncs
  inc $28
-ncs ldx #1
- lda $fd,x
- sta $57,x
- dex
- bpl ncs+2
+ncs lda $fe
+ sta $58
+ lda $fd
+ sta $57
  ldx #2
 c4af2 lda $22,x
  sta $50,x
@@ -5923,16 +5924,14 @@ x59 lda $59,x
  sta $69,x
  dex
  bpl x59
- ldx #1
-plx lda $fb,x
- sta $57,x
- dex
- bpl plx
- ldx #1
-plxx lda $0e,x
- sta $50,x
- dex
- bpl plxx
+ lda $fc
+ sta $58
+ lda $fb
+ sta $57
+ lda $0f
+ sta $51
+ lda $0e
+ sta $50
  lda #2
  ldx #3
  ldy #1
@@ -5963,23 +5962,24 @@ fbm2d0 lda $67
  lda $68
  sbc $fc
  sta $6a
- lda $6a
+; lda $6a
  bne loops2_
  lda $69
  cmp #3
  bcs loops2_
 c69w3 rts
-plotc lda $fc
+;validate calculated coordinate, plot if ok, skip if not
+plotc ldx $fc  ;x coordinate hibyte
  beq chbyc
- cmp #2
- bcs c69w3
- lda $fb
- cmp #64
- bcs c69w3
-chbyc lda $fe
+ dex           ;x coordinate range 0-319
+ bne c69w3     ;hibyte must be 0 or 1
+ lda $fb       ;when x hibyte is 1
+ cmp #64       ;max lobyte is 64
+ bcs c69w3     ;do not plot out of range
+chbyc lda $fe  ;y coordinate hibyte
  bne c69w3
  lda $fd
- cmp #200
+ cmp #200      ;y coordinate range 0-199
  bcs c69w3
  jmp setdot
 ;
