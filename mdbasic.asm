@@ -336,7 +336,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.08.19"
+.text "mdbasic 22.08.21"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -1308,7 +1308,7 @@ trace1 lda $9d ;prg mode?
  beq trace2
  lda #$00
  ldx #<execut
- ldy #>execut 
+ ldy #>execut
 settrace
  sta traceflag
  stx IGONE
@@ -4898,11 +4898,7 @@ linedraw
  sta $6b  ;temp var for distance = y1-y2
  ldy #1
  ldx #0
- lda SCROLX
- and #%00010000 ;check if multicolor mode on or off
- beq noincy  ;hires mode
- iny
-noincy lda $fc  ;determine which x coord is larger
+ lda $fc  ;determine which x coord is larger
  cmp lastplotx+1
  bcc storxy
  bne looper
@@ -4921,11 +4917,6 @@ looper ldy #$ff
 storxy sty $6f
  stx $70
  ldy #1
- lda SCROLX
- and #%00010000 ;check if multicolor mode on or off
- beq dniy
- iny
-dniy
  lda lastploty
  cmp $fd
  bcs stya7
@@ -5036,7 +5027,7 @@ linedone
  rts
 pokadd
  lda moveflag   ;flag 0=LINE cmd, >0=MOVE cmd
- beq reglin
+ beq setdot
 ;hack to move a sprite instead of plot line
  lda $fc        ;temp var hibyte of x coord
  beq nod010     ;x is less than 256
@@ -5071,19 +5062,6 @@ mowait dex
 linedon rts
 ;this section used by LINE plot only
 ;diangle lines need an extra dot when in multicolor mode
-reglin
- lda SCROLX
- and #%00010000 ;check if multicolor mode on or off
- beq setdot
- lda $fd
- cmp lastploty
- beq setdot
- cmp #199
- beq setdot
- inc $fd
- jsr setdot
- dec $fd
-;
 setdot jsr ydiv8
  lda $01
  pha
