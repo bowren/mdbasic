@@ -336,7 +336,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.08.21"
+.text "mdbasic 22.08.23"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -4726,20 +4726,21 @@ fnotes .word 3406
 ;             A#  *B#   C#   D#  *E#   F#   G#
 snotes .word 3824,4051,4547,5104,5407,6069,6813
 ;
+
+;table of video screen matrix hibyte offset per line 0-24
+btab .byte 0,0,0,0,0,0,0,1,1,1,1,1,1,2,2,2,2,2,2,2,3,3,3,3,3
+
 ;align tables to the nearest page boundary (saves a cycle on read)
 * = (* & $ff00)+$0100
 
-;align to the nearest page boundary
 playbuf1 .repeat 256,0
-;playbuf2 .repeat 256,0
-;playbuf3 .repeat 256,0
 
 ;temp storage for PAINT and SCROLL command
 paintbuf1 .repeat 256,0
 paintbuf2 .repeat 256,0
 paintbuf3 .repeat 256,0
 
-;tables for plotting dots on a bitmap
+;table for printing a bitmap image
 bmdt
 .byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
 .byte $f2,$1a,$02,$12,$97,$20,$20,$20,$f2,$1a,$03,$20,$20,$20,$f2,$1b
@@ -4750,6 +4751,7 @@ bmdt
 .byte $1a,$09,$12,$20,$92,$20,$12,$20,$f2,$1a,$0a,$20,$92,$20,$12,$20
 .byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
 
+;tables for plotting dots on a bitmap per line 0-24
 lbtab .byte 0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0
 hbtab .byte 224,225,226,227,229,230,231,232,234,235,236,237,239,240,241,242,244,245,246,247,249,250,251,252,254
 
@@ -5060,15 +5062,14 @@ mowait dex
  dey
  bne movewait
 linedon rts
-;this section used by LINE plot only
-;diangle lines need an extra dot when in multicolor mode
+;
 setdot jsr ydiv8
  lda $01
  pha
  and #%11111101 ;bit1 0=HIRAM
  sei            ;disable IRQ since kernal HIROM is switching to HIRAM
  sta $01
- lda lastplott  ;plot type 0=off, 1=on, 2=flip (use to be $fe)
+ lda lastplott  ;plot type 0=off, 1=on, 2=flip
  beq dotoff
  cmp #1
  beq doton
@@ -5090,44 +5091,33 @@ colorb sta ($c3),y ;write byte with bit pattern targeting the one bit in hires o
  pla
  sta $01    ;restore Kernal HIROM ($e000-$ffff)
  cli
-;apply color
- lda $fb
+;apply color using video matrix and color RAM
+ lda $fd     ;y coordinate
  lsr
  lsr
- lsr
- sta $c3
- lda $fc
- asl
- asl
- asl
- asl
- asl
- clc
- adc $c3
- sta $c3
- lda #$c8  ;bitmap screen RAM at $C800 in bitmap mode
- adc #$00
- sta $c4
- lda $fd   ;y coordinate
- lsr
- lsr
- lsr
- beq noytim
+ lsr         ;video matrix line# (0-24) = y/8
  tay
- lda $c3
- ldx $c4
- jsr times40
+ lda $fc     ;x coordinate hibyte
+ lsr         ;into carry
+ lda $fb     ;x coordinate lobyte
+ ror         ;out of carry
+ lsr         ;to calc x/8
+ lsr 
+ clc
+ adc $ecf0,y ;video matrix lowbyte at line y
  sta $c3
- stx $c4
-noytim lda mapcolc1c2  ;hires dot color (hi nibble) and background color of 8x8 square (lo nibble)
+ lda btab,y  ;video maxtrix hibyte offset
+ adc #$c8    ;view matrix starts at $c800
+ sta $c4
+ lda mapcolc1c2 ;hires dot color (hi nibble) and background color of 8x8 square (lo nibble)
  ldy #0
  sta ($c3),y
  lda $c4
  clc
- adc #$10      ;calculate beginning of color RAM
- sta $c4
- lda mapcolc3  ;background color mem used for mc mode
- sta ($c3),y   ;$d800
+ adc #$10     ;calculate beginning of color RAM
+ sta $c4      ;which starts at $d800
+ lda mapcolc3 ;background color mem used for mc mode
+ sta ($c3),y
  rts
 ;---
 ydiv8 lda $fd  ;y coordinate
@@ -5259,7 +5249,16 @@ noinc51
 textdone rts
 ;
 ;**************************
-painter jsr x1y7
+painter
+ ldx #$01
+ ldy #$07
+ lda SCROLX
+ and #%00010000 ;check if multicolor mode on or off
+ beq xy00
+ inx
+ dey
+xy00 stx $5a
+ sty $5b
  lda #0
  sta $57
 beginp
@@ -5293,7 +5292,7 @@ nxtpnt inc $fd
  bne fdm1
  jsr buffit
  lda #1
-.byte $2c       ;alt entry point to make next 2 lines this -> LDA #1, BIT $00A9
+.byte $2c       ;alt entry point to defeat LDA #0 by making it BIT $00A9
 law0 lda #0
  sta $58
 fdm1 dec $fd
@@ -5304,11 +5303,11 @@ fdm1 dec $fd
  bne fdp1
  jsr buffit
  lda #1
-.byte $2c      ;alt entry point to make next 2 lines this -> LDA #1, BIT $00A9
-law00 lda #$00
+.byte $2c     ;alt entry point to defeat LDA #0 by making it BIT $00A9
+law00 lda #0
  sta $59
 fdp1 inc $fd
- jsr setdot    ;set dot if needed
+ jsr setdot   ;plot pixel
  lda $fb
  clc
  adc $5a
@@ -5316,9 +5315,13 @@ fdp1 inc $fd
  lda $fc
  adc #$00
  sta $fc
- lda $c5   ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
- cmp #$3f  ;STOP key?
- beq epant ;stop painting
+ lda $c5      ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
+ cmp #$3f     ;STOP key?
+ bne paintit  ;stop painting
+ jmp norm     ;restore text mode (stop key pressed)
+epaint
+ jmp r6510    ;switch LORAM back to LOROM and HIRAM back to HIROM
+paintit 
  lda $fc
  beq peekit
  lda $fb
@@ -5341,8 +5344,6 @@ fillit
  cmp #$c8
  bcs fillit
  jmp beginp
-epant jsr norm   ;restore text mode (stop key pressed)
-epaint jmp r6510 ;switch LORAM back to LOROM and HIRAM back to HIROM
 readb jsr ydiv8
  stx $aa
  lda $01
@@ -5351,7 +5352,7 @@ readb jsr ydiv8
  sta $01
  lda ptab3,x
  eor #$ff
- and ($c3),y  ;bitmap in HIRAM
+ and ($c3),y    ;bitmap in HIRAM
  pha
  lda $01
  ora #%00000010 ;bit1 1=HIROM
@@ -5377,16 +5378,6 @@ buffit ldy $57
  lda $fd
  sta paintbuf1,y
  inc $57
- rts
-x1y7 ldx #$01
- ldy #$07
- lda SCROLX
- and #%00010000 ;check if multicolor mode on or off
- beq xy00
- inx
- dey
-xy00 stx $5a
- sty $5b
  rts
 ;
 ;process radial line options
