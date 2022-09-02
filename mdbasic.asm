@@ -1,7 +1,8 @@
 ; ***MDBASIC***
 ; by Mark D Bowren
-; (c)1985-2021 Bowren Consulting, Inc. (www.bowren.com)
+; (c)1985-2022 Bowren Consulting, Inc. (www.bowren.com)
 ;
+BUF    = $0200 ;BASIC Line Editor Input Buffer
 COLOR  = $0286 ;Current Foreground Color for Text
 HIBASE = $0288 ;(648) Top Page of Screen Memory
 SHFLAG = $028d ;SHIFT/CTRL/Logo Keypress flags Bit0 SHIFT, Bit1 Commodore Logo Key, Bit2 Ctrl Key
@@ -117,6 +118,7 @@ DATAN  = $a906 ;search BASIC text for the end of the current statement
 REM    = $a93b ;perform REM
 ONGOTO = $a94b ;perform ON
 LINGET = $a96b ;convert an ASCII decimal number to a 2-byte binary line number
+LET    = $a9a5 ;perform LET
 STROUT = $ab1e ;print msg from str whose addr is in the Y (hi byte) and A (lo byte) registers
 FRMNUM = $ad8a ;evaluate a numeric expression and/or check for data type mismatch, store result in FAC1
 FRMNUM2= $ad8d ;validate numeric data type in FAC1
@@ -197,14 +199,14 @@ RESLST = $a09e ;$A09E-$A19D List of Keywords
 ;135 $87   READ       44038 $AC06
 ;136 $88   LET        43429 $A9A5
 ;137 $89   GOTO       43168 $A8A0
-;138 $8A   RUN        43121 $A871 *overridden by MDBasic
-;139 $8B   IF         43304 $A928 *overridden by MDBasic
-;140 $8C   RESTORE    43037 $A81D *overridden by MDBasic
+;138 $8A   RUN        43121 $A871 *overridden by MDBASIC
+;139 $8B   IF         43304 $A928 *overridden by MDBASIC
+;140 $8C   RESTORE    43037 $A81D *overridden by MDBASIC
 ;141 $8D   GOSUB      43139 $A883
 ;142 $8E   RETURN     43218 $A8D2
 ;143 $8F   REM        43323 $A93B
 ;144 $90   STOP       43055 $A82F
-;145 $91   ON         43339 $A94B *overridden by MDBasic
+;145 $91   ON         43339 $A94B *overridden by MDBASIC
 ;146 $92   WAIT       47149 $B82D
 ;147 $93   LOAD       57704 $E168
 ;148 $94   SAVE       57686 $E156
@@ -271,7 +273,7 @@ RESLST = $a09e ;$A09E-$A19D List of Keywords
 ;200 $C8   LEFT$     46848 $B700
 ;201 $C9   RIGHT$    46892 $B72C
 ;202 $CA   MID$      46903 $B737
-;203 $CB   GO        *This is not a statement or function. It allows GO TO instead of GOTO
+;203 $CB   GO        *This is a keyword used to support syntax GO TO instead of GOTO
 ;
 ;MDBASIC Keyword Tokens
 ;203 $CB   OFF       *Stole this token from CBM's GO token (obsolete)
@@ -324,6 +326,8 @@ TOKEN_TEXT    = $e6
 TOKEN_SCREEN  = $e7
 TOKEN_RESUME  = $e8
 TOKEN_VOICE   = $eb
+TOKEN_TRACE   = $f2
+TOKEN_DELETE  = $f4
 FIRST_FUN_TOK = $f5  ;first MDBASIC function
 TOKEN_KEY     = $f6
 TOKEN_ERROR   = $f7
@@ -336,7 +340,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.08.23"
+.text "mdbasic 22.09.02"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -467,8 +471,9 @@ ilvne  .shift "illegal voice number"  ;32
 illspr .shift "illegal sprite number" ;33
 ilcoor .shift "illegal coordinate"    ;34
 cantre .shift "can't resume"          ;35
+usrerr .shift "user defined"          ;36
 ;
-erradd .word misop, ilvne, illspr, ilcoor, cantre
+erradd .word misop, ilvne, illspr, ilcoor, cantre, usrerr
 ;
 newvec jsr nwvec2
  lda #<mesge
@@ -532,7 +537,7 @@ noblink sta blinkcol,y   ;all colors turn off flash flag
 toknew ldx $7a
  ldy #$04
  sty $0f
-nxtchr lda $0200,x
+nxtchr lda BUF,x
  bpl norma      ;bit 7 indicates a token value
  cmp #TOKEN_PI  ;pi token?
  beq takchr
@@ -561,7 +566,7 @@ skip1 sty $71
  dex
 cmplop iny
  inx
-tstnxt lda $0200,x
+tstnxt lda BUF,x
  sec
  sbc newcmd,y
  beq cmplop
@@ -584,7 +589,7 @@ skip3 sec
  sbc #$55       ;rem-:
  bne nxtchr
  sta $08
-remlop lda $0200,x
+remlop lda BUF,x
  beq takchr
  cmp $08
  beq takchr
@@ -600,7 +605,7 @@ contin iny
  lda newcmd,y
  bne tstnxt
  beq oldtok
-notfou lda $0200,x
+notfou lda BUF,x
  bpl tachr1
 end sta $01fd,y
  dec $7b
@@ -613,7 +618,7 @@ oldtok ldy #0
  bne oldtst
 oldcmp iny
  inx
-oldtst lda $0200,x
+oldtst lda BUF,x
  sec
  sbc RESLST,y  ;list of cbm keywords
  beq oldcmp
@@ -624,7 +629,7 @@ oldtst lda $0200,x
 nxtold ldx $7a
  inc $0b
 cont1 iny
- lda $a09d,y
+ lda RESLST-1,y
  bpl cont1
  lda RESLST,y
  bne oldtst
@@ -684,7 +689,7 @@ xcmd jsr tstcmd
  sta $3a
  jmp NEWSTT     ;find beginning of next statement and execute
 ;
-_A804 jmp $a9a5 ;perform LET
+_A804 jmp LET   ;perform LET
 tstcmd
  sec
  sbc #$80
@@ -1359,8 +1364,6 @@ weglst
  jsr CHROUT
  ldy #$01
  sty listflag
-; lda ($5f),y
-; beq endprg ;end of program
  jmp $a6d7  ;perform LIST of current line
 endprg
  jsr $a67a  ;empty the stack
@@ -1512,10 +1515,10 @@ lodbin
  lda $c1    ;if it was loaded exactly in BASIC mem
  cmp $2b    ;then finish load as usual to init mem ptrs
  beq lodbas ;this will kill the current running BASIC prg
-isbin
- pla
- pla
- rts
+isbin       ;otherwise do not return to calling subroutine
+ pla        ;to prevent adjusting BASIC memory pointers
+ pla        ;this way no corruption of BASIC mem will occur
+ rts        ;and the running BASIC program can continue
 ;
 ;*******************
 ;secondary address 2=SCREEN, 3=CHAREN, 4=BITMAP
@@ -1743,7 +1746,7 @@ erenum jsr LINKPRG
  sta $7a
  ldy #$05
 ffff lda nolin,y
- sta $0201,y
+ sta BUF+1,y
  dey
  bpl ffff
  jsr find ;65535
@@ -1988,7 +1991,9 @@ clearerr
 undef
  jmp UNDEFST   ;UNDEF'D STATEMENT
 ;
-; ERROR e  where e = error number (1-33)
+; ERROR CLR    :clear last error data
+; ERROR OFF    :turn off error trapping
+; ERROR errnum :raise error (1-35)
 error
  cmp #TOKEN_CLR
  beq errclr
@@ -1999,7 +2004,7 @@ errclr jsr clearerr
  jmp CHRGET
 raiseerr
  jsr skip73_  ;valid error number is 1-127
- beq baderr2  ;0 is invalid
+; beq baderr2  ;0 is invalid
  bmi baderr2  ;128 and over is invalid
  tax
  jmp (IERROR)
@@ -2057,7 +2062,7 @@ seterrvec
  rts
 ;
 ;*******************************************
-; error trap routine - x reg hold error #
+; error trap routine for ON ERROR RESUME NEXT
 ;*******************************************
 resumenext     ;ON ERROR RESUME NEXT
  lda $9d       ;0=suppress msgs (program running mode) 
@@ -2097,11 +2102,13 @@ _a807 cmp #$3a
 quitrun
  jsr detrap    ;disable error trapping
 olerr jmp errors
-;
+;*******************************************
+; general error trap routine
+;*******************************************
 trap lda $9d   ;MSGFLG Flag Kernal Message Control, #$C0=kernal & ctrl, #$80=ctrl only, #$40=kernal only, #$00=none
  bne quitrun
- txa
- bmi olerr
+ txa           ;x holds the error num
+ bmi olerr     ;bit 7 on means no error
  stx errnum    ;set current error number
  jsr detrap    ;disable error trapping
  lda #3        ;3 plus the 2 for this next call = 5 bytes
@@ -3119,7 +3126,7 @@ getprompt
 readline
  jsr INLIN    ;input a line to buffer from keyboard (80 chars max from keyboard)
  ldy #0       ;count number of characters input (not sure if routine returns it)
-fndend lda $0200,y
+fndend lda BUF,y
  beq inpend
  iny
  bne fndend
@@ -3129,7 +3136,7 @@ inpend tya    ;y reg = string length
  tay
  jsr CHRGET
  dey
-copyer lda $0200,y ;copy string to variable storage
+copyer lda BUF,y ;copy string to variable storage
  sta ($35),y
  dey
  bpl copyer
@@ -4216,17 +4223,22 @@ prgmode lda #147 ;clr screen
  sta $13      ;set current I/O channel
  lda #"?"
  jsr CHROUT   ;print question mark '?'
- lda $02
- asl          ;calc 2-byte index to message
+ lda $02      ;current error num
+ beq usererr  ;user defined error numbers
+ cmp #36      ;are 0, 35-127
+ bcc erridx   ;CBM BASIC error numbers 1-31
+usererr
+ lda #36      ;all user defined errors use same message
+erridx asl    ;calc 2-byte index to message
  tax
  sec
  sbc #62
- bcc romerr   ;CBM errors 1-30 (index 2-60)
+ bcc cbmerr   ;CBM errors 1-30 (index 2-60)
  tax
- lda erradd,x
+ lda erradd,x ;MDBASIC errors 31-35
  ldy erradd+1,x
  bne hibyer   ;always branches since hi-byte would not be 0
-romerr lda $a326,x  ;$A328-$A364 Error Message Vector Table
+cbmerr lda $a326,x  ;$A328-$A364 Error Message Vector Table
  ldy $a327,x
 hibyer jsr printstr
  lda #$69    ;address of the zero-terminated string ($a369) = "  ERROR"
@@ -4601,7 +4613,7 @@ bitweights .byte 1,2,4,8,16,32,64,128
 ;
 ;token list that use line numbers that need to be renumbered when using renum
 ; goto,gosub,then,else,resume,trace,delete,run,restore
-gotok .byte TOKEN_GOTO,$8d,TOKEN_THEN,TOKEN_ELSE,TOKEN_RESUME,$f2,$f4,TOKEN_RUN,TOKEN_RESTORE
+gotok .byte TOKEN_GOTO,$8d,TOKEN_THEN,TOKEN_ELSE,TOKEN_RESUME,TOKEN_TRACE,TOKEN_DELETE,TOKEN_RUN,TOKEN_RESTORE
 ;
 ;VOICE command use VOICE voc#, frequency
 ;REG_VAL=FREQUENCY/(CLOCK/16777216)
