@@ -111,6 +111,7 @@ FINDLN = $a613 ;search for line number using ptr at $2b, $2c
 CLEAR  = $a65e ;perform CLR
 RUNC   = $a68e ;reset ptr of current text char to the beginning of prg text
 NEWSTT = $a7ae ;setup next statement for execution
+RESTORE= $a81d ;perform RESTORE
 RUN    = $a871 ;peform RUN
 GOTO   = $a8a0 ;perform GOTO
 DATA   = $a8f8 ;perform DATA
@@ -340,7 +341,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.09.02"
+.text "mdbasic 22.09.11"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -1091,51 +1092,16 @@ dumplist jsr openprint00
  jmp clse7f
 dumpscreen dec $01 ;switch to LORAM ($a000-$bfff)
  jsr dumpscreen2
-closer jsr r6510   ;switch to LOROM ($a000-$bfff)
+closer inc $01     ;switch to LOROM ($a000-$bfff)
  jsr clse7f
  jmp CHRGET
 dumpbitmap dec $01 ;switch LOROM to LORAM
  jsr dumpbitmap2
  jmp closer
 ;*******************
-; FILL x1,y1 TO x2,y2, scanCode, [color]
+; FILL x1,y1 TO x2,y2, [scanCode], [color]
 fill
- lda HIBASE   ;top page of screen mem
- sta $fc
- jsr skip73   ;x1 (0-39)
- cmp #40
- bcc okx1
-illqty jmp FCERR  ;display illegal qty error
-okx1 sta $fb
- sta $be
- jsr getval   ;y1 (0-24)
- cmp #25      ;max is 25 so if greater than error
- bcs illqty
- sta $bf
- tay
- beq colbas
- lda $fb
- ldx $fc
- jsr times40
- sta $fb
- stx $fc
-colbas jsr addoffset
- jsr CHRGOT
- cmp #TOKEN_TO
- beq getx2
- jmp SNERR
-getx2 jsr getval ;x2
- cmp #40
- bcs illqty
- sec
- sbc $be    ;x2-x1
- sta $be
- jsr getval ;y2
- cmp #25
- bcs illqty
- sec
- sbc $bf    ;y2-y1
- sta $bf
+ jsr getcoords
  jsr CHRGET ;get next basic text chr
  cmp #","
  beq srncol
@@ -1965,7 +1931,7 @@ restor jsr CHRGET  ;no param means use original restore cmd
  stx $41           ;set DATA ptr to the start of line
  sty $42
  rts
-oldrst jmp $a81d   ;original CBM RESTORE takes no params
+oldrst jmp RESTORE ;original CBM RESTORE takes no params
 ;
 ;*******************
 ;get BASIC line number ($14,$15) and text ptr-1 in X,Y
@@ -2004,7 +1970,6 @@ errclr jsr clearerr
  jmp CHRGET
 raiseerr
  jsr skip73_  ;valid error number is 1-127
-; beq baderr2  ;0 is invalid
  bmi baderr2  ;128 and over is invalid
  tax
  jmp (IERROR)
@@ -2271,11 +2236,10 @@ ecolor rts
 ; MOVE sprite#, x1, y1 [TO x2, y2, speed]
 ; MOVE sprite# TO x2, y2, [speed]
 move
- jsr sprnum ;get sprite# and 2^sprite# ($bf)
- tya        ;sprite number 0-7
- asl        ;convert to 2-byte index for registers
- sta $0f    ;sprite# * 2
- jsr backuppoint  ;save last plot used by graphics commands in case of from/to move
+ jsr sprnum    ;get sprite# and 2^sprite# ($bf)
+ tya           ;sprite number 0-7
+ asl           ;convert to 2-byte index for registers
+ sta $0f       ;sprite# * 2
  jsr CHRGOT
  cmp #TOKEN_TO
  bne getfrom
@@ -2293,57 +2257,57 @@ msbx sta $fc
  jmp moveto
 getfrom
  jsr dbyval
- tya
- sta $fc         ;hibyte of x coordinate
- beq bitof       ;msb off
- cmp #2          ;x coordinate hibyte can only be 0 or 1
- bcc biton
- jmp hellno      ;illegal qty - a valid x coordinate is between 0 and 511
-biton lda MSIGX  ;Most Significant Bits of Sprites 0-7 Horizontal Position
- ora $bf         ;2^sprite# ie sprite0=1, sprite1=2, sprite3=4, etc.
- jmp msb
-bitof lda $bf    ;sprite register offset 2^sprite#
+ sty $fc       ;hibyte of x coordinate
+ beq bitof     ;msb off
+ cpy #2        ;x coordinate hibyte can only be 0 or 1
+ bcs badxy
+ lda MSIGX     ;Most Significant Bits of Sprites 0-7 Horizontal Position
+ ora $bf       ;2^sprite#
+ bne msb       ;always branches
+bitof lda $bf  ;sprite register offset 2^sprite#
  eor #$ff
  and MSIGX
-msb sta MSIGX ;x coord hibyte
- ldy $0f      ;sprite# * 2
+msb sta MSIGX  ;x coord hibyte
+ ldy $0f       ;sprite# * 2
  lda $14
- sta SP0X,y   ;sprite x coord
+ sta SP0X,y    ;sprite x coord
  sta $fb
  jsr chkcomm
- jsr getval
- ldy $0f      ;sprite# * 2
- lda $14
- sta SP0Y,y   ;sprite y coord
+ jsr dbyval    ;y2 coord
+ bne badxy     ;hibyte must be 0
+ txa
+ ldy $0f       ;sprite# * 2
+ sta SP0Y,y    ;sprite y coord
  sta $fd
  jsr CHRGOT
  cmp #TOKEN_TO
- bne move-1   ;TO token not present so we are done
+ bne ecolor    ;TO token not present so we are done
 moveto
- lda $bf      ;temp var holding 2^sprite# value
- sta $07      ;temp var for moving sprite on a line
- jsr dbyval   ;get destination x coordinate
- cpy #2       ;must be between 0 and 511
- bcc okpnt2
- jmp FCERR    ;illeqal qty error
-okpnt2 stx lastplotx
+ jsr backuppoint ;save last plot used by graphics commands
+ lda $bf       ;temp var holding 2^sprite# value
+ sta $07       ;temp var for moving sprite on a line
+ jsr dbyval    ;get x2 coordinate
+ cpy #2        ;must be between 0 and 511
+ bcs badxy     ;illegal coordinate error
+ stx lastplotx
  sty lastplotx+1
- jsr ckcom2   ;throw misop if current char is not comma
- jsr getval   ;get destination y coordinate
- sta lastploty
+ jsr ckcom2    ;throw misop if current char is not comma
+ jsr dbyval    ;get y2 coordinate
+ bne badxy     ;hibyte must be 0
+ stx lastploty
 ;getspeed
  lda #20
- sta $fe      ;default speed is 0
+ sta $fe       ;default speed is 20
  jsr comchk
- bne nosped   ;no move speed specified?
- jsr getval   ;get the speed param 0-255
- sta $fe      ;temp storage for move speed
-nosped lda #$ff
- sta moveflag ;flag to tell LINE cmd to move a sprite instead of plot line
- jsr strtln   ;calculate line and move sprite along that line at given speed
- lda #0
- sta moveflag ;restore default flag 0 for LINE cmd
+ bne nosped    ;no move speed specified?
+ jsr getval    ;get the speed param 0-255
+ sta $fe       ;temp storage for move speed
+nosped lda #$01
+ sta moveflag  ;flag to tell LINE cmd to move a sprite instead of plot line
+ jsr strtln    ;calculate line and move sprite along that line at given speed
+ dec moveflag  ;reset flag back to 0 for LINE cmd
  jmp restorepoint
+badxy jmp hellno
 ;
 ;*******************
 ;SPRITE [sprite# 0-7], [0=on,1=off], [color 0-15], [0=normal,1=multicolor], [data pointer 0-255], [foreground priority 0=over,1=under]
@@ -2353,11 +2317,8 @@ sprite
  jsr CHRGET     ;get next char and compare to comma
  cmp #","
  beq scr        ;another comma so skip param
- jsr skip73     ;not a comma so get the value
- cmp #2         ;sprite visible 0=off, 1=on
- bcc onezro
- jmp FCERR      ;illegal qty for boolean value
-onezro lda $14  ;visible param
+ jsr getbool2   ;sprite visible 0=off, 1=on
+ lda $14        ;visible param
  bne spron
  lda $bf        ;2^sprite#
  eor #$ff
@@ -2379,15 +2340,13 @@ scr jsr CHRGET  ;get next basic text chr
 smcr jsr CHRGET ;get next basic text chr
  cmp #","
  beq spntr
- jsr skip73     ;get multicolor flag 0 or 1
+ jsr getbool2   ;get multicolor flag 0 or 1
  bne setm
  lda $bf        ;2^sprite#
- eor #$FF       ;sprite# bit off
+ eor #$ff       ;sprite# bit off
  and SPMC       ;sprite multicolor flags
  jmp skipmc
-setm cmp #1
- bne badval
- lda SPMC
+setm lda SPMC
  ora $bf        ;2^sprite#
 skipmc sta SPMC
  jsr chkcomm
@@ -2420,53 +2379,57 @@ spntr jsr CHRGET
  sta ($61),y    ;sprite y's data ptr
 prorty
  jsr chkcomm    ;check for comma, if end of statement then do not return here
- jsr getval     ;get sprite to foreground graphics/text priority: 0=over, 1=under
- bne under
+ jsr getbool    ;get sprite to foreground graphics/text priority: 0=over, 1=under
+ bne okpri
  lda $bf        ;2^sprite#
  eor #$ff       ;prepare to turn off bit for sprite
  and SPBGPR     ;turn off bit for sprite
  sta SPBGPR     ;apply new value
  rts
-under cmp #1    ;enforce 0 or 1 value
- bne badval
 okpri lda $bf   ;2^sprite#
  ora SPBGPR     ;turn on bit for sprite
  sta SPBGPR     ;apply new value
  rts
 ;
-badval jmp FCERR
-;
 ;*******************
-; EXPAND sprite#, x (0=on, 1=off), y (0=on, 1=off)
+; EXPAND sprite#           :expand both x and y axis of sprite#
+; EXPAND sprite#, [x], [y] :where x and y are 0=expand off, 1=expand on
 expand
- jsr sprnum  ;get sprite# and store in $be and 2^sprite# in $bf
- jsr ckcom2  ;throw misop if current char is not comma
- jsr CHRGET  ;get next char and compare with comma
- cmp #","
- beq magx2
- jsr skip73
- bne onchk
- lda $bf
- eor #$ff
- and XXPAND  ;x expand off
- jmp magx
-onchk cmp #$01
- bne badval
+ jsr sprnum     ;get sprite# and store in $be and 2^sprite# in $bf
+ jsr CHRGOT
+ bne getexpxy
  lda XXPAND
- ora $bf
-magx sta XXPAND   ;x expand on
- jsr chkcomm
-magx2 jsr getval
- bne magchk
- lda $bf
+ ora $bf        ;2^sprite#
+ sta XXPAND
+ lda YXPAND     ;y expand
+ ora $bf        ;2^sprite#
+ sta YXPAND
+ rts
+getexpxy
+ jsr CHRGET
+ cmp #","
+ beq magy
+ jsr getbool2   ;expand x param
+ beq expx
+ lda XXPAND
+ ora $bf        ;2^sprite#
+ bne setmagx    ;always branches
+expx lda $bf    ;2^sprite#
  eor #$ff
+ and XXPAND     ;x expand off
+setmagx
+ sta XXPAND     ;x expand on
+ jsr chkcomm
+magy
+ jsr getbool    ;expand y param
+ beq clry
+ lda YXPAND     ;y expand
+ ora $bf        ;2^sprite#
+ bne setmagy    ;always branches
+clry lda $bf    ;2^sprite#
+ eor #$ff       ;prepare to turn off target bit
  and YXPAND
- jmp magy
-magchk cmp #$01
- bne badval
-sety lda YXPAND ;y expand
- ora $bf
-magy sta YXPAND
+setmagy sta YXPAND
  rts
 ;
 ;*******************
@@ -2547,17 +2510,14 @@ column
  clc         ;clear carry is flag to write new value
  jsr PLOT    ;read/set cursor position on screen
  jsr chkcomm ;if current char is a comma then continue otherwise quit now
- jsr getval  ;get int value for blink enable/disable
- cmp #2      ;0 or 1 is valid
- bcs badbool ;illegal qty
+ jsr getbool
  eor #1      ;flip value so that 1=on 0=off
  sta 204     ;Flash Cursor 0=Flash Cursor, non-zero No Cursor
  rts
 ;
 ;*****************
 badloc  jmp hellno  ;illegal coordinate error
-badbool jmp FCERR
-misngop jmp missop
+misngop jmp missop  ;missing operand error
 ;*******************
 designon
  lda CI2PRA     ;bits 0-1 mem bank, 00=bank3, 01=bank2, 10=bank1, 11=bank0
@@ -2570,8 +2530,9 @@ designon
  lda SCROLX
  and #%11101111 ;bit 4 off disable multicolor text/bitmap mode
  sta SCROLX
-; lda #%00011011 ;mc text mode off, bitmap mode off, screen on, screen 40x25, 3 virtical scan lines
-; sta SCROLY
+ lda SCROLY
+ and #%11011111 ;turn off bitmap mode
+ sta SCROLY
  jmp CHRGET
 ;*****************
 designoff jsr norm
@@ -2580,7 +2541,7 @@ designoff jsr norm
 ; DESIGN ON
 ; DESIGN OFF
 ; DESIGN NEW
-; DESIGN scancode, d0,d1,d2,d3,d4,d5,d6,d7
+; DESIGN scancode, charset, d0,d1,d2,d3,d4,d5,d6,d7
 design
  beq misngop
  cmp #TOKEN_ON
@@ -2614,21 +2575,18 @@ nexbyt lda ($be),y
  cli
  jmp CHRGET
 dodesign
- lda #$f0      ;perfrom design pokecode,d1,d2,...,d8
- sta $bf       ;$f000 = location of char bit data
- lda #$00
- sta $be
- jsr skip73    ;get pokecode
- beq skipcopy
- tay
-
- lda $be
- ldx $bf
- jsr times8    ;calc ptr (8 bytes per char)
- sta $be
- stx $bf
-
-skipcopy
+ jsr skip73    ;get screen code
+ jsr times8    ;multiply A reg value times 8
+ jsr ckcom2    ;throw misop if current text is not a comma
+ jsr getbool   ;get charset
+ beq charset0
+ lda #$f8      ;charset 1 at $f800
+.byte $2c      ;defeat lda #$f0 by making it bit $f0a9
+charset0
+ lda #$f0      ;charset 0 at $f000
+ clc
+ adc $bf
+ sta $bf
  jsr ckcom2    ;throw misop if current text is not a comma
  ldy #0        ;loop for all 8 bytes of data
 gtdata sty $02
@@ -2686,13 +2644,8 @@ clrbyt sta ($be),y
  inc $bf
  bne nxpart
  jmp CHRGET
-illqty6 jmp FCERR   ;illegal qty
-bitscr
- jsr skip73         ;colorMode 0 or 1
+bitscr jsr getbool2 ;colorMode 0 or 1
  beq hiresmode
- cmp #1
- bne illqty6
-mcmode
  lda SCROLX         ;horiz fine scrolling and control reg
  ora #%00010000     ;turn on bit 4 - enable multi color text or bitmap mode
  sta SCROLX
@@ -2835,33 +2788,25 @@ wave jsr ppw   ;get voice SID register offset (voice#-1)*7
  sta $02       ;waveform
  jsr comchk
  bne waveit
- jsr getval    ;get gate value 0 or 1
- cmp #2
- bcs badwav
+ jsr getbool
  ora $02       ;position is bit 0
  sta $02
  jsr comchk
  bne waveit
- jsr getval    ;get sync value 0 or 1
- cmp #2
- bcs badwav
+ jsr getbool
  asl           ;position is bit 1
  ora $02
  sta $02
  jsr comchk
  bne waveit
- jsr getval    ;get sync value 0 or 1
- cmp #2
- bcs badwav
+ jsr getbool
  asl           ;position is bit 2
  asl
  ora $02
  sta $02
  jsr comchk
  bne waveit
- jsr getval    ;get disable value 0 or 1
- cmp #2
- bcs badwav
+ jsr getbool
  asl           ;position is bit 3
  asl
  asl
@@ -3241,8 +3186,8 @@ xytim2
  rol
  tay
 theend rts
-hellno ldx #34
- jmp (IERROR) ;throw illegal coordinate error
+hellno ldx #34 ;illegal coordinate error
+ jmp (IERROR)
 ;
 ;*******************
 ; PAINT x,y, [plotType], [color]
@@ -3313,7 +3258,7 @@ norm
  sta SCROLX
  lda #%00011011  ;extended color text mode off, bitmap mode off, display on, 25 rows, 3 vertical scroll scan lines
  sta SCROLY
-r6510 lda $01
+ lda $01
  ora #%00000111  ;switch mem banks to normal mem mapped I/O RAM ($d000-$dfff), HIROM ($e000-$ffff), LOROM ($a000-$bfff)
  sta $01
  rts
@@ -3354,7 +3299,7 @@ sizes
  jsr types
 ne dec $01
  jsr texter
- inc $01
+memnorm inc $01
  rts
 ;
 ;*******************
@@ -3413,12 +3358,12 @@ illqty3 jmp FCERR
 ;*******************
 ; SCROLL x1, y1 TO x2, y2, [direction 0-3], [wrap 0-1]
 scroll
- jsr getscroll
+ jsr getcoords
  jsr comchk
  beq okscroll1
  lda #0          ;default direction 0=up
- sta $ff         ;default wrap 0=no wrap
- beq okscroll2
+ pha             ;default wrap 0=no wrap
+ beq okscroll2   ;always branches
 okscroll1
  jsr getval      ;direction 0-3
  cmp #4
@@ -3426,52 +3371,39 @@ okscroll1
  pha 
  jsr comchk
  bne okscroll3
- jsr getval      ;wrap? 0=no, 1=yes
- cmp #2
- bcs illqty3
- sta $ff
+ jsr getbool     ;wrap: 0=no, 1=yes
+okscroll2
+ sta $ff         ;wrap param temp storage
 okscroll3 pla    ;what was the direction?
-okscroll2 asl    ;convert to 2 byte offset
+ asl             ;convert to 2 byte offset
  tay
- lda scrolls,y   ;scroll direction vector lobyte
- sta $55
  lda scrolls+1,y ;scroll direction vector hibyte
- sta $56
+ pha
+ lda scrolls,y   ;scroll direction vector lobyte
+ pha
  dec $01
- jmp $0054
+ rts
 ;-----------
 badscroll jmp hellno ;illegal coordinate error
-getscroll
+getcoords
  jsr skp73     ;x1
  bne badscroll ;hibyte should be 0
  cpx #40       ;max columns
  bcs badscroll
  stx $fb
  stx $be
- lda HIBASE    ;top page of screen memory
- sta $fc
  jsr ckcom2    ;throw misop if current char is not comma
  jsr dbyval    ;y1
  bne badscroll ;hibyte must be 0
  cpx #25       ;max rows
  bcs badscroll
  stx $bf
- txa
- tay 
- beq notime40
- lda $fb
- ldx $fc
- jsr times40
- sta $fb
- stx $fc
-notime40 jsr addoffset
- jsr CHRGOT
- cmp #TOKEN_TO
- beq foundto
- jmp SNERR       ;syntax error
- jsr ckcom2      ;throw misop if current char is not comma
-foundto
- jsr dbyval      ;x2
+ dec $01
+ jsr calcptr
+ inc $01
+ lda #TOKEN_TO   ;token to skip over
+ jsr CHKCOM+2    ;check for and skip over TO token, syntax error if not found
+ jsr skp73_      ;x2
  bne badscroll   ;hibyte must be 0
  cpx #40
  bcs badscroll
@@ -4376,34 +4308,26 @@ nxt7 clc
  dex
  bne nxt7    ;stop adding once x is 0
 t7done rts   ;result in accumulator
+;
 ;*******************
-;add 8 to the double byte binary value in A (lobyte) and X (hibyte), Y times
-;assumes caller will not multiply by 0 or exceed result of 65535
+;multiply the value in Y reg by 8 returning word in $be,$bf
 times8
- clc
- adc #8
  pha
- txa
- adc #0
- tax
- pla
- dey
- bne times8
- rts
-;*******************
-;add 40 to the double byte binary value in A(lobyte) and X(hibyte), Y times
-;assumes caller will not multiply by 0 or exceed result of 65535
-times40
+ lda #0
+ sta $be    ;result lobyte
+ sta $bf    ;result hibyte
+ pla        ;num to multiply by 8
+ beq end40
  clc
- adc #40
- pha
- txa
- adc #0
- tax
- pla
- dey
- bne times40
- rts
+ asl
+ rol $bf
+ asl
+ rol $bf
+ asl
+ rol $bf 
+ sta $be
+end40 rts
+;
 ;*******************
 opget jsr CHRGET
 opget2 bcc okopge  ;text found (not a token)
@@ -4467,6 +4391,13 @@ getstr2 jsr FRESTR ;discard temp string
  sta $52           ;length
 return rts
 ;******************
+getbool jsr CHRGET
+ beq missop
+getbool2 jsr skip73
+ cmp #2
+ bcs illqty4
+ tax  ;sets zero flag if a reg is zero
+ rts  ;result is in both a and x reg
 getval15_ jsr CHRGET
 getval15_0 beq missop
 getval15 jsr skip73
@@ -4512,29 +4443,13 @@ getvoc
 iverr ldx #32     ;illegal voice number
  jmp (IERROR)
 ;*******************
-addoffset lda $fb
- sta $fd
- lda #$d8         ;hibyte of new page ptr
- sec
- sbc HIBASE       ;current page
- sta $02
- lda $fc
- clc
- adc $02
- sta $fe
- rts
-;********************
 ;this function entry point is called by commands PLOT,LINE,CIRCLE,PAINT
 getpnt
-; lda lastplott
-; sta $fe        ;default plot type
  jsr pntweg     ;get x,y, plot type
  jmp savepoint
 ;*******************
 types jsr comchk ;current char a comma?
  beq gettypes
-; lda lastplott  ;get last plot type
-; sta $fe        ;current plot type
  rts
 gettypes jsr CHRGET ;position to next char
  beq etypes     ;end of statement reached
@@ -4603,7 +4518,7 @@ printer lda ($22),y
 csrbytes .byte $d3,$d6,$cc,$d5,$ce
 
 ;scroll direction vectors up,down,left,right
-scrolls .word scroll0,scroll1,scroll2,scroll3
+scrolls .rta scroll0,scroll1,scroll2,scroll3
 
 nolin .null "65535"
 filestr .null " files."
@@ -4681,9 +4596,8 @@ playwave   .byte 0  ;,0,0  ;waveform for each voice
 
 ;this temp space is used to save last plot x,y so sprite move can use it
 lastplotx2
-.word 0  ;move cmd temp copy of last used x coord
-.byte 0  ;move cmd temp copy of last used y coord
-.byte 0  ;plot type
+.word 0  ;temp copy of last used x coord
+.byte 0  ;temp copy of last used y coord
 ;
 ;********************************************************************
 ;* ROM barrier at A000-BFFF switch to RAM using $01 before entry    *
@@ -4815,7 +4729,7 @@ endass lda #0 ;terminate string with zero-byte
  iny
  cpy #16     ;fill remaining bytes with 0
  bcc endass+2
- jmp r6510   ;switch LORAM back to LOROM
+ jmp memnorm ;switch LORAM back to LOROM
 ;***************
 ;KEY LIST (code in LORAM)
 ;
@@ -4852,7 +4766,7 @@ nextke jsr kprnt
  dec $02
  bne exchng
  jsr CHRGET
- jmp r6510 ;switch LORAM back to LOROM
+ jmp memnorm ;switch LORAM back to LOROM
 exchng lda $fb
  sta $be
  lda $fc
@@ -4899,11 +4813,11 @@ chrprs jmp printcr
 ;
 ;**************************
 linedraw
- lda lastplotx  ;destination x coord lobyte
+ lda lastplotx   ;destination x coord lobyte
  sec
  sbc $fb
  sta $57
- lda lastplotx+1  ;destination x coord hibyte
+ lda lastplotx+1 ;destination x coord hibyte
  sbc $fc
  sta $58
  lda lastploty
@@ -4932,17 +4846,18 @@ storxy sty $6f
  stx $70
  ldy #1
  lda lastploty
- cmp $fd
+ cmp $fd   ;determine which y coord is larger
  bcs stya7
- tya
- eor #$ff
+ tya       ;flip signed int value
+ eor #$ff  ;by calc 2's compliment
  tay
  iny
  lda $fd
  sec
  sbc lastploty
- sta $6b
-stya7 sty $a7
+ sta $6b ;y distance
+stya7
+ sty $a7 ;y coord step
  lda #0
  sta $59
  sta $69
@@ -5119,7 +5034,7 @@ colorb sta ($c3),y ;write byte with bit pattern targeting the one bit in hires o
  adc $ecf0,y ;video matrix lowbyte at line y
  sta $c3
  lda btab,y  ;video maxtrix hibyte offset
- adc #$c8    ;view matrix starts at $c800
+ adc #$c8    ;video matrix starts at $c800 in bitmap mode
  sta $c4
  lda mapcolc1c2 ;hires dot color (hi nibble) and background color of 8x8 square (lo nibble)
  ldy #0
@@ -5168,11 +5083,9 @@ texter lda $58  ;y size
  beq texter-1
 nextchar lda #0
  sta $59        ;index variable for current byte of dot data in char
- sta $be
- lda $26        ;charset 0 at $d000, charset 1 at $d800
- sta $bf        ;charset ptr hibyte
 readstr ldy #0
  lda ($50),y    ;get character to display on bitmap
+;convert ascii to screen code
  cmp #"a"
  bcc lessthana
  cmp #96
@@ -5186,13 +5099,13 @@ bit7set cmp #$c0
  bcs minus128
 goodalpha sec 
  sbc #$40
-lessthana tay 
- beq doloop3
- lda $be
- ldx $bf
- jsr times8
- sta $be
- stx $bf
+;determine mem ptr of dot data
+lessthana
+ jsr times8     ;multiply A reg value times 8
+ lda $26        ;hibyte ptr to dot data
+ clc            ;charset 0 at $d000, charset 1 at $d800
+ adc $bf
+ sta $bf
 doloop3 lda $58
  sta $5a    ;temp var for y size multiplication by decrement loop
 doloop2 lda #128
@@ -5332,7 +5245,7 @@ fdp1 inc $fd
  bne paintit  ;stop painting
  jmp norm     ;restore text mode (stop key pressed)
 epaint
- jmp r6510    ;switch LORAM back to LOROM and HIRAM back to HIROM
+ jmp memnorm  ;switch LORAM back to LOROM and HIRAM back to HIROM
 paintit 
  lda $fc
  beq peekit
@@ -6085,11 +5998,9 @@ lodsrn jsr param ;prepare text and color mem pointers
  jsr CHRIN   ;get background color
  sta BGCOL0  ;set background color
  jsr CHRIN   ;get VMCSB
-; and #%00000010 ;bits 1,2,3 hold base addr for text dot data
-; ora VMCSB      ;include other bits 4-7 that holds video matrix base addr
  sta VMCSB   ;set VMCSB
  jsr CHRIN   ;get SCROLX
- sta SCROLX  ;save bit 4 for multicolor text or bitmap flag 
+ sta SCROLX  ;save bit 4 for multicolor text or bitmap flag
  jsr CHRIN   ;get SCROLY
  sta SCROLY     ;save bit 5 for bitmap mode flag
  jsr CHRIN
@@ -6253,7 +6164,7 @@ chk2d
  bne copy2d    ;if both vectors point at same mem loc then no vars defined
  cpy $30
  bne copy2d
-evar jmp r6510 ;switch LORAM back to LOROM
+evar jmp memnorm ;switch LORAM back to LOROM
 copy2d
  sta $fb
  sty $fc
@@ -6422,7 +6333,7 @@ dumpbitmap2
  ldy #5   ;secondary param - binary graphic 
  jsr openprint
 ;send printer control codes
-okbm lda #27
+ lda #27
  jsr CHROUT
  lda #$41
  jsr CHROUT
@@ -6433,9 +6344,9 @@ okbm lda #27
  sta $fb
  lda #$fe
  sta $fc
- lda SCROLY
- and #%11101111 ;turn off bitmap mode
- sta SCROLY
+; lda SCROLY
+; and #%11101111 ;turn off screen
+; sta SCROLY
  lda #$28
  sta $fe
  lda #15
@@ -6523,9 +6434,10 @@ posnum lda $fb
 tcic dec $fe
  beq aldone
  jmp nxtbit
-aldone lda SCROLY
- ora #%00010000
- sta SCROLY
+aldone
+; lda SCROLY
+; ora #%00010000   ;turn screen back on
+; sta SCROLY
  lda #27
  jsr CHROUT
  lda #50
@@ -6560,7 +6472,7 @@ wrapup lda paintbuf1,y
  sta ($fd),y
  dey 
  bpl wrapup
- jmp r6510    ;switch LORAM back to LOROM
+ jmp memnorm  ;switch LORAM back to LOROM
 nowrapup lda #32
  sta ($fb),y
  lda COLOR    ;current cursor foreground color
@@ -6584,15 +6496,7 @@ cpyup lda ($ac),y
  sta $fe
  jmp scroll0+3
 ;scroll down
-scroll1 ldy $bf
- beq notimes40
- lda $fb
- ldx $fc
- jsr times40
- sta $fb
- stx $fc
-notimes40
- jsr addoffset
+scroll1 jsr calcptr
  jsr wrapit
 nxtdwn ldy $be
  lda $fb
@@ -6649,7 +6553,7 @@ cpyleft iny
  jsr scrollh
  dec $bf
  bpl scroll2
- jmp r6510 ;switch LORAM back to LOROM
+ jmp memnorm ;switch LORAM back to LOROM
 ;scroll right
 scroll3 ldy $be
  lda ($fb),y
@@ -6706,6 +6610,25 @@ cpybuf lda ($fb),y
  sta paintbuf2,y ;color mem buffer
  dey 
  bpl cpybuf
+ rts
+;calculate text and color RAM mem pointers
+calcptr
+ ldy $bf     ;line number
+ lda $ecf0,y ;video matrix lowbyte at line y
+ clc
+ adc $fb     ;add offset to current ptr
+ sta $fb     ;lobyte ptr to text RAM
+ sta $fd     ;lobyte ptr to color RAM
+ lda btab,y  ;video maxtrix hibyte offset
+ adc HIBASE  ;video matrix hibyte
+ sta $fc     ;hibyte ptr to text RAM
+;determine hibyte of color RAM
+ lda #$d8    ;hibyte of color RAM first byte
+ sec         ;remove text ptr hibyte offset
+ sbc HIBASE  ;since already included in text ptr
+ clc         ;add text ptr hibyte offset
+ adc $fc     ;offset from current text ptr hibyte
+ sta $fe     ;apply hibyte of color RAM ptr
  rts
 ;
 nextn2
