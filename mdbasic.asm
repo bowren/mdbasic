@@ -341,7 +341,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.09.11"
+.text "mdbasic 22.09.12"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -3287,7 +3287,7 @@ sizes
  jsr getval
  cmp #32      ;max size is 31
  bcs illqty8
- sta $57 ;user specified x size
+ sta $57      ;user specified x size
  jsr comchk
  bne ne
  jsr getval
@@ -3359,22 +3359,21 @@ illqty3 jmp FCERR
 ; SCROLL x1, y1 TO x2, y2, [direction 0-3], [wrap 0-1]
 scroll
  jsr getcoords
+ lda #0
+ sta $ff         ;default direction 0=up
+ sta $02         ;default wrap 0=no wrap
  jsr comchk
- beq okscroll1
- lda #0          ;default direction 0=up
- pha             ;default wrap 0=no wrap
- beq okscroll2   ;always branches
-okscroll1
+ bne okscroll
  jsr getval      ;direction 0-3
  cmp #4
  bcs illqty3
- pha 
+ sta $ff
  jsr comchk
- bne okscroll3
+ bne okscroll
  jsr getbool     ;wrap: 0=no, 1=yes
-okscroll2
- sta $ff         ;wrap param temp storage
-okscroll3 pla    ;what was the direction?
+ sta $02         ;wrap param temp var
+okscroll
+ lda $ff         ;direction temp var
  asl             ;convert to 2 byte offset
  tay
  lda scrolls+1,y ;scroll direction vector hibyte
@@ -6464,7 +6463,7 @@ scroll0 jsr wrapit
  sta $af
  dec $bf
  bpl cpyup
- lda $ff      ;wrap?
+ lda $02      ;wrap?
  beq nowrapup
 wrapup lda paintbuf1,y
  sta ($fb),y
@@ -6515,7 +6514,7 @@ nxtdwn ldy $be
  sta $af
  dec $bf
  bpl cpydwn
- lda $ff
+ lda $02  ;wrap?
  beq nowrapup
  bne wrapup
 cpydwn lda ($ac),y
@@ -6576,12 +6575,12 @@ cpyright dey
  bmi scroll3-3
 ;--scroll subs--
 scrollh lda paintbuf1
- ldx $ff     ;wrap?
+ ldx $02     ;wrap?
  bne shiftchar
  lda #32     ;no wrap, use space
 shiftchar sta ($fb),y
  lda paintbuf2
- ldx $ff
+ ldx $02     ;wrap?
  bne shiftcolor
  lda COLOR   ;current foreground color for text
 shiftcolor sta ($fd),y
