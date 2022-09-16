@@ -341,7 +341,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.09.12"
+.text "mdbasic 22.09.16"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -2896,79 +2896,23 @@ drawloop
  bne chkplottype
  jsr CHRGET
  jsr getc1
- jmp nxtmov2
+ jmp nxtmov
 chkplottype cmp #"p"
  bne godraw
  jsr getval15_  ;actually should be 0-3
  sta lastplott
- jmp nxtmov2
+ jmp nxtmov
 godraw
  pha
  jsr dbyval
- stx $bb
- sty $bc
  pla
- cmp #"u"
- bne chkdwn
-udraw jsr drawup
- jsr dodraw
- jmp udraw
-chkdwn cmp #"d"
- bne chkleft
-ddraw jsr drawdwn
- jsr dodraw
- jmp ddraw
-chkleft cmp #"l"
- bne chkright
-ldraw jsr drawleft
- jsr dodraw
- jmp ldraw
-chkright cmp #"r"
- bne chkupleft
-rdraw jsr drawright
- jsr dodraw
- jmp rdraw
-chkupleft cmp #"e"
- bne chkupright
-edraw jsr drawup
- jsr drawleft
- jsr dodraw
- jmp edraw
-chkupright cmp #"f"
- bne chkdwnleft
-fdraw jsr drawup
- jsr drawright
- jsr dodraw
- jmp fdraw
-chkdwnleft cmp #"g"
- bne chkdwnright
-gdraw jsr drawdwn
- jsr drawleft
- jsr dodraw
- jmp gdraw
-chkdwnright cmp #"h"
- bne baddraw
-hdraw jsr drawdwn
- jsr drawright
- jsr dodraw
- jmp hdraw
-baddraw
- jmp SNERR
-dodraw
- lda lastplott
- cmp #3
- bcs noplot
- jsr plotit
-noplot
- dec $bb       ;decrement draw length
- bne dodraw2
- dec $bc
- bmi nxtmov    ;draw length complete
-dodraw2 rts
+;
+ dec $01
+ jsr godraww
+ inc $01
+ bcs nxtmov    ;draw cmd was valid
+ jmp FCERR     ;syntax error TODO: BAD DRAW STRING??
 nxtmov
- pla           ;cancel jsr
- pla 
-nxtmov2
  jsr comchk    ;another draw cmd?
  beq drawloop2
  pla
@@ -2979,58 +2923,7 @@ nxtmov2
 drawloop2
  jsr CHRGET
  jmp drawloop
-drawup
- ldx $fd
- dex
- cpx #200
- bcc setx
- ldx #199      ;wrap from top to bottom
-setx stx $fd
- rts
-drawdwn
- ldx $fd
- inx
- cpx #200
- bcc setx
- ldx #0
- beq setx ;always branches
-drawleft
- lda SCROLX
- and #%00010000 ;check if multicolor mode on or off
- beq dlhires
- jsr dlhires
-dlhires lda $fb
- bne nodece
- dec $fc
- bne dlwrap
-nodece dec $fb
- rts
-dlwrap
- lda #63
- sta $fb
- lda #1
- sta $fc
- rts
-drawright
- lda SCROLX
- and #%00010000 ;check if multicolor mode on or off
- beq drhires
- jsr drhires
-drhires
- inc $fb
- bne drhi2
- inc $fc 
-drhi2 lda $fc
- beq drdone
- lda $fb
- cmp #64
- bcc drdone
-drwrap
- ldx #0
- stx $fc
- stx $fb 
-drdone rts
-
+;
 ;*******************
 ; PLOT x,y, type, color
 plot jsr getpnt
@@ -6445,8 +6338,8 @@ aldone
 ;
 ;***********************
 ;scroll up
-scroll0 jsr wrapit
- ldy $be
+scroll0
+ jsr wrapit
  lda $fb
  clc 
  adc #40
@@ -6461,24 +6354,26 @@ scroll0 jsr wrapit
  lda $fe
  adc #0
  sta $af
+;
+ ldy $be       ;num bytes to move 
  dec $bf
  bpl cpyup
- lda $02      ;wrap?
- beq nowrapup
-wrapup lda paintbuf1,y
- sta ($fb),y
- lda paintbuf2,y
- sta ($fd),y
- dey 
+wrapup
+ lda $02       ;wrap?
+ bne gowrapup
+ ldx COLOR     ;current foreground color
+ lda #32       ;space char
+ bne sftup     ;always branches
+gowrapup
+ lda paintbuf1,y
+ ldx paintbuf2,y
+sftup
+ sta ($fb),y   ;char
+ txa
+ sta ($fd),y   ;color
+ dey
  bpl wrapup
  jmp memnorm  ;switch LORAM back to LOROM
-nowrapup lda #32
- sta ($fb),y
- lda COLOR    ;current cursor foreground color
- sta ($fd),y
- dey 
- bpl nowrapup
- bmi nowrapup-3
 cpyup lda ($ac),y
  sta ($fb),y
  lda ($ae),y
@@ -6514,9 +6409,7 @@ nxtdwn ldy $be
  sta $af
  dec $bf
  bpl cpydwn
- lda $02  ;wrap?
- beq nowrapup
- bne wrapup
+ bmi wrapup
 cpydwn lda ($ac),y
  sta ($fb),y
  lda ($ae),y
@@ -6574,35 +6467,41 @@ cpyright dey
  bpl scroll3
  bmi scroll3-3
 ;--scroll subs--
-scrollh lda paintbuf1
- ldx $02     ;wrap?
- bne shiftchar
- lda #32     ;no wrap, use space
-shiftchar sta ($fb),y
- lda paintbuf2
- ldx $02     ;wrap?
- bne shiftcolor
- lda COLOR   ;current foreground color for text
-shiftcolor sta ($fd),y
+;--------------
+scrollh
+ lda $02       ;wrap?
+ bne gowrap
+ ldx COLOR     ;current foreground color
+ lda #32       ;space char
+ bne shiftchar ;always branches
+gowrap
+ lda paintbuf1 ;saved char
+ ldx paintbuf2 ;saved color
+shiftchar
+ sta ($fb),y   ;char
+ txa
+ sta ($fd),y   ;color
 ;add 40 to text ptr
  lda $fb
  clc
  adc #40
  sta $fb
+ sta $fd
  lda $fc
  adc #0
  sta $fc
 ;add 40 to color ptr
- lda $fd
- clc 
- adc #40
- sta $fd
- lda $fe
- adc #0
+ sec
+ sbc HIBASE
+ clc
+ adc #$d8
  sta $fe
  rts 
 ;--------------
-wrapit ldy $be
+wrapit
+ lda $02
+ beq calcptr-1
+ ldy $be
 cpybuf lda ($fb),y
  sta paintbuf1,y ;char mem buffer
  lda ($fd),y
@@ -6842,31 +6741,226 @@ octend
  ldy temp2
 octdone rts
 ;
+godraww
+ stx $bb    ;draw length
+ sty $bc
+;
+ cmp #"u"
+ bne chkdwn
+udraw jsr drawup
+ jsr dodraw
+ bcc udraw
+ bcs nxtmove
+chkdwn cmp #"d"
+ bne chkleft
+ddraw jsr drawdwn
+ jsr dodraw
+ bcc ddraw
+ bcs nxtmove
+chkleft cmp #"l"
+ bne chkright
+ldraw jsr drawleft
+ jsr dodraw
+ bcc ldraw
+ bcs nxtmove
+chkright cmp #"r"
+ bne chkupleft
+rdraw jsr drawright
+ jsr dodraw
+ bcc rdraw
+ bcs nxtmove
+chkupleft cmp #"e"
+ bne chkupright
+edraw jsr drawup
+ jsr drawleft
+ jsr dodraw
+ bcc edraw
+ bcs nxtmove
+chkupright cmp #"f"
+ bne chkdwnleft
+fdraw jsr drawup
+ jsr drawright
+ jsr dodraw
+ bcc fdraw
+ bcs nxtmove
+chkdwnleft cmp #"g"
+ bne chkdwnright
+gdraw jsr drawdwn
+ jsr drawleft
+ jsr dodraw
+ bcc gdraw
+ bcs nxtmove
+chkdwnright cmp #"h"
+ bne baddraw
+hdraw jsr drawdwn
+ jsr drawright
+ jsr dodraw
+ bcc hdraw
+ bcs nxtmove
+baddraw
+ clc           ;carry flag used as a flag to
+nxtmove        ;indicate draw cmd not recognized
+ rts           ;carry clear=bad, carry set=good
+;
+dodraw
+ lda lastplott
+ cmp #3
+ bcs noplot
+ jsr setdot
+noplot
+ dec $bb       ;decrement draw length
+ bne dodraw2
+ dec $bc
+ sec           ;flag for done
+ bmi dodraw2+1 ;draw length complete
+dodraw2 clc    ;flag for more
+ rts
+;
+drawup
+ ldx $fd
+ dex
+ cpx #200
+ bcc setx
+ ldx #199      ;wrap from top to bottom
+setx stx $fd
+ rts
+drawdwn
+ ldx $fd
+ inx
+ cpx #200
+ bcc setx
+ ldx #0
+ beq setx ;always branches
+drawleft
+ lda SCROLX
+ and #%00010000 ;check if multicolor mode on or off
+ beq dlhires
+ jsr dlhires
+dlhires lda $fb
+ bne nodece
+ dec $fc
+ bne dlwrap
+nodece dec $fb
+ rts
+dlwrap
+ lda #63
+ sta $fb
+ lda #1
+ sta $fc
+ rts
+drawright
+ lda SCROLX
+ and #%00010000 ;check if multicolor mode on or off
+ beq drhires
+ jsr drhires
+drhires
+ inc $fb
+ bne drhi2
+ inc $fc 
+drhi2 lda $fc
+ beq drdone
+ lda $fb
+ cmp #64
+ bcc drdone
+drwrap
+ ldx #0
+ stx $fc
+ stx $fb 
+drdone rts
+;
 bitfil
+ ldy #$01  ;signed y inc value
+;calc number of lines to fill
  lda lastploty
  sec
- sbc $fd
- bcs filines
- eor #$ff
-filines clc
- adc #$01
- sta $02
- lda $fd
- sta lastploty 
-linefil
- lda $fb
- sta $14
+ sbc $fd     ;calc abs(y1-y2)
+ bcs filines ;y1 <= y2
+ eor #$ff    ;y1 > y2 so use 2's compliment
+ clc         ;to negate
+ adc #1
+ dey
+ dey
+filines
+ sty $0a     ;fill up $ff or down $01
+ sta $02     ;num lines to fill
+;calc line width and fill left or right
+ lda #0
+ sta $ff
  lda $fc
- sta $15
- jsr linedraw
- lda $14
- sta $fb
- lda $15
- sta $fc
+ cmp lastplotx+1
+ beq hbeq    ;hibyte of x1 = x2
+ bcc x1ltx2  ;hibyte of x1 < x2
+;hibyte of x1 > x2
+ lda $fb
+ sec
+ sbc lastplotx
+ tax
+ lda $fc
+ sbc lastplotx+1
+ tay
+ inc $ff     ;draw left
+ jmp setwidth
+hbeq         ;hibytes equal
+ lda $fb
+ sec
+ sbc lastplotx
+ bcc x1ltx2
+ inc $ff     ;draw left
+ tax
+ ldy #0
+ beq setwidth
+x1ltx2       ;x1 < x2
+ lda lastplotx
+ sec
+ sbc $fb
+ tax
+ lda lastplotx+1
+ sbc $fc
+ tay
 ;
- inc $fd
- inc lastploty
+setwidth
+ stx $bb
+ stx $14
+ sty $bc
+ sty $15
+;
+ lda $fb
+ sta $07
+ lda $fc
+ sta $08
+linefil
+ jsr setdot
+ lda $ff
+ beq fillright
+fillleft
+ jsr drawleft
+ jsr dodraw
+ bcc fillleft
+ bcs filldone
+fillright 
+ jsr drawright
+ jsr dodraw
+ bcc fillright
+;restore x coordinate
+filldone
+ lda $08
+ sta $fc
+ lda $07
+ sta $fb
+;inc to next line
+ lda $fd  ;current y
+ clc      ;use signed value
+ adc $0a  ;to inc or dec value
+ sta $fd
+;reset draw width
+ lda $14
+ sta $bb
+ lda $15
+ sta $bc
+;
  dec $02
- bne linefil
+ lda $02
+ cmp #0
+ bpl linefil
  rts
 ;end
