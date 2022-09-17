@@ -341,7 +341,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.09.16"
+.text "mdbasic 22.09.17"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -2899,7 +2899,9 @@ drawloop
  jmp nxtmov
 chkplottype cmp #"p"
  bne godraw
- jsr getval15_  ;actually should be 0-3
+ jsr getval
+ cmp #4         ;0-3 only
+ bcs baddraw
  sta lastplott
  jmp nxtmov
 godraw
@@ -2911,7 +2913,7 @@ godraw
  jsr godraww
  inc $01
  bcs nxtmov    ;draw cmd was valid
- jmp FCERR     ;syntax error TODO: BAD DRAW STRING??
+baddraw jmp FCERR  ;syntax error in draw string
 nxtmov
  jsr comchk    ;another draw cmd?
  beq drawloop2
@@ -3030,14 +3032,14 @@ swappoint
  dex
  bpl swappoint+2
  rts
-backuppoint   ;make temp copy of last x,y coords, plot type used by graphics cmds
+backuppoint    ;save plot coordinate
  ldy #2
  lda lastplotx,y
  sta lastplotx2,y
  dey
  bpl backuppoint+2
  rts
-restorepoint  ;temp copy last plot coords and plot type used by graphics cmds
+restorepoint  ;restore last plot coordinate
  ldy #2
  lda lastplotx2,y
  sta lastplotx,y
@@ -4348,7 +4350,7 @@ gettypes jsr CHRGET ;position to next char
  cmp #","
  beq noparam    ;another comma found so skip plot type param
  jsr skip73     ;get plot type value
- cmp #3         ;plot type 0=erase, 1=plot, 2=toggle
+ cmp #4         ;plot type 0=erase, 1=plot, 2=toggle, 3=none (locate only)
  bcc goodtype
 badtype jmp FCERR ;illegal quantity error
 goodtype sta lastplott
@@ -4406,8 +4408,13 @@ printer lda ($22),y
 ;* Global Constant Storage
 ;********************************************************************
 
-;CSR mem locs $d3=logical column, $d6=physical line, $cc=blink enabled, $d5=max columns for current line (39 or 79), $ce=char under csr (when blinking)
-csrbytes .byte $d3,$d6,$cc,$d5,$ce
+;CSR function memory locations
+csrbytes
+.byte $d3 ;logical column
+.byte $d6 ;physical line
+.byte $cc ;blink enabled
+.byte $d5 ;max columns for current line (39 or 79)
+.byte $ce ;char under csr (when blinking)
 
 ;scroll direction vectors up,down,left,right
 scrolls .rta scroll0,scroll1,scroll2,scroll3
@@ -4418,9 +4425,10 @@ filestr .null " files."
 ;table for calculating 2^n where n=0-7
 bitweights .byte 1,2,4,8,16,32,64,128
 ;
-;token list that use line numbers that need to be renumbered when using renum
-; goto,gosub,then,else,resume,trace,delete,run,restore
-gotok .byte TOKEN_GOTO,$8d,TOKEN_THEN,TOKEN_ELSE,TOKEN_RESUME,TOKEN_TRACE,TOKEN_DELETE,TOKEN_RUN,TOKEN_RESTORE
+;9 tokens use line numbers that need to be renumbered when using renum
+gotok
+.byte TOKEN_GOTO,TOKEN_GOSUB,TOKEN_THEN,TOKEN_ELSE,TOKEN_RESUME
+.byte TOKEN_TRACE,TOKEN_DELETE,TOKEN_RUN,TOKEN_RESTORE
 ;
 ;VOICE command use VOICE voc#, frequency
 ;REG_VAL=FREQUENCY/(CLOCK/16777216)
@@ -4888,11 +4896,22 @@ setdot jsr ydiv8
  and #%11111101 ;bit1 0=HIRAM
  sei            ;disable IRQ since kernal HIROM is switching to HIRAM
  sta $01
- lda lastplott  ;plot type 0=off, 1=on, 2=flip
+ lda lastplott  ;plot type 00=off, 01=on, 10=flip, 11=none
  beq dotoff
- cmp #1
+ lsr
  beq doton
- bne flipit
+ bcc flipit
+;no dot plot (locate pencil)
+ pla
+ sta $01
+ cli
+ rts
+flipit lda ptab3,x
+ eor #$ff
+ and ($c3),y
+ ora ptab2,x
+ eor ($c3),y
+ jmp colorb
 dotoff lda ptab2,x  ;read ptab2 and ptab3 in LORAM
  eor #$ff
  and ($c3),y        ;read bitmap in HIRAM
@@ -4900,12 +4919,6 @@ dotoff lda ptab2,x  ;read ptab2 and ptab3 in LORAM
 doton lda ($c3),y
  and ptab3,x
  ora ptab2,x
- jmp colorb
-flipit lda ptab3,x
- eor #$ff
- and ($c3),y
- ora ptab2,x
- eor ($c3),y
 colorb sta ($c3),y ;write byte with bit pattern targeting the one bit in hires or 2 bits in mc mode
  pla
  sta $01    ;restore Kernal HIROM ($e000-$ffff)
@@ -5059,7 +5072,7 @@ dec5b dec $5b
  bne noinc51
  inc $51
 noinc51
- jsr getpoint ;recall last plotted dot x,y and type
+ jsr getpoint ;recall last plot coordinates
  dec $52
  beq textdone
  jmp nextchar
@@ -6791,23 +6804,19 @@ gdraw jsr drawdwn
  bcc gdraw
  bcs nxtmove
 chkdwnright cmp #"h"
- bne baddraw
+ bne baddraww
 hdraw jsr drawdwn
  jsr drawright
  jsr dodraw
  bcc hdraw
  bcs nxtmove
-baddraw
+baddraww
  clc           ;carry flag used as a flag to
 nxtmove        ;indicate draw cmd not recognized
  rts           ;carry clear=bad, carry set=good
 ;
 dodraw
- lda lastplott
- cmp #3
- bcs noplot
  jsr setdot
-noplot
  dec $bb       ;decrement draw length
  bne dodraw2
  dec $bc
@@ -6884,38 +6893,26 @@ filines
  sty $0a     ;fill up $ff or down $01
  sta $02     ;num lines to fill
 ;calc line width and fill left or right
- lda #0
- sta $ff
- lda $fc
- cmp lastplotx+1
- beq hbeq    ;hibyte of x1 = x2
- bcc x1ltx2  ;hibyte of x1 < x2
-;hibyte of x1 > x2
- lda $fb
- sec
- sbc lastplotx
- tax
- lda $fc
- sbc lastplotx+1
- tay
- inc $ff     ;draw left
- jmp setwidth
-hbeq         ;hibytes equal
- lda $fb
- sec
- sbc lastplotx
- bcc x1ltx2
- inc $ff     ;draw left
- tax
- ldy #0
- beq setwidth
-x1ltx2       ;x1 < x2
+ lda #0      ;0-=draw right,1=draw left
+ sta $ff     ;horizontal fill direction
  lda lastplotx
  sec
  sbc $fb
  tax
  lda lastplotx+1
  sbc $fc
+ tay
+ bpl setwidth
+;y1 > y2 so negate result & reverse draw direction
+ inc $ff     ;draw left
+ txa
+ eor #$ff    ;16-bit 2's compliment
+ clc
+ adc #1
+ tax
+ tya
+ eor #$ff
+ adc #0
  tay
 ;
 setwidth
