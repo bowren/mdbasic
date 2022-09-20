@@ -126,7 +126,6 @@
 
 				<!-- 6502/6510 Opcodes -->
 				<context id="opcodes_simple" style-ref="opcode">
-					<prefix>([\s]*)|([\w])</prefix>
 					<keyword>adc</keyword>
 					<keyword>and</keyword>
 					<keyword>asl</keyword>
