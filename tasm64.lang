@@ -201,9 +201,13 @@
 					<prefix>[\s]*\.</prefix>
 					<keyword>block</keyword>
 					<keyword>bend</keyword>
+					<keyword>bounce</keyword>
+					<keyword>end</keyword>
 					<keyword>endif</keyword>
 					<keyword>endm</keyword>
+					<keyword>eor</keyword>
 					<keyword>goto</keyword>
+					<keyword>hidemac</keyword>
 					<keyword>if</keyword>
 					<keyword>ifdef</keyword>
 					<keyword>ifeq</keyword>
@@ -214,7 +218,11 @@
 					<keyword>include</keyword>
 					<keyword>lbl</keyword>
 					<keyword>macro</keyword>
+					<keyword>offs</keyword>
+					<keyword>proff</keyword>
+					<keyword>pron</keyword>
 					<keyword>segment</keyword>
+					<keyword>showmac</keyword>
 					<keyword>var</keyword>
 				</context>
 			</include>
