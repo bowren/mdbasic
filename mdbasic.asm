@@ -341,7 +341,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.09.17"
+.text "mdbasic 22.09.20"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -2605,8 +2605,22 @@ gtdata sty $02
 ;
 ;*******************
 ;
+bitmapclr
+ lda #$e0  ;bitmap located at $e000
+ sta $63
+ lda #$00
+ sta $62
+ ldy #0
+clrbyt sta ($62),y
+ iny
+ bne clrbyt
+ inc $63
+ bne clrbyt
+ rts
+;
 ;BITMAP CLR (does not switch to bitmap mode)
 ;BITMAP FILL x1,y1 TO x2,y2, [plotType], [color]
+;BITMAP OFF
 ;BITMAP [colorMode], [bkgndColor]
 ;colorMode 0=hires, 1=mc (multicolor); bkgndColor (0-15) background color
 ;bkgndColor is applied based on colorMode:
@@ -2619,7 +2633,11 @@ gtdata sty $02
 ;
 bitmap
  cmp #TOKEN_CLR
- beq bitclr
+ beq bmclr
+ cmp #TOKEN_OFF
+ beq bmoff
+ cmp #TOKEN_ON
+ beq bmon
  cmp #TOKEN_FILL
  bne bitscr
 ; BITMAP FILL x1,y1 TO x2, y2, plotType, color
@@ -2631,18 +2649,11 @@ bitmap
  jsr bitfil ;perform FILL on rect; put code under ROM
  inc $01
  rts
-;
-bitclr lda #$e0     ;bitmap located at $e000
- sta $bf
- lda #$00
- sta $be
-nxpart ldy #0
- lda #0             ;clear bitmap page
-clrbyt sta ($be),y
- iny
- bne clrbyt
- inc $bf
- bne nxpart
+bmon jsr bitmapon
+ bne bmclr+3        ;always branches
+bmoff jsr norm
+ bne bmclr+3        ;always branches
+bmclr jsr bitmapclr
  jmp CHRGET
 bitscr jsr getbool2 ;colorMode 0 or 1
  beq hiresmode
@@ -3096,16 +3107,16 @@ paint jsr getpnt
 ; options are represented in 8 bits grouped by nibbles:
 ; bits0-3: quadrant visible 0=no,1=yes, bits4-7: radius line visible 0=no,1=yes
 circle
- jsr getpnt  ;center point x,y
- jsr ckcom2  ;throw misop if current char is not comma
- jsr getval  ;x radius size
- bmi illqty8 ;max x radius 127
+ jsr getpnt   ;center point x,y
+ jsr ckcom2   ;throw misop if current char is not comma
+ jsr getval   ;x radius size
+ bmi illqty8  ;max x radius 127
  sta $35
  lda SCROLX
  and #%00010000 ;check if multicolor mode on or off
- sta $29  ;0=hires mode, otherwise multicolor mode
+ sta $29     ;0=hires mode, otherwise multicolor mode
  beq hirescir
- asl $35  ;mc mode needs 2x size
+ asl $35     ;mc mode needs 2x size
  bmi illqty8 ;mc mode limit is 63
 hirescir
  jsr ckcom2  ;throw misop if current char is not comma
@@ -3162,21 +3173,25 @@ illqty8 jmp FCERR     ;illegal quantity error
 ; TEXT x,y "string", [charset], [sizeX], [sizeY], [plotType], [color]
 text
  beq norm
- jsr getpnt  ;get plot x,y
- jsr ckcom2  ;raise misop err if current char is not comma
- jsr getstr  ;get text string returning ptr in vector ($50)
- lda #1      ;default size value
- sta $57     ;temp var of x size
- sta $58     ;temp var of y size
- lda #$d0    ;assume charset 0 at $d000
- sta $26     ;charset temp var
+ jsr getpnt   ;get plot x,y
+ jsr ckcom2   ;raise misop err if current char is not comma
+ jsr getstr   ;get text string returning ptr in vector ($50)
+ lda #1       ;default size value
+ sta $57      ;temp var of x size
+ sta $58      ;temp var of y size
+ lda #$d0     ;assume charset 0 at $d000
+ sta $26      ;charset hibyte temp var
  jsr comchk
  bne ne
- jsr getval   ;charset 0 or 1
- beq sizes
- lda #$d8     ;charset 1 at $d800
- sta $26
-sizes
+ jsr getval   ;charset 0-3
+ cmp #4       ;0,1 uppercase 2,3 lower case
+ bcs illqty8
+ asl          ;calc hibyte offset
+ asl          ;0=0, 1=4, 2=8, 3=12
+ clc
+ adc $26
+ sta $26      ;charset 0=$d000,1=$d400,2=$d800,3=$dc00
+;sizes
  jsr comchk
  bne ne 
  jsr getval
@@ -3271,11 +3286,11 @@ okscroll
  lda $ff         ;direction temp var
  asl             ;convert to 2 byte offset
  tay
+ dec $01         ;enable LORAM
  lda scrolls+1,y ;scroll direction vector hibyte
  pha
  lda scrolls,y   ;scroll direction vector lobyte
  pha
- dec $01
  rts
 ;-----------
 badscroll jmp hellno ;illegal coordinate error
@@ -4204,7 +4219,7 @@ nxt7 clc
 t7done rts   ;result in accumulator
 ;
 ;*******************
-;multiply the value in Y reg by 8 returning word in $be,$bf
+;multiply the value in accumulator by 8 returning word in $be,$bf
 times8
  pha
  lda #0
@@ -4416,9 +4431,6 @@ csrbytes
 .byte $d5 ;max columns for current line (39 or 79)
 .byte $ce ;char under csr (when blinking)
 
-;scroll direction vectors up,down,left,right
-scrolls .rta scroll0,scroll1,scroll2,scroll3
-
 nolin .null "65535"
 filestr .null " files."
 
@@ -4566,16 +4578,33 @@ paintbuf1 .repeat 256,0
 paintbuf2 .repeat 256,0
 paintbuf3 .repeat 256,0
 
-;table for printing a bitmap image
-bmdt
-.byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
-.byte $f2,$1a,$02,$12,$97,$20,$20,$20,$f2,$1a,$03,$20,$20,$20,$f2,$1b
-.byte $04,$20,$f2,$09,$05,$a1,$20,$f2,$17,$05,$20,$20,$20,$20,$20,$20
-.byte $20,$20,$20,$f2,$08,$06,$92,$a2,$a2,$12,$bc,$92,$a2,$bb,$f2,$1b
-.byte $06,$12,$20,$f2,$0a,$07,$92,$a1,$f2,$1b,$07,$12,$20,$f2,$09,$08
-.byte $a1,$bb,$f2,$1a,$08,$20,$20,$20,$f2,$09,$09,$be,$a1,$92,$bb,$f2
-.byte $1a,$09,$12,$20,$92,$20,$12,$20,$f2,$1a,$0a,$20,$92,$20,$12,$20
-.byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
+;table for converting ascii to screen code
+;zero value indicates ctrl or non-displayable char
+;except for ascii 64 which is screen code 0
+;codes 192-223 same as 96-127
+;codes 224-254 same as 160-190
+;code  255 same as 126
+asc2scr
+.repeat 32,0
+.byte 32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63
+.byte 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,64,65,66
+.byte 67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95
+.repeat 32,0
+.byte 32,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117
+.byte 118,119,120,121,122,123,124,125,126,127,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78
+.byte 79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,32,97,98,99,100,101,102,103,104,105
+.byte 106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,94
+
+ascctrl
+.byte 5,13,14,17,18,19,20,28
+.byte 29,30,31,129,141,142,144,145
+.byte 146,147,149,150,151,152,153,154
+.byte 155,156,157,158,159
+ascctlfn
+.word txtwhi,txtcr,txtlc,txtdwn,txtrvson,txthome,txtbs,txtred
+.word txtright,txtgreen,txtblue,txtorange,txtcr,txtuc,txtblk,txtcsrup
+.word txtrvsoff,txtbitclr,txtbrown,txtlred,txtgray1,txtgray2,txtlgreen,txtlblue
+.word txtgray3,txtpurple,txtleft,txtyellow,txtcyan
 
 ;tables for plotting dots on a bitmap per line 0-24
 lbtab .byte 0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0
@@ -4592,6 +4621,21 @@ ptab3
 .byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
 .byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
 ;
+;scroll direction vectors up,down,left,right
+scrolls .rta scroll0,scroll1,scroll2,scroll3
+;
+.repeat 47,0 ;***unused/reserved bytes to fit to page boundary***
+;
+;table for printing a bitmap screen
+bmdt
+.byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
+.byte $f2,$1a,$02,$12,$97,$20,$20,$20,$f2,$1a,$03,$20,$20,$20,$f2,$1b
+.byte $04,$20,$f2,$09,$05,$a1,$20,$f2,$17,$05,$20,$20,$20,$20,$20,$20
+.byte $20,$20,$20,$f2,$08,$06,$92,$a2,$a2,$12,$bc,$92,$a2,$bb,$f2,$1b
+.byte $06,$12,$20,$f2,$0a,$07,$92,$a1,$f2,$1b,$07,$12,$20,$f2,$09,$08
+.byte $a1,$bb,$f2,$1a,$08,$20,$20,$20,$f2,$09,$09,$be,$a1,$92,$bb,$f2
+.byte $1a,$09,$12,$20,$92,$20,$12,$20,$f2,$1a,$0a,$20,$92,$20,$12,$20
+.byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
 ;
 ;KEY LIST continued while LOROM is switched to LORAM
 keyy stx $fb
@@ -4981,62 +5025,192 @@ ydiv8 lda $fd  ;y coordinate
 ydiv8x ldy #0
  rts
 ;
-;**************************
-texter lda $58  ;y size
- beq texter-1
- lda $57        ;x size
- beq texter-1
-nextchar lda #0
- sta $59        ;index variable for current byte of dot data in char
-readstr ldy #0
- lda ($50),y    ;get character to display on bitmap
-;convert ascii to screen code
- cmp #"a"
- bcc lessthana
- cmp #96
- bcc goodalpha
- cmp #128
- bcs bit7set
-minus128 sec 
- sbc #128
- jmp lessthana
-bit7set cmp #$c0
- bcs minus128
-goodalpha sec 
- sbc #$40
-;determine mem ptr of dot data
-lessthana
- jsr times8     ;multiply A reg value times 8
- lda $26        ;hibyte ptr to dot data
- clc            ;charset 0 at $d000, charset 1 at $d800
- adc $bf
+txtsetcol
+ sta $61
+ lda mapcolc1c2  ;hi nibble is dot color
+ and #%00001111  ;erase hi nibble
+ ora $61         ;temp storage of color
+ sta mapcolc1c2  ;update global variable for colors
+ rts
+txtblk
+ lda #%00000000
+ beq txtsetcol 
+txtwhi
+ lda #%00010000
+ bne txtsetcol
+txtred
+ lda #%00100000
+ bne txtsetcol
+txtcyan
+ lda #%00110000
+ bne txtsetcol
+txtpurple
+ lda #%01000000
+ bne txtsetcol
+txtgreen
+ lda #%01010000
+ bne txtsetcol
+txtblue
+ lda #%01100000
+ bne txtsetcol
+txtyellow
+ lda #%01110000
+ bne txtsetcol
+txtorange
+ lda #%10000000
+ bne txtsetcol
+txtbrown
+ lda #%10010000
+ bne txtsetcol
+txtlred
+ lda #%10100000
+ bne txtsetcol
+txtgray1
+ lda #%10110000
+ bne txtsetcol
+txtgray2
+ lda #%11000000
+ bne txtsetcol
+txtlgreen
+ lda #%11010000
+ bne txtsetcol
+txtlblue
+ lda #%11100000
+ bne txtsetcol
+txtgray3
+ lda #%11110000
+ bne txtsetcol
+;
+txtcr
+ lda #0
+ sta lastplotx
+ sta lastplotx+1
+txtdwn
+ lda $58  ;text height scale
+ asl
+ asl
+ asl
+ clc
+ adc lastploty
+ cmp #200
+ bcc oktxty
+ bcs txtright-1
+txtcsrup
+ lda $58  ;text height scale
+ asl
+ asl
+ asl
+ sec
+ sbc lastploty
+ bpl oktxty
+ rts
+;
+txtbitclr
+ jsr bitmapclr
+txthome
+ lda #0
+ sta lastplotx
+ sta lastplotx+1
+oktxty
+ sta lastploty
+ rts
+;
+txtright
+ lda $57     ;char scale width
+ asl
+ asl
+ asl
+ clc
+ adc lastplotx
+ tax
+ lda lastplotx+1
+ adc #0
+ beq oktxtx
+ cpx #64
+ bcc oktxtx
+ rts
+txtleft
+ lda $57     ;char width scale
+ asl
+ asl
+ asl
+ sta $61     ;temp storage
+ lda lastplotx
+ sec
+ sbc $61
+ tax
+ lda lastplotx+1 
+ sbc #0
+ clc         ;flag indicating x not set
+ bmi txtbs-1 ;not enough space so abort
+oktxtx
+ sta lastplotx+1
+ stx lastplotx
+ sec         ;flag indicating x set
+ rts
+txtbs
+ jsr txtleft
+ bcc txtbs-1
+ lda #32 ;print space
+ jmp txtprint 
+;
+txtlc ;lower case current charset
+;charset $d0,$d4 uppercase $d8,$dc lowercase
+ lda $26
+ ora #%00001000
+ sta $26
+ rts
+txtuc ;upper case current charset
+;charset $d0,$d4 uppercase $d8,$dc lowercase
+ lda $26
+ and #%11110111
+ sta $26
+ rts
+txtrvsoff ;rvs off current charset
+;charset $d0,$d8 norm, $d4,$dc rvs
+ lda $26
+ and #%11111011
+ sta $26
+ rts
+txtrvson ;rvs on current charset
+;charset $d0,$d8 norm, $d4,$dc rvs
+ lda $26
+ ora #%00000100
+ sta $26
+ rts
+;
+txtprint
+ jsr times8     ;multiply A reg value by 8 result in $be,$bf
+ lda $26        ;hibyte ptr to dot data of current charset
+ clc
+ adc $bf        ;add charset hibyte offset
  sta $bf
 doloop3 lda $58
- sta $5a    ;temp var for y size multiplication by decrement loop
+ sta $5a        ;temp var for y size multiplication by decrement loop
 doloop2 lda #128
  sta $5c
 doloop1 lda $57
- sta $5b    ;temp var for x size multiplication by decrement loop
+ sta $5b        ;temp var for x size multiplication by decrement loop
 doloop ldy $59
  lda $01
- pha
- and #%11111011 ;bit2=0 switch in CHAREN ROM into bank $d000-$dfff
- sei 
- sta $01     ;use CHAREN (rom char images)
- lda ($be),y ;read CHAREN byte data for character (8 bytes, y=byte#) 
  tax
- pla
- sta $01     ;back to normal
+ and #%11111011 ;bit2=0 switch in CHAREN ROM into bank $d000-$dfff
+ sei
+ sta $01        ;use CHAREN (rom char images)
+ lda ($be),y    ;read CHAREN byte data for character (8 bytes, y=byte#) 
+ stx $01
  cli
- txa 
  and $5c
- beq nextfc
- lda $fc
+ beq nodot
+ lda $ff        ;cmd plot type
+nodot
+ sta lastplott  ;dot plot type
+ lda $fc        ;do not plot if x coordinate out of range
  beq getfd
  lda $fb
  cmp #$40
  bcs nextfc
-getfd lda $fd
+getfd lda $fd   ;do not plot if y coordinate out of range
  cmp #$c8
  bcs nextfc
  jsr setdot     ;plot the dot
@@ -5047,6 +5221,7 @@ dec5b dec $5b
  bne doloop
  lsr $5c
  bne doloop1
+;next line of bits in char
  inc $fd
  lda lastplotx
  sta $fb
@@ -5058,25 +5233,64 @@ dec5b dec $5b
  lda $59
  cmp #8
  bcc doloop3
- lda $57
- asl
- asl
- asl
- clc 
- adc lastplotx
- sta lastplotx
- lda lastplotx+1
- adc #0
- sta lastplotx+1
+ rts
+;**************************
+texter lda $58  ;y size
+ beq texter-1
+ lda $57        ;x size
+ beq texter-1
+ lda lastplott
+ sta $ff        ;save plot type
+nextchar lda #0
+ sta $59        ;index variable for current byte of dot data in char
+readstr ldy #0
+ lda ($50),y    ;get character to display on bitmap
+;convert ascii to screen code
+ tay
+ lda asc2scr,y
+ bne dotptr
+;scan for match in table
+ cpy #"@"       ;@ is screen code 0
+ beq dotptr
+ tya            ;find func to support nonprintable ascii
+nonprt
+ ldy #28        ;29 ascii values have funcs
+fndctrl
+ cmp ascctrl,y  ;ascii in ctrl code table?
+ beq fndctrl2   ;yes, execute func indexed by y
+ dey            ;no, check next code in table
+ bpl fndctrl    ;if not in table then
+ bmi nxtchar    ;do nothing
+;determine mem ptr of dot data 
+dotptr
+ jsr txtprint
+ jsr txtright
+nxtchar
  inc $50
  bne noinc51
  inc $51
 noinc51
- jsr getpoint ;recall last plot coordinates
+ jsr getpoint   ;set current plot coordinates
  dec $52
- beq textdone
- jmp nextchar
-textdone rts
+ bne nextchar
+ lda $ff        ;restore original plot type
+ sta lastplott
+ rts
+;execute function index by y
+fndctrl2
+ tya
+ asl
+ tay
+ lda ascctlfn,y
+ sta $55
+ iny
+ lda ascctlfn,y
+ sta $56
+ lda #>nxtchar-1
+ pha
+ lda #<nxtchar-1
+ pha
+ jmp $0054
 ;
 ;**************************
 painter
@@ -6878,7 +7092,7 @@ drwrap
 drdone rts
 ;
 bitfil
- ldy #$01  ;signed y inc value
+ ldy #$01    ;signed y inc value
 ;calc number of lines to fill
  lda lastploty
  sec
@@ -6887,7 +7101,7 @@ bitfil
  eor #$ff    ;y1 > y2 so use 2's compliment
  clc         ;to negate
  adc #1
- dey
+ dey         ;change fill direction to up
  dey
 filines
  sty $0a     ;fill up $ff or down $01
@@ -6903,7 +7117,7 @@ filines
  sbc $fc
  tay
  bpl setwidth
-;y1 > y2 so negate result & reverse draw direction
+;x1 > x2 so negate result & reverse draw direction
  inc $ff     ;draw left
  txa
  eor #$ff    ;16-bit 2's compliment
@@ -6960,4 +7174,4 @@ filldone
  cmp #0
  bpl linefil
  rts
-;end
+.end
