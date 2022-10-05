@@ -7,6 +7,23 @@ COLOR  = $0286 ;Current Foreground Color for Text
 HIBASE = $0288 ;(648) Top Page of Screen Memory
 SHFLAG = $028d ;SHIFT/CTRL/Logo Keypress flags Bit0 SHIFT, Bit1 Commodore Logo Key, Bit2 Ctrl Key
 
+;Kernal Tables for File Management
+LAT    = $0259 ;Table of Logical Active File Numbers
+SAT    = $026d ;Table of Secondary Addresses for Each Logical File
+FAT    = $0263 ;Table of Device Numbers for Each Logical File
+
+;RS-232 Mock 6551 Registers
+M51CTR = $0293 ;CTR
+M51CDR = $0294 ;CDR
+M51AJB = $0295 ;Non-Std Bit Timing lobyte, $0296 hibyte
+RSSTAT = $0297 ;Status
+BITNUM = $0298 ;Number of Bits Left to be Sent/Received
+RIDBE  = $029b ;Index to End of Receive Buffer
+RIDBS  = $029c ;Index to Start of Receive Buffer
+RODBS  = $029d ;Index to Start of Transmit Buffer
+RODBE  = $029e ;Index to End of Transmit Buffer
+ENABL  = $02a1 ;IRQ Statuses, 1=Transmittinging, 2=Receiving, 16=Waiting 
+
 ;Memory-Mapped I/O Registers
 SP0X   = $d000 ;Sprite 0 Horizontal Position
 SP0Y   = $d001 ;Sprite 0 Vertical Position
@@ -82,6 +99,7 @@ CIDDRA = $dc02 ;Data Direction Register A
 
 ;Complex Interface Adapter (CIA) #2 Registers ($DD00-$DD0F)
 CI2PRA = $dd00 ;Data Port Register A
+CI2PRB = $dd01 ;Data Port Register B
 ;
 ;Bits 0-1 Select VIC-II 16K addressable memory bank (0-3)
 ;  00 Bank 3 (49152-65535, $C000-$FFFF) 16K RAM / Memory mapped I/O, character ROM, 4K Kernal
@@ -120,7 +138,9 @@ REM    = $a93b ;perform REM
 ONGOTO = $a94b ;perform ON
 LINGET = $a96b ;convert an ASCII decimal number to a 2-byte binary line number
 LET    = $a9a5 ;perform LET
+PRINT  = $aaa0 ;perform PRINT
 STROUT = $ab1e ;print msg from str whose addr is in the Y (hi byte) and A (lo byte) registers
+GET    = $ab7b ;perform GET
 FRMNUM = $ad8a ;evaluate a numeric expression and/or check for data type mismatch, store result in FAC1
 FRMNUM2= $ad8d ;validate numeric data type in FAC1
 FRMEVL = $ad9e ;evaluate expression
@@ -302,12 +322,16 @@ TOKEN_NEXT    = $82
 TOKEN_INPUT_  = $84
 TOKEN_INPUT   = $85
 TOKEN_DIM     = $86
+TOKEN_READ    = $87
 TOKEN_GOTO    = $89
 TOKEN_RUN     = $8a
 TOKEN_RESTORE = $8c
 TOKEN_GOSUB   = $8d
 TOKEN_STOP    = $90
 TOKEN_ON      = $91
+TOKEN_WAIT    = $92
+TOKEN_OPEN    = $9f
+TOKEN_CLOSE   = $a0
 TOKEN_PRINT   = $99
 TOKEN_LIST    = $9b
 TOKEN_CLR     = $9c
@@ -341,7 +365,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.09.20"
+.text "mdbasic 22.10.05"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -370,7 +394,7 @@ newcmd
 .shift "sprite"
 .shift "multi"
 .shift "expand"
-.shift "reset"
+.shift "serial"
 .shift "design"
 .shift "bitmap"
 .shift "mapcol"
@@ -417,7 +441,7 @@ cmdtab
 ;commands
 .rta merge,  dump,   vars,    circle, fill           ;$d1 token
 .rta scroll, swap,   locate,  disk,   delay,   files ;$d7
-.rta color,  move,   sprite,  multi,  expand,  resvec ;$dd
+.rta color,  move,   sprite,  multi,  expand,  serial ;$dd
 .rta design, bitmap, mapcol,  plot,   line,    paint ;$e3
 .rta draw,   renum,  text,    screen, resume,  adsr  ;$e9
 .rta wave,   voice,  pulse,   vol,    filter,  play  ;$ef
@@ -1102,8 +1126,7 @@ dumpbitmap dec $01 ;switch LOROM to LORAM
 ; FILL x1,y1 TO x2,y2, [scanCode], [color]
 fill
  jsr getcoords
- jsr CHRGET ;get next basic text chr
- cmp #","
+ jsr comchkget
  beq srncol
  jsr pokchr
  jsr chkcomm
@@ -1144,6 +1167,241 @@ nextp lda $bb
  bpl pokep
  rts
 ;
+tokopn 
+ dec $01
+ jsr openrs232
+ inc $01
+ bcc tokopn-1 ;clear carry indicates success
+ jmp (IERROR) ;otherwise x reg has error number
+;
+tokclse 
+ lda #126     ;logical file number
+ jsr $f314    ;find the index of an opened logical file number to X reg
+ bne clsd232  ;zero flag indicates not found
+ jsr $f31f    ;set current logical file, current device, and current seconday address
+ txa
+ jsr $f2f2    ;remove from table of open files
+ jsr $f483    ;Initialize IRQ Timers and data direction registers
+ lda #0       ;clear hibytes of I/O buffers for RS-232 to indicate not used
+ sta $f8      ;hibyte ptr to RS-232 input buffer
+ sta $fa      ;hibyte ptr to RS-232 output buffer
+clsd232
+ jmp CHRGET   ;finally, skip over token
+;
+tokprt 
+ ldx #126
+ stx $13      ;set current I/O channel (logical file) number
+ jsr $e118    ;BASIC wrapper for CHKOUT with error handling
+ jsr CHRGET   ;position txtptr on first char of expression  
+ jsr PRINT    ;perform CBM BASIC PRINT
+waitout
+ jsr STOP
+ beq end232   ;STOP key pressed, abort print
+ lda ENABL    ;transmitting when bit0 is 1
+ and #1
+ bne waitout
+end232
+ lda $13       ;current I/O channel (logical file) number for UNLSN and UNTALK
+ jsr CLRCHN    ;restore default i/o devices and send UNLSN and UNTALK to serial device
+ ldx #$00      ;logical file number 0=none
+ stx $13       ;set current I/O channel (logical file) number
+ rts
+;
+;SERIAL OPEN [baud],[databits],[stopbits],[duplex],[parity],[handshake]
+;SERIAL [WAIT timeout] READ s$ | f | i% [TO byte]
+;SERIAL PRINT expression
+;SERIAL CLOSE
+serial
+ cmp #TOKEN_PRINT
+ beq tokprt
+ cmp #TOKEN_OPEN
+ beq tokopn
+ cmp #TOKEN_CLOSE
+ beq tokclse
+;prepare for READ
+ ldx #0
+ stx $fe       ;wait flag: 0 is no wait else wait
+ stx $bb       ;timeout lobyte
+ stx $bc       ;timeout hibyte
+ inx           ;1=timeout disabled
+ stx $53       ;timeout disabled by default 0=enabled, 1=disabled
+ cmp #TOKEN_WAIT
+ bne tokread
+ lda #8        ;bit 3 same as status bit of empty buffer
+ sta $fe
+ jsr CHRGET
+ cmp #TOKEN_READ ;token?
+ beq tokread   ;no timeout supplied
+ jsr skp73_    ;get timeout 0-65535
+ stx $bb
+ sty $bc
+ txa
+ ora $bc
+ beq tokread   ;zero timeout is a disabled timeout
+ dec $53       ;enable timeout
+tokread
+ lda #TOKEN_READ
+ jsr CHKCOM+2  ;skip over READ token otherwise SYNTAX ERROR
+ ldx #126      ;file number 126
+ stx $13       ;current I/O channel (cmd logical file) number
+ jsr $e11e     ;BASIC wrapper for CHKIN with error error handling 
+;get or create pointer to string pointer provided as param
+ jsr PTRGET    ;search for a var & setup if not found
+ sta $49       ;variable address is returned in a (lo byte) and y (hi byte) registers
+ sty $4a       ;every string variable is a pointer consisting of 3 bytes, 2 for ptr, 1 for length
+;handle numeric read
+ ldx $0d       ;0=numeric, 255=string
+ inx
+ stx $97       ;0=string,1=float
+ beq rdstr
+ ldx $0e       ;float or int?
+ beq rdnum     ;float stores 5 bytes
+ inc $97       ;2=int
+rdnum
+ sta $35       ;ptr of a numeric variable
+ sty $36       ;is the ptr of the value
+ lda #1        ;length of 1 byte
+ sta $02       ;read one byte
+ sta $fd       ;offset to store byte
+ bne chksent   ;always branches 
+;allocate space for new string 
+rdstr
+ lda #$ff      ;max string length
+ jsr GETSPA    ;alloc new str return ptr in $35,$36 and length in A reg
+ sta $02       ;actual length allocated
+;change pointer to newly allocated string
+ ldy #0
+ sty $fd       ;offset to store bytes
+ sta ($49),y   ;string length byte
+ iny
+ lda $35       ;lobyte str ptr
+ sta ($49),y   ;var lobyte str ptr
+ iny
+ lda $36       ;hibyte str ptr
+ sta ($49),y   ;var hibyte str ptr
+;check if sentinel param supplied
+chksent
+ lda #0
+ sta $fb       ;flag for sentinel check
+ jsr CHRGOT
+ cmp #TOKEN_TO
+ bne savesb
+ jsr getval    ;get sentinel byte param value
+ sta $fc       ;sentinel byte to check
+ inc $fb       ;flag for sentinel check
+savesb
+ lda $a9       ;start bit received flag
+ sta $62       ;remember it before first read
+;begin read loop
+goread
+ lda #0
+ sta RSSTAT    ;clear status
+;reset timeout
+ lda $bb
+ sta $14
+ lda $bc
+ sta $15
+;read next byte with timeout (if enabled)
+ jsr waitread
+ bcs setstrlen
+;save the byte
+ lda $61       ;last byte read
+ ldy $fd       ;offset to store result
+ sta ($35),y   ;store to variable
+;check for critical error
+ lda RSSTAT    ;get status without clearing it
+ and #%11110111 ;errors other than empty buffer?
+ bne strdone   ;yes, stop now and return status
+;if provided, check if last read byte is sentinel byte
+ lda $fb       ;flag to use sentinel
+ beq nxtbyte   ;zero means disabled
+ lda $61       ;last read byte
+ cmp $fc       ;sentinel reached?
+ beq strdone   ;yes, stop reading
+ lda $97       ;string type
+ bne goread    ;numeric variable use only 1 byte
+nxtbyte
+ inc $fd       ;next index in string
+ dec $02       ;reduce byte count for read
+ beq setstrlen ;stop reading
+ bne goread    ;keep reading if more room in string
+
+;include byte in string length
+strdone
+ inc $fd       ;string length = index+1
+
+;return result based on data type
+setstrlen
+ ldx $97       ;type 0=string, 1=float, 2=int
+ beq setstr
+ dex
+ beq setflt
+ lda #0        ;make hibyte zero
+ tay
+ sta ($35),y
+ beq done232   ;always branches
+setflt
+ ldy $61       ;byte read is lobyte
+ lda #0        ;zero hibyte
+ jsr GIVAYF    ;convert binary int to float with result in FAC1
+ ldx $35       ;copy the result in FAC1
+ ldy $36       ;to the variable memory
+ jsr $bbd7     ;copy FAC1 to memory
+done232
+ jmp end232
+setstr
+ lda $fd
+ ldy #0
+ sta ($49),y   ;string length byte
+ beq done232   ;always branches
+;
+;read a byte with timeout (if enabled)
+waitread
+ jsr $f086     ;CHRIN for RS-232 device
+ sta $61
+ lda RSSTAT    ;get status without clearing it
+ beq byter     ;no errors then accept byte
+ bit $fe       ;empty buffer and wait requested
+ beq tstbyte   ;no, test for framing error
+ jsr chktimo   ;count down timer, pause 1 jiffy
+ bne waitread  ;timeout not reached (or enabled)
+readquit sec   ;return flag in carry to stop reading
+ rts
+tstbyte
+;check for framing error, adjust only if start bit just received
+ bit bitweights+1 ;bit1, framing error?
+ beq byter     ;no, accept byte
+ ldy $62       ;start bit saved before first read
+ bne readquit  ;already received then return error status
+ lsr $61       ;shift bit frame to correct first byte read
+ and #%11111101 ;clear the framing error bit
+ sta RSSTAT    ;and keep remaining status info
+ bne readquit  ;other errors present
+byter clc      ;return with success flag in carry
+ rts
+;
+chktimo
+ jsr STOP      ;STOP key?
+ beq endtimer
+ lda $53       ;timer flag 0=timeout enabled, else disabled
+ bne endtimer  ;not enabled, return with zero flag clear
+ lda $14
+ bne dec14
+ lda $15
+ beq endtimer  ;timer at 0, return with zero flag set
+ dec $15
+dec14
+ dec $14
+;make this entire process take about 1 jiffy
+ lda $a2       ;jiffy clock updated 60 times per sec.
+topause
+ cmp $a2
+ beq topause
+chktimer
+ lda $14       ;zero flag indicates timeout reached
+ ora $15
+endtimer rts
+;
 ;*******************
 old lda #$08
  sta $0802
@@ -1180,11 +1438,11 @@ delay
 delay2       ;entry point for internal use; set x and y reg accordingly
  clc         ;flag for STOP key
  txa
- bne dec14
-dec15 tya
+ bne decx
+ tya
  beq stopnow
  dey
-dec14 dex
+decx dex
  lda $a2      ;jiffy clock updated 60 times per sec.
 dlay2 cmp $a2
  beq dlay2
@@ -2194,8 +2452,7 @@ color
  bcc nochar-3   ;if char color > 15 then setup irq to blink that color
  jsr blinker    ;toggle blink flag for this color
  jsr chkcomm    ;if no more params then stop now
-nochar jsr CHRGET  ;get next basic text chr
- cmp #","
+nochar jsr comchkget
  beq noback
  jsr getval15   ;skip73
  sta BGCOL0     ;background color
@@ -2314,8 +2571,7 @@ badxy jmp hellno
 sprite
  jsr sprnum     ;sprite# returned in $be and 2^sprite# in $bf
  jsr ckcom2     ;throw misop if current char is not comma
- jsr CHRGET     ;get next char and compare to comma
- cmp #","
+ jsr comchkget  ;get next char and compare to comma
  beq scr        ;another comma so skip param
  jsr getbool2   ;sprite visible 0=off, 1=on
  lda $14        ;visible param
@@ -2328,8 +2584,7 @@ spron lda SPENA ;turn sprite on
  ora $bf
 onoff sta SPENA
  jsr chkcomm
-scr jsr CHRGET  ;get next basic text chr
- cmp #","
+scr jsr comchkget ;get next basic text chr
  beq smcr
  jsr skip73
  lda $be        ;sprite# 0-7
@@ -2337,8 +2592,7 @@ scr jsr CHRGET  ;get next basic text chr
  lda $14
  sta SP0COL,y   ;sprite y's color
  jsr chkcomm
-smcr jsr CHRGET ;get next basic text chr
- cmp #","
+smcr jsr comchkget ;get next basic text chr
  beq spntr
  jsr getbool2   ;get multicolor flag 0 or 1
  bne setm
@@ -2350,8 +2604,7 @@ setm lda SPMC
  ora $bf        ;2^sprite#
 skipmc sta SPMC
  jsr chkcomm
-spntr jsr CHRGET
- cmp #","
+spntr jsr comchkget
  beq prorty
  jsr skip73     ;get sprite data ptr 0-255 (ptr*64)=start address
 ;determine VIC-II base addr
@@ -2406,8 +2659,7 @@ expand
  sta YXPAND
  rts
 getexpxy
- jsr CHRGET
- cmp #","
+ jsr comchkget
  beq magy
  jsr getbool2   ;expand x param
  beq expx
@@ -2495,8 +2747,7 @@ locate
  stx $bc
  jsr CHRGOT
  beq column  ;end of statement
-row jsr CHRGET
- cmp #","
+row jsr comchkget
  beq column
 gavfy
  jsr skp73   ;get value as int: ;x=lobyte, y=hibyte
@@ -2959,7 +3210,7 @@ line
  bcc lineinput ;perfrom lineinput# num%, var$
 badinp jmp SNERR     ;syntax error
 lineinput
- jsr getval15_ ;get single byte param in a reg, misop err if missing
+ jsr getval   ;get single byte param in a reg, misop err if missing
  tax
  jsr CHKIN    ;redirect std input to file handle stored in x reg 
  jsr readline
@@ -2971,8 +3222,7 @@ getprompt
  jsr getstr   ;string is returned in registers y=hi byte, x=lo byte, a=length
  txa          ;x reg has low byte of str ptr but next func needs it in a reg 
  jsr STROUT   ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
- jsr CHRGOT
- cmp #","
+ jsr comchk
  bne badinp
 readline
  jsr INLIN    ;input a line to buffer from keyboard (80 chars max from keyboard)
@@ -3003,8 +3253,7 @@ copyer lda BUF,y ;copy string to variable storage
  iny
  lda $36      ;get hi byte of str ptr
  sta ($49),y  ;save it to variable's str ptr info
- jsr CHRGOT
- cmp #","
+ jsr comchk
  beq readline
  rts
 ;
@@ -3127,9 +3376,8 @@ hirescir
  sta $2a     ;variable to hold value
  jsr CHRGOT
  beq docircle
- jsr CHRGET  ;position for options param
- cmp #","    ;skip it?
- beq circlept
+ jsr comchkget ;position for options param
+ beq circlept  ;skip if comma found
  jsr skip73  ;get options value
  sta $2a     ;circle options
 circlept
@@ -4273,6 +4521,10 @@ peekoper lda ($7a),y
  beq peekoper
 peekdone rts
 ;******************
+comchkget jsr CHRGET ;get next basic text chr
+ cmp #","
+ rts
+;******************
 comchk jsr CHRGOT  ;get current basic text chr
  cmp #","
  rts
@@ -4358,11 +4610,8 @@ getpnt
  jmp savepoint
 ;*******************
 types jsr comchk ;current char a comma?
- beq gettypes
- rts
-gettypes jsr CHRGET ;position to next char
- beq etypes     ;end of statement reached
- cmp #","
+ bne etypes
+ jsr comchkget
  beq noparam    ;another comma found so skip plot type param
  jsr skip73     ;get plot type value
  cmp #4         ;plot type 0=erase, 1=plot, 2=toggle, 3=none (locate only)
@@ -4386,7 +4635,7 @@ mcplot jsr getval ;get color selection, multicolor selection index 1-3
 etypes rts
 ;
 ;*****************
-;these 2 routines are used by the VARS cmd since it runs under ROM but needs ROM functions
+;these routines are used by command under ROM
 rom1 inc $01     ;switch to rom (a000-bfff)
  jsr GIVAYF      ;convert 16-bit signed int to float (a=hibyte y=lobyte)
  jmp prtnum
@@ -4396,6 +4645,17 @@ prtnum jsr FOUT  ;convert fac1 to ascii with str ptr in a,y registers
  jsr STROUT      ;print string ptr (a=lobyte y=hibyte)
  dec $01         ;switch to LORAM (a000-bfff)
  rts
+rom3 inc $01
+ jsr skp73
+ php             ;save zero flag indicating hibyte non-zero
+ txa             ;lobyte also in A reg for convenience
+ dec $01
+ plp
+ rts
+;when LORAM ($a000-$bfff) is enabled use this label to raise error
+;do not use FCERR in said case
+illqtyerr ldx #14
+ jmp (IERROR)
 ;
 ;round FAC1 to the nearest whole number by adding .5 then truncate
 doround
@@ -4567,6 +4827,17 @@ snotes .word 3824,4051,4547,5104,5407,6069,6813
 
 ;table of video screen matrix hibyte offset per line 0-24
 btab .byte 0,0,0,0,0,0,0,1,1,1,1,1,1,2,2,2,2,2,2,2,3,3,3,3,3
+
+baudrates .word 50,75,110,134,150,300,600,1200,1800,2400
+;baud rates not supported (too fast for IRQ) 3600,4800,7200,9600,19200
+;MDBASIC parity parameter value range 0-4 to register M51CDR bits 7,6,5
+;0 = XX0 (0,64,128, or 192) = No Parity Generated or Received
+;1 = 001 (32)  = Odd Parity Transmitted and Received
+;2 = 011 (96)  = Even Parity Transmitted and Received
+;3 = 101 (160) = Mark Parity Transmitted and Received
+;4 = 111 (224) = Space Parity Transmitted and Received
+parity .byte %00000000,%00100000,%01100000,%10100000,%11100000
+;
 
 ;align tables to the nearest page boundary (saves a cycle on read)
 * = (* & $ff00)+$0100
@@ -7174,4 +7445,234 @@ filldone
  cmp #0
  bpl linefil
  rts
+;
+;***OPEN RS-232 CHANNEL 
+openrs232
+ lda #126        ;file handle 126
+ ldx #2          ;device 2 = RS-232
+ ldy #0          ;secondary channel
+ jsr SETLFS
+ jsr $f30f       ;find the file in the logical file table
+ bne _f359       ;zero flag=1 means file not currently open
+ jsr $f6fe       ;handle FILE OPEN error
+ tax             ;error code 2
+ sec
+ rts
+_f359 ldx $98    ;number of open i/o files/index to the end of file tables
+ cpx #10         ;limit 10
+ bcc _f362
+ jsr $f6fb       ;handle TOO MANY FILES error
+ tax             ;error code 1
+ sec
+ rts
+_f362 inc $98    ;inc total file handle count
+ lda $b8         ;current logical file number
+ sta LAT,x       ;store file descriptors into master table
+ lda $b9         ;current secondary address
+ ora #%01100000  ;flag bits 5&6 to indicate rs-232 channel
+ sta $b9         ;needs special handling on close or error
+ sta SAT,x
+ lda $ba         ;current device number
+ sta FAT,x
+;***PREPARE RS-232 DEVICE WITH DEFAULTS***
+ jsr $f483       ;init IRQ timers (y reg loaded with 0)
+ sty RSSTAT      ;reset RS-232 Status
+;bits 0-3 of M51CTR are used to set the baud rate as follows:
+;0=User Defined (not supported here yet)
+;1=50,2=75,3=110,4=134.5,5=150,6=300,7=600,8=1200,9=1800,10=2400,11=3600,12=4800,13=7200,14=9600,15=19200
+ lda #%00001000  ;1200 baud, 8 data bits, 1 stop bit
+ sta M51CTR      ;bits3-0=baud, bit4:unused, bits6-5=data bits, bit7=stop bits
+ lda #%00000000  ;no parity, full duplex, 3-line handshake
+ sta M51CDR      ;bits7-5:parity, bit4=duplex, bits3-1:unused, bit0=handshake
+;if implementing user-defined baud rate, the value placed here would be
+;TIMING = (CLOCK/(BAUDRATE/2))-100 in binary little endian format
+;therefore the max baud rate for NTSC machines is 20454 and 19705 on PAL machines.
+;however near maximum is not suggested and prone to errors;
+;in fact, the IRQ facilitating the send and receive buffers cannot keep up beyond 2400.
+ lda #0          ;user defined baud rate not supported by C64 Kernal
+ sta M51AJB      ;lobyte of timing for user defined baud rate
+ sta M51AJB+1    ;hibyte of timing for user defined baud rate
+;
+;parse parameters (if any)
+ jsr CHRGET
+ beq opn232
+ cmp #","
+ beq getdb
+ jsr rom3
+;find baud rate index of 10 possible
+ ldx #11
+nxtbaud
+ dex
+ beq badserial ;baud rate not found in table
+ txa
+ asl
+ tay
+ lda baudrates-2,y
+ cmp $14
+ bne nxtbaud
+ lda baudrates-2+1,y
+ cmp $15
+ bne nxtbaud
+ stx $02       ;index found
+ lda M51CTR    ;current setting (from default)
+ and #%11110000 ;remove current setting bits 0-3
+ ora $02       ;apply selected baud rate from index
+ sta M51CTR    ;set baud rate
+ jsr CHRGOT
+ bne getdb
+opn232 jmp open232
+getdb
+ jsr ckcom2+3  ;must be comma else misop
+;get data bits
+ jsr comchkget ;get next char & cmp to comma
+ beq getstpbits
+ jsr rom3      ;data bits (word length) 5,6,7 or 8
+ bne badserial ;hibyte must be zero
+ cmp #5
+ bcc badserial
+ cmp #9
+ bcs badserial
+;need bit pattern 00=8, 01=7, 10=6, 11=5
+;use 2's compliment to negate then add 8
+ eor #$ff
+ adc #9        ;1 for 2's comp, 8 for offset
+ and #%00000011 ;just want first 2 bits
+ lsr           ;shift bit positions
+ ror           ;from 0,1 to 6,5
+ ror           ;using carry bit
+ lsr           ;arriving at bits 6,5
+ sta $02
+ lda M51CTR
+ and #%10011111 ;clear target bits 5 and 6
+ ora $02
+ sta M51CTR
+ jsr CHRGOT
+ beq opn232
+ bne getstpbits
+;
+badserial
+ ldx #14        ;illegal qty error
+ sec            ;flag to calling subroutine that error occured
+ rts
+;
+getstpbits
+ jsr comchkget
+ beq getduplex
+ jsr rom3       ;get stop bits (0 or 1)
+ bne badserial  ;hibyte must be 0
+ cmp #2
+ bcs badserial
+ eor #%00000001 ;convert for register since 0=1 stop bit, 1=0stop bits
+ lsr            ;shift bit position 0 to 7
+ ror            ;by way of carry
+ sta $02
+ lda M51CTR
+ and #%01111111 ;clear target bit 7
+ ora $02
+ sta M51CTR
+ jsr CHRGOT
+ beq open232
+;
+getduplex
+ jsr comchkget
+ beq getparity
+ jsr rom3       ;duplex (0 or 1)
+ bne badserial  ;hibyte must be zero
+ cmp #2
+ bcs badserial
+ asl            ;shift bit position 0
+ asl            ;to position 4
+ asl
+ asl
+ sta $02
+ lda M51CDR
+ and #%11101111 ;clear target bit 4
+ ora $02
+ sta M51CDR
+ jsr CHRGOT
+ beq open232
+;
+getparity
+ jsr comchkget
+ beq gethndshk
+ jsr rom3       ;parity (0 to 4)
+ bne badserial  ;hibyte must be zero
+ cmp #5
+ bcs badserial
+ tay
+ lda parity,y   ;convert param value to bit pattern value
+ sta $02
+ lda M51CDR
+ and #%00011111 ;clear target bits 5-7
+ ora $02
+ sta M51CDR
+ jsr CHRGOT
+ beq open232
+;
+gethndshk
+ jsr CHRGET
+ jsr rom3       ;handshake 0 or 1
+ bne badserial  ;hibyte must be zero
+ cmp #2
+ bcs badserial
+ sta $02
+ lda M51CDR
+ and #%11111110 ;clear target bit 0
+ ora $02
+ sta M51CDR
+;
+;open the RS-232 channel
+open232
+ jsr $ef4a      ;get the word length for the current RS-232 character into x reg
+ stx BITNUM     ;RS-232: number of bits left to be sent/received
+ lda M51CTR     ;RS-232: Mock 6551 Control Register
+ and #$0f       ;if baud (first 4 bits) = 0 then
+ beq _f446      ;user defined baud rate
+ asl            ;else calc word ptr offset of baud timing prescaler
+ tax
+ lda $02a6      ;PAL/NTSC Flag
+ bne _f43a      ;0=NTSC
+;NTSC timing
+ ldy $fec1,x    ;prescaler table for NTSC
+ lda $fec0,x
+ jmp _f440
+;PAL timing
+_f43a
+ ldy $e4eb,x    ;prescaler table for PAL
+ lda $e4ea,x
+;set prescaler timing registers
+_f440           ;RS-232: Nonstandard Bit Timing (user defined baud rate)
+ sty M51AJB+1
+ sta M51AJB
+;
+_f446
+ lda M51AJB
+ asl
+ jsr $ff2e      ;calculate time required to send a bit
+ lda M51CDR     ;RS-232: Mock 6551 Command Register
+ lsr            ;bit 7=handshake 0=3-line, 1=x-line
+ bcc _f45c      ;clear carry means x-line
+ lda CI2PRB     ;Data Port B
+ asl            ;check bit 7 Data Set Ready (DSR) Pin L on User Port
+ bcs _f45c      ;carry set then ready for transmission
+;set error status and skip to end of buffer
+ jsr $f00d      ;set error status: bit 6 DTR (Data Set Ready) Signal Missing
+;advance index to send/receive buffers
+_f45c lda RIDBE ;index to end of receive buffer
+ sta RIDBS      ;index to start of receive buffer
+ lda RODBE      ;RODBE RS-232 index to end of transmit buffer
+ sta RODBS      ;index to start of transmit buffer
+;set receive buffer pointer
+ lda #$0
+ ldy #$ce       ;input buffer at $CE00-$CEFF
+ sta $f7        ;lobyte ptr to RS-232 input buffer
+ sty $f8        ;hibyte ptr to RS-232 input buffer
+;set send buffer pointer
+ sta $f9        ;lobyte ptr to RS-232 output buffer
+ iny            ;output buffer is next page of 256 bytes at $CF00-$CFFF
+ sty $fa        ;hibyte ptr to RS-232 output buffer
+ ldx #0         ;success code
+ clc            ;flag to calling subroutine that open was successful
+ rts
+;
 .end
