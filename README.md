@@ -2,10 +2,17 @@
 MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
 MDBASIC version 2022.10.10<br>
 <br>
-Download the MS Word document mdbasic.odt for details about each command.<br>
+Download the MS Word document mdbasic.pdf for details about each command.<br>
 <br>
 Download the VICE emulator for the Commodore 64:<br>
 http://vice-emu.sourceforge.net/<br>
+<br>
+Download Options:<br>
+<ol>
+<li>mdbasic.d64 - Contains mdbasic.prg and various testing/example programs</li>
+<li>mdbasic.prg - Only the compiled prg to be saved to your media format</li>
+<li>mdbasic.asm - Compile it yourself (see below)</li>
+</ol>
 <br>
 Download Turbo Assembler to compile source:<br>
 https://style64.org/file/TMPx_v1.1.0-STYLE.zip<br>
