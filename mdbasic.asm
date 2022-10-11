@@ -4,7 +4,9 @@
 ;
 BUF    = $0200 ;BASIC Line Editor Input Buffer
 COLOR  = $0286 ;Current Foreground Color for Text
+GDCOL  = $0287 ;Color of Character under Cursor
 HIBASE = $0288 ;(648) Top Page of Screen Memory
+RPTFLAG= $028a ;which keys repeat 0=only cursor, insert, delete and spacebar keys, 64=no keys, 128=all keys
 SHFLAG = $028d ;SHIFT/CTRL/Logo Keypress flags Bit0 SHIFT, Bit1 Commodore Logo Key, Bit2 Ctrl Key
 
 ;Kernal Tables for File Management
@@ -121,26 +123,39 @@ IGONE  = $0308 ;Vector to the Routine That Executes the Next BASIC Program Token
 
 ;CBM BASIC functions
 GETSTK = $a3fb ;check for space on stack
-READY  = $a474 ;print READY
 REASON = $a408 ;check for space in memory
+READY  = $a474 ;print READY
 LINKPRG= $a533 ;relink lines of tokenized program text
 INLIN  = $a560 ;input a line to buffer from keyboard (max 88 chars)
 FINDLN = $a613 ;search for line number using ptr at $2b, $2c
+NEW    = $a642 ;perform NEW
 CLEAR  = $a65e ;perform CLR
 RUNC   = $a68e ;reset ptr of current text char to the beginning of prg text
+LIST   = $a69c ;perform LIST
+FOR    = $a742 ;perform FOR
 NEWSTT = $a7ae ;setup next statement for execution
 RESTORE= $a81d ;perform RESTORE
-RUN    = $a871 ;peform RUN
+END    = $a831 ;perform END
+CONT   = $a857 ;perform CONT
+RUN    = $a871 ;perform RUN
+GOSUB  = $a883 ;perform GOSUB
 GOTO   = $a8a0 ;perform GOTO
+RETURN = $a8d2 ;perform RETURN
 DATA   = $a8f8 ;perform DATA
 DATAN  = $a906 ;search BASIC text for the end of the current statement
 REM    = $a93b ;perform REM
 ONGOTO = $a94b ;perform ON
 LINGET = $a96b ;convert an ASCII decimal number to a 2-byte binary line number
 LET    = $a9a5 ;perform LET
+PRINTN = $aa80 ;perform PRINT#
+CMD    = $aa86 ;perform CMD
 PRINT  = $aaa0 ;perform PRINT
 STROUT = $ab1e ;print msg from str whose addr is in the Y (hi byte) and A (lo byte) registers
 GET    = $ab7b ;perform GET
+INPUTN = $aba5 ;perform INPUT#
+INPUT  = $abbf ;perform INPUT
+READ   = $ac06 ;perform READ
+NEXT   = $ad1e ;perform NEXT
 FRMNUM = $ad8a ;evaluate a numeric expression and/or check for data type mismatch, store result in FAC1
 FRMNUM2= $ad8d ;validate numeric data type in FAC1
 FRMEVL = $ad9e ;evaluate expression
@@ -148,14 +163,19 @@ PARCHK = $aef1 ;eval expr inside parentheses
 CHKCLS = $aef7 ;check for and skip closing parentheses
 CHKOPN = $aefa ;check for and skip opening parentheses 
 CHKCOM = $aefd ;check for and skip comma
+DIM    = $b081 ;perform DIM
 PTRGET = $b08b ;search for a variable & setup if not found
 AYINT  = $b1bf ;convert FAC1 to a signed integer in FAC1
 GIVAYF = $b391 ;convert 16-bit signed integer to floating point (a=hibyte y=lobyte)
 ERRDIR = $b3a6 ;check if prg is running in direct mode/cause error
-STRLIT = $b487 ;scan and setup pointers to a string in memory
+DEF    = $b3b3 ;perform DEF
+STRLIT = $b487 ;scan and setup pointers to a string in memory ptr A lobyte, Y hibyte
 GETSPA = $b4f4 ;alloc space in mem for string
 FRESTR = $b6a3 ;discard a temporary string
+GETBYTC= $b79b ;Input a Parameter Whose Value Is Between 0 and 255
 GETADR = $b7f7 ;convert FAC1 to unsigned 16-bit integer; result in $14 lobyte, $15 hibyte
+POKE   = $b824 ;perform POKE
+WAIT   = $b82d ;perform WAIT
 FADDH  = $b849 ;add 0.5 to FAC1
 NEGFAC = $b947 ;replace FAC1 with its 2's complement (make it a negative number)
 FMULT  = $ba28 ;multiply FAC1 by value in memory pointed to by A (lobyte) and Y (hibyte) registers
@@ -179,12 +199,16 @@ OVERR  = $b97e ;overflow error
 LODERR = $e19c ;load error
 
 ;Commodore 64 Kernal functions
+SYS    = $e12a ;perform SYS
+VERIFY = $e165 ;perform VERIFY
 HALT   = $e386 ;halt program and return to main BASIC loop
 INIT   = $e3bf ;initialize BASIC
+LP2    = $e5b4 ;get a character from the keyboard buffer
+
+;Commodore 64 Kernal API
 CINT   = $ff81 ;initialize screen editor and video chip
 RAMTAS = $ff87 ;initialize RAM, tape buffer, screen
 RESTOR = $ff8a ;restore default I/O vectors
-LP2    = $e5b4 ;get a character from the keyboard buffer
 IOINIT = $fda3 ;initialize CIA I/O devices
 SETMSG = $ff90 ;set kernal msg ctrl flag
 TKSA   = $ff96 ;send secondary address after TALK
@@ -207,117 +231,6 @@ PLOT   = $fff0 ;Read/Set Location of the Cursor
 
 RESLST = $a09e ;$A09E-$A19D List of Keywords
 
-; 
-;Commodore 64 BASIC Command Tokens
-;Token #   Statement  Routine Address   
-;128 $80   END        43057 $A831
-;129 $81   FOR        42818 $A742
-;130 $82   NEXT       44318 $AD1E
-;131 $83   DATA       43256 $A8F8
-;132 $84   INPUT#     43941 $ABA5
-;133 $85   INPUT      43967 $ABBF
-;134 $86   DIM        45185 $B081
-;135 $87   READ       44038 $AC06
-;136 $88   LET        43429 $A9A5
-;137 $89   GOTO       43168 $A8A0
-;138 $8A   RUN        43121 $A871 *overridden by MDBASIC
-;139 $8B   IF         43304 $A928 *overridden by MDBASIC
-;140 $8C   RESTORE    43037 $A81D *overridden by MDBASIC
-;141 $8D   GOSUB      43139 $A883
-;142 $8E   RETURN     43218 $A8D2
-;143 $8F   REM        43323 $A93B
-;144 $90   STOP       43055 $A82F
-;145 $91   ON         43339 $A94B *overridden by MDBASIC
-;146 $92   WAIT       47149 $B82D
-;147 $93   LOAD       57704 $E168
-;148 $94   SAVE       57686 $E156
-;149 $95   VERIFY     57701 $E165
-;150 $96   DEF        46003 $B3B3
-;151 $97   POKE       47140 $B824
-;152 $98   PRINT#     43648 $AA80
-;153 $99   PRINT      43680 $AAA0
-;154 $9A   CONT       43095 $A857
-;155 $9B   LIST       42652 $A69C
-;156 $9C   CLR        42590 $A65E
-;157 $9D   CMD        43654 $AA86
-;158 $9E   SYS        57642 $E12A
-;159 $9F   OPEN       57790 $E1BE
-;160 $A0   CLOSE      57799 $E1C7
-;161 $A1   GET        43899 $AB7B
-;162 $A2   NEW        42562 $A642
-;
-;Commodore 64 BASIC Keyword Tokens
-;Token #    Keyword
-;163 $A3    TAB(
-;164 $A4    TO
-;165 $A5    FN
-;166 $A6    SPC(
-;167 $A7    THEN
-;168 $A8    NOT
-;169 $A9    STEP
-;
-;Commodore 64 BASIC Operator Tokens
-;Token #   Operator           Routine Address
-;170 $AA   + (ADD)            47210 $B86A
-;171 $AB   - (SUBTRACT)       47187 $B853
-;172 $AC   * (MULTIPLY)       47659 $BA2B
-;173 $AD   / (DIVIDE)         47890 $BB12
-;174 $AE   ^ (EXPONENTIATE)   49019 $BF7B
-;175 $AF   AND (LOGICAL AND)  45033 $AFE9
-;176 $B0   OR (LOGICAL OR)    45030 $AFE6
-;177 $B1   > (GREATER THAN)   49076 $BFB4
-;178 $B2   = (EQUAL TO)       44756 $AED4
-;179 $B3   < (LESS THAN)      45078 $B016
-;
-;Commodore 64 BASIC Function Tokens
-;Token #   Function  Routine Address
-;180 $B4   SGN       48185 $BC39
-;181 $B5   INT       48332 $BCCC
-;182 $B6   ABS       48216 $BC58
-;183 $B7   USR         784 $0310
-;184 $B8   FRE       45949 $B37D
-;185 $B9   POS       45982 $B39E
-;186 $BA   SQR       49009 $BF71
-;187 $BB   RND       57495 $E097
-;188 $BC   LOG       45794 $B9EA
-;189 $BD   EXP       49133 $BFED
-;180 $BE   COS       57956 $E264
-;191 $BF   SIN       57963 $E26B
-;192 $C0   TAN       58036 $E2B4
-;193 $C1   ATN       58126 $E30E
-;194 $C2   PEEK      47117 $B80D
-;195 $C3   LEN       46972 $B77C
-;196 $C4   STR$      46181 $B465
-;197 $C5   VAL       47021 $B7AD
-;198 $C6   ASC       46987 $B78B
-;199 $C7   CHR$      46828 $B6EC
-;200 $C8   LEFT$     46848 $B700
-;201 $C9   RIGHT$    46892 $B72C
-;202 $CA   MID$      46903 $B737
-;203 $CB   GO        *This is a keyword used to support syntax GO TO instead of GOTO
-;
-;MDBASIC Keyword Tokens
-;203 $CB   OFF       *Stole this token from CBM's GO token (obsolete)
-;204 $CC   ELSE
-;MDBASIC Command Tokens
-;205 $CD   MERGE
-;.
-;.
-;MDBASIC Function Tokens
-;245 $F5   ROUND
-;246 $F6   KEY    *Dual use as func & cmd
-;247 $F7   ERROR  *Dual use as func & cmd
-;248 $F8   PTR
-;249 $F9   CSR
-;250 $FA   PEN
-;251 $FB   JOY
-;252 $FC   POT
-;253 $FD   HEX$
-;254 $FE   INSTR
-;CBM PI Token
-;255 $FF   PI
-;
-
 TOKEN_NEXT    = $82
 TOKEN_INPUT_  = $84
 TOKEN_INPUT   = $85
@@ -327,6 +240,7 @@ TOKEN_GOTO    = $89
 TOKEN_RUN     = $8a
 TOKEN_RESTORE = $8c
 TOKEN_GOSUB   = $8d
+TOKEN_RETURN  = $8e
 TOKEN_STOP    = $90
 TOKEN_ON      = $91
 TOKEN_WAIT    = $92
@@ -335,6 +249,7 @@ TOKEN_CLOSE   = $a0
 TOKEN_PRINT   = $99
 TOKEN_LIST    = $9b
 TOKEN_CLR     = $9c
+TOKEN_SYS     = $9e
 TOKEN_NEW     = $a2
 TOKEN_TO      = $a4
 TOKEN_THEN    = $a7
@@ -365,7 +280,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.10.05"
+.text "mdbasic 22.10.10"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -433,27 +348,139 @@ keystr .shift "key"
 .shift "instr"
 .byte 0 ;needed terminator
 ;
-;mdbasic command tokens starting at FIRST_CMD_TOK
 cmdtab
-;keywords
-.rta SNERR ;$cb token - placeholder for OFF token (has no address to call)
-.rta REM   ;$cc else token - using this cmd by itself behaves like the REM statement
-;commands
-.rta merge,  dump,   vars,    circle, fill           ;$d1 token
-.rta scroll, swap,   locate,  disk,   delay,   files ;$d7
-.rta color,  move,   sprite,  multi,  expand,  serial ;$dd
-.rta design, bitmap, mapcol,  plot,   line,    paint ;$e3
-.rta draw,   renum,  text,    screen, resume,  adsr  ;$e9
-.rta wave,   voice,  pulse,   vol,    filter,  play  ;$ef
-.rta auto,   old,    trace,   find,   delete         ;$f4
-;funcs & cmds
-.rta SNERR                        ;$f5 placeholder for round (not a command, func only)
-.rta key,    error                ;$f6,$f7 are cmds and funcs
+;CBM BASIC
+.rta END    ;$80
+.rta FOR    ;$81
+.rta NEXT   ;$82
+.rta DATA   ;$83
+.rta INPUTN ;$84 INPUT#
+.rta INPUT  ;$85
+.rta DIM    ;$86
+.rta READ   ;$87
+.rta LET    ;$88
+.rta GOTO   ;$89
+.rta newrun ;$8a RUN augmented
+.rta if     ;$8b IF augmented
+.rta restor ;$8c RESTORE augmented
+.rta GOSUB  ;$8d
+.rta return ;$8e RETURN augmented
+.rta REM    ;$8f
+.rta $a82f  ;$90 STOP
+.rta on     ;$91 ON augmented
+.rta WAIT   ;$92
+.rta $e168  ;$93 LOAD
+.rta $e156  ;$94 SAVE
+.rta VERIFY ;$95
+.rta DEF    ;$96
+.rta poke   ;$97 POKE augmented
+.rta PRINTN ;$98 PRINT#
+.rta PRINT  ;$99
+.rta CONT   ;$9a
+.rta LIST   ;$9b
+.rta CLEAR  ;$9c CLR
+.rta CMD    ;$9d
+.rta SYS    ;$9e
+.rta $e1be  ;$9f OPEN
+.rta $e1c7  ;$a0 CLOSE
+.rta GET    ;$a1
+.rta new    ;$a2
+;Commodore 64 BASIC Keyword Tokens
+;$a3  TAB(
+;$a4  TO
+;$a5  FN
+;$a6  SPC(
+;$a7  THEN
+;$a8  NOT
+;$a9  STEP
+;Commodore 64 BASIC Operator Tokens
+;$aa  +       $b86a ADD
+;$ab  -       $b853 SUBTRACT
+;$ac  *       $ba2b MULTIPLY
+;$ad  /       $bb12 DIVIDE
+;$ae  ^       $bf7b EXPONENTIATE
+;$af  AND     $afe9 LOGICAL AND
+;$b0  OR      $afe6 LOGICAL OR
+;$b1  >       $bfb4 GREATER THAN
+;$b2  =       $aed4 EQUAL TO
+;$b3  <       $b016 LESS THAN
+;Commodore 64 BASIC Function Tokens
+;$b4  SGN     $bc39
+;$b5  INT     $bccc
+;$b6  ABS     $bc58
+;$b7  USR     $0310
+;$b8  FRE     $b37d
+;$b9  POS     $b39e
+;$ba  SQR     $bf71
+;$bb  RND     $e097
+;$bc  LOG     $b9ea
+;$bd  EXP     $bfed
+;$be  COS     $e264
+;$bf  SIN     $e26b
+;$c0  TAN     $e2b4
+;$c1  ATN     $e30e
+;$c2  PEEK    $b80d
+;$c3  LEN     $b77c
+;$c4  STR$    $b465
+;$c5  VAL     $b7ad
+;$c6  ASC     $b78b
+;$c7  CHR$    $b6ec
+;$c8  LEFT$   $b700
+;$c9  RIGHT$  $b72c
+;$ca  MID$    $b737
+;$cb  GO      *This is a keyword used to support syntax GO TO instead of GOTO
+;MDBASIC Keyword Tokens
+;$cb token was GO now OFF (keyword only)
+.rta REM     ;$cc ELSE token - using this cmd by itself behaves like REM
+.rta merge   ;$cd
+.rta dump    ;$ce
+.rta vars    ;$cf
+.rta circle  ;$d0
+.rta fill    ;$d1
+.rta scroll  ;$d2 
+.rta swap    ;$d3
+.rta locate  ;$d4
+.rta disk    ;$d5
+.rta delay   ;$d6
+.rta files   ;$d7
+.rta color   ;$d8
+.rta move    ;$d9
+.rta sprite  ;$da
+.rta multi   ;$db
+.rta expand  ;$dc
+.rta serial  ;$dd
+.rta design  ;$de
+.rta bitmap  ;$df
+.rta mapcol  ;$e0
+.rta plot    ;$e1
+.rta line    ;$e2
+.rta paint   ;$e3
+.rta draw    ;$e4
+.rta renum   ;$e5
+.rta text    ;$e6
+.rta screen  ;$e7
+.rta resume  ;$e8
+.rta adsr    ;$e9
+.rta wave    ;$ea
+.rta voice   ;$eb
+.rta pulse   ;$ec
+.rta vol     ;$ed
+.rta filter  ;$ee
+.rta play    ;$ef
+.rta auto    ;$f0
+.rta old     ;$f1
+.rta trace   ;$f2
+.rta find    ;$f3
+.rta delete  ;$f4
+.rta SNERR   ;$f5 placeholder for round (not a command, func only)
+.rta key     ;$f6 cmd & func
+.rta error   ;$f7 cmd & func
+;MDBASIC Function Tokens
 funtab
 .word round                       ;$f5 (this entry not used by executor)
-.word _key, err                   ;$f6,$f7 are both a command and a function
+.word keyfn, err                  ;$f6,$f7 are both a command and a function
 .word ptr,csr, pen, joy, pot, hex ;$f8,$f9,$fa,$fb,$fc,$fd
-;note: instr ($fe this entry not used by executor)
+;.word instr ($fe this entry not used by executor)
 ;token $ff is reserved for PI
 ;
 ;*** error messages ***
@@ -514,8 +541,8 @@ noblink sta blinkcol,y   ;all colors turn off flash flag
  dey
  bpl noblink
  jsr sidclr
- lda #$80       ;value to enable all keys to repeat
- sta $028A      ;which keys will repeat 0=only cursor, insert, delete and spacebar keys, 64 = no keys, 128=all keys
+ lda #$80       ;all keys to repeat
+ sta RPTFLAG
  lda #14        ;light blue
  sta COLOR      ;current foreground color for text
  lda #<toknew
@@ -714,34 +741,19 @@ xcmd jsr tstcmd
  sta $3a
  jmp NEWSTT     ;find beginning of next statement and execute
 ;
-_A804 jmp LET   ;perform LET
+let jmp LET   ;perform LET
+badtok jmp SNERR
 tstcmd
- sec
  sbc #$80
- bcc _A804
- cmp #FIRST_CMD_TOK-$80
- bcs oknew      ;if token is greater than or equal to FIRST_CMD_TOK then MDBASIC
- cmp #TOKEN_RESTORE-$80
- bne notrestore
- jmp restor
-notrestore
- bcs oldcmd
- cmp #TOKEN_RUN-$80
- beq do_run
- bcc oldcmd2
- jmp if
-do_run
- jmp newrun
+ bcc let
+ cmp #$a3-$80   ;lower than TAB( token $A3?
+ bcc oldcmd     ;normal CBM BASIC cmd
+ cmp #FIRST_CMD_TOK+1-$80 ;token $cc is first executable
+ bcc badtok
+ sbc #FIRST_CMD_TOK-$80-$22 ;index of first executable token $cc is 42
+ cmp #79        ;78 total tokens (0-78)
+ bcs badtok     ;MDBASIC function or PI token is not a stmt
 oldcmd
- cmp #TOKEN_ON-$80
- bne oldcmd2
- jmp on
-oldcmd2
- jmp $a7f3      ;execute CBM statement
-oknew
- sbc #FIRST_CMD_TOK-$80 ;first mdbasic cmd token for index calc start at 0
- cmp #45        ;only 45 cmd tokens (0-44)
- bcs oldcmd2
  asl            ;index * 2 for word pointer indexing
  tax
  lda cmdtab+1,x ;hibyte
@@ -902,7 +914,7 @@ oldend jmp $a6ef ;list old
 ;**************************************
 ; if statement re-write to support else
 ;**************************************
-if jsr CHRGET
+if
  jsr FRMEVL
  jsr CHRGOT
  cmp #TOKEN_GOTO ;GOTO token? syntax IF X=1 GOTO 10
@@ -1595,14 +1607,13 @@ endprg
 ;
 ;*******************
 newrun
+ pha
  jsr detrap     ;turn off error trapping incase it was enabled in previous run
  jsr clearerr   ;clear last error info
  lda #0
  sta keyflag    ;ensure key trapping is off
- jsr CHRGOT
- sec
+ pla
  beq oldrun
- jsr CHRGET
  cmp #"""       ;literal string?
  beq lodrun
  cmp #"a"       ;variable?
@@ -2182,7 +2193,7 @@ gbhah rts
 ;
 ;******************
 ; RESTORE [line#] - set line# for next DATA READ stmt
-restor jsr CHRGET  ;no param means use original restore cmd
+restor
  beq oldrst
  jsr skp73
  jsr getlin        ;find the line specified
@@ -2190,6 +2201,47 @@ restor jsr CHRGET  ;no param means use original restore cmd
  sty $42
  rts
 oldrst jmp RESTORE ;original CBM RESTORE takes no params
+;
+; NEW [SYS]
+new beq oldnew
+ cmp #TOKEN_SYS
+ bne oldnew
+ jmp ($fffc)
+oldnew jmp NEW
+;
+; POKE mem, value
+; POKE mem1 TO mem2, value, [operation]
+;operation is optional (default 0): 0=SET,1=AND,2=OR,3=EOR
+poke 
+ jsr skp73_      ;get 2-byte int in $14,$15
+ jsr CHRGOT
+ cmp #","
+ bne newpoke
+ jsr GETBYTC     ;get single byte int in x reg
+ jmp $b827       ;do single byte poke
+newpoke
+ stx $fb
+ sty $fc
+ lda #TOKEN_TO   ;token to skip over
+ jsr CHKCOM+2    ;check for and skip over TO token, syntax error if not found 
+ jsr skp73_      ;get 2-byte int in $14,$15
+ jsr ckcom2      ;throw misop if current char is not comma
+ jsr GETBYTC     ;get poke value
+ stx $fe         ;set poke value
+ lda #0
+ sta $fd         ;set default poke type 0=SET,1=AND,2=OR,3=EOR
+ jsr comchk      ;poke type param?
+ bne gopoke
+ jsr GETBYTC
+ stx $fd
+ cpx #4
+ bcc gopoke
+ jmp FCERR
+gopoke
+ dec $01
+ jsr pokee
+ inc $01
+ rts
 ;
 ;*******************
 ;get BASIC line number ($14,$15) and text ptr-1 in X,Y
@@ -2233,8 +2285,12 @@ raiseerr
  jmp (IERROR)
 baderr2 jmp FCERR ;illegal qty err
 baderr jmp SNERR  ;syntax err
-; ON hack to support ON ERROR, ON KEY
-on jsr CHRGET
+;
+; ON ERROR GOTO line
+; ON ERROR RESUME NEXT
+; ON KEY GOSUB line
+; ON n GOTO line
+on
  cmp #TOKEN_ERROR
  beq onerror
  cmp #TOKEN_KEY
@@ -2420,7 +2476,7 @@ resum pla     ;discard ERROR token
  sta $7a
  pla 
  sta $7b
-;empty stack to the base call was made which
+;empty stack to where the base call was made
 pullit
  pla
 pullit2
@@ -2439,6 +2495,18 @@ stoppull
  sta $10      ;SUBFLG Subscript Reference to an Array or User-Defined Function Call (FN)
  jsr entrap   ;enable error trapping
  jmp (IGONE)  ;read and execute the next statement
+;
+;RETURN [line#]
+return beq oldrtn
+ pla   ;discard call to this subroutine
+ pla
+ tsx
+ lda $0101,x 
+ cmp #TOKEN_GOSUB
+ beq resume0
+ ldx #12      ;RETURN WITHOUT GOSUB
+ jmp (IERROR)
+oldrtn jmp RETURN+2
 ;
 ;*******************
 ; COLOR [foregndColor (0-31)], [backgndColor (0-15)], [borderColor (0-15)]
@@ -4050,7 +4118,7 @@ keybytes .word keyentry,SHFLAG,$00c5,$00cb,$00c6
 ;2 $00c5 LSTX Matrix Coordinate of Last Key Pressed
 ;3 $00cb SFDX Matrix Coordinate of Current Key Pressed
 ;4 $00c6 Num chars in key buf
-_key
+keyfn
  jsr fac2int
  cmp #5
  bcs badpot
@@ -4084,15 +4152,15 @@ pot jsr fac2int ;get single byte value via GETADR
  beq badpot
  cmp #5         ;valid values 1 to 4
  bcs badpot
- pha
+ pha            ;save pot num
  ldx #%11000000 ;bits 0=input, 1=output, set bits 6 and 7 to output
  sei
  stx CIDDRA     ;data direction reg A
  cmp #$03       ;pot 3 and 4 are on port 2
  bcs port2
- ldx #$40
  ldy CIAPRB     ;data port reg B
- jmp setprt
+ ldx #$40
+ bne setprt     ;always branches
 port2 lsr
  ldx #$80       ;bit 7 set to read paddles on Port A or B
  ldy CIAPRA
@@ -4108,16 +4176,16 @@ wait dey
  stx CIDDRA
  cli
  tay
- pla
+ pla            ;restore pot num
  lsr
  bcc b2or4
  lda #$04
- bne and02    ;always branches
+ bne and02      ;always branches
 b2or4 lda #$08
 and02 and $02
  bne nobutt
-butt lda #$01 ;hibyte
- bne endpot
+butt lda #$01   ;hibyte
+ bne endpot     ;always branches
 nobutt lda #$00 ;hibyte
 endpot jmp GIVAYF  ;convert binary int to FAC then return
 ;
@@ -4143,8 +4211,8 @@ csr
 csrcolor
  cmp #7
  bcs lastcsr
- ldy #$02     ;load address of register having color under cursor
- lda #$87     ;target address is $0287
+ ldy #>GDCOL  ;load address of register having color under cursor
+ lda #<GDCOL
  bne goodcsr1 ;always branches
 lastcsr
  beq csraddr 
@@ -4183,57 +4251,14 @@ penx lda LPENX
  bcs butt    ;result was more than 256 so hi byte = 1
 ;
 ;H$ = HEX$(n) where n is a unsigned 2-byte integer (0-65535)
-hex jsr GETADR
- ldy #$00
- lda $15
- jsr dechex
- lda $14
- jsr dechex
- lda #$00
- sta $00ff,y
+hex
+ jsr GETADR  ;convert FAC1 to unsigned 16-bit int
+ pla         ;do not return to caller since assumes numeric result
  pla
- pla
- ldy #$ff
-nxzro iny
- lda $00ff,y
- cmp #"0"
- beq nxzro
- cpy #$04
- bne addy
- dey
-addy tya
- clc
- adc #$ff
- pha
- lda #$00
- adc #$00
- tay
- pla
+ dec $01
+ jsr hexx
+ inc $01
  jmp STRLIT
-dechex pha
- lsr
- lsr
- lsr
- lsr
- cmp #$0a
- bcc add48
- clc
- adc #$07
-add48 clc
- adc #48
- sta $00ff,y
- iny
- pla
- and #$0f
- cmp #$0a
- bcc noadd7
- clc
- adc #$07
-noadd7 clc
- adc #48
- sta $00ff,y
- iny
- rts
 ;
 ;********************
 ;* new reset vector *
@@ -4433,14 +4458,16 @@ mem2 lda $0400,y  ;get text char to flash
  and #%01111111   ;ensure bit 7 is off
  ora blinktyp     ;apply alternating value for bit 7
 mem3 sta $0400,y  ;apply new text char in screen RAM
-nxtblk iny
- bne mem1         ;last text mem to stop is when ($fb) = $07E7
- lda mem1+2
- cmp #$db         ;last color mem hibyte
- beq irqdone
+nxtblk dey
+ bne mem1         ;last text mem to stop is $07E7
  inc mem1+2
  inc mem2+2
  inc mem3+2
+ lda mem1+2
+ cmp #$db         ;last color mem hibyte
+ bcc mem1
+ bne irqdone
+ ldy #255-24
  bne mem1         ;always branches
 irqdone jmp $ea31 ;orgininal irq vector
 ;
@@ -4525,19 +4552,25 @@ comchkget jsr CHRGET ;get next basic text chr
  cmp #","
  rts
 ;******************
-comchk jsr CHRGOT  ;get current basic text chr
- cmp #","
+comchk
+ ldy #0            ;quickly check
+ lda ($7a),y       ;if current txtptr
+ cmp #","          ;is on a comma
  rts
 ;*******************
-chkcomm jsr CHRGOT ;check current basic text for comma
- cmp #","
+chkcomm
+ ldy #0            ;quickly check
+ lda ($7a),y       ;if current txtptr
+ cmp #","          ;is on a comma
  beq comma         ;return normally if comma exists
  pla               ;don't return to caller if no comma
  pla
 comma rts
 ;*******************
 ;check for comma and throw missing op error if not there
-ckcom2 jsr CHRGOT
+ckcom2
+ ldy #0
+ lda ($7a),y
  cmp #","
  beq comma
 missop ldx #31     ;missing operand error
@@ -4550,7 +4583,7 @@ getstr2 jsr FRESTR ;discard temp string
  stx $50           ;lowbyte
  sty $51           ;hibyte
  sta $52           ;length
-return rts
+ rts
 ;******************
 getbool jsr CHRGET
  beq missop
@@ -4563,7 +4596,7 @@ getval15_ jsr CHRGET
 getval15_0 beq missop
 getval15 jsr skip73
  cmp #16           ;enforce 0-15 range
- bcc return
+ bcc comma
 illqty4 jmp FCERR  ;illegal quan.
 ;*******************
 ;get a single byte int (0-255) throw error if bad data type or range
@@ -4697,10 +4730,10 @@ filestr .null " files."
 ;table for calculating 2^n where n=0-7
 bitweights .byte 1,2,4,8,16,32,64,128
 ;
-;9 tokens use line numbers that need to be renumbered when using renum
+;10 tokens use line numbers that need to be renumbered when using renum
 gotok
-.byte TOKEN_GOTO,TOKEN_GOSUB,TOKEN_THEN,TOKEN_ELSE,TOKEN_RESUME
-.byte TOKEN_TRACE,TOKEN_DELETE,TOKEN_RUN,TOKEN_RESTORE
+.byte TOKEN_GOTO,TOKEN_GOSUB,TOKEN_RETURN,TOKEN_THEN,TOKEN_ELSE
+.byte TOKEN_RESUME,TOKEN_TRACE,TOKEN_DELETE,TOKEN_RUN,TOKEN_RESTORE
 ;
 ;VOICE command use VOICE voc#, frequency
 ;REG_VAL=FREQUENCY/(CLOCK/16777216)
@@ -7673,6 +7706,100 @@ _f45c lda RIDBE ;index to end of receive buffer
  sty $fa        ;hibyte ptr to RS-232 output buffer
  ldx #0         ;success code
  clc            ;flag to calling subroutine that open was successful
+ rts
+;
+pokee lda $15
+ sec
+ sbc $fc
+ lda $14
+ sbc $fb
+ bcs okpoke
+ lda $14
+ ldy $fb
+ sta $fb
+ sty $14
+ lda $15
+ ldy $fc
+ sta $fc
+ sty $15
+okpoke
+ ldy #0
+poker
+ lda $fe  ;poke value
+ ldx $fd  ;poke type 0=set,1=and,2=or,3=eor
+ beq poke0
+ dex
+ bne poke2
+ and ($fb),y
+ jmp poke0
+poke2 dex
+ bne poke3
+ ora ($fb),y
+ jmp poke0
+poke3
+ eor ($fb),y
+poke0 sta ($fb),y
+ ldx $fc
+ cpx $15
+ bne nxtpg
+ ldx $fb
+ cpx $14
+ beq poked
+nxtpg
+ inc $fb
+ bne poker
+ inc $fc
+ bne poker
+poked rts
+;
+hexx
+ ldy #$00
+ lda $15
+ jsr dechex
+ lda $14
+ jsr dechex
+ lda #$00
+ sta $00ff,y
+ ldy #$ff
+nxzro iny
+ lda $00ff,y
+ cmp #"0"
+ beq nxzro
+ cpy #$04
+ bne addy
+ dey
+addy tya
+ clc
+ adc #$ff
+ pha
+ lda #$00
+ adc #$00
+ tay  ;str ptr hibyte
+ pla  ;str ptr lobyte
+ rts
+dechex pha
+ lsr
+ lsr
+ lsr
+ lsr
+ cmp #$0a
+ bcc add48
+ clc
+ adc #$07
+add48 clc
+ adc #48
+ sta $00ff,y
+ iny
+ pla
+ and #$0f
+ cmp #$0a
+ bcc noadd7
+ clc
+ adc #$07
+noadd7 clc
+ adc #48
+ sta $00ff,y
+ iny
  rts
 ;
 .end
