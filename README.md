@@ -9,19 +9,17 @@ http://vice-emu.sourceforge.net/<br>
 <br>
 Download Options:<br>
 <ol>
-<li>mdbasic.d64 - Contains mdbasic.prg and various testing/example programs</li>
+<li>mdbasic.d64 - Contains mdbasic.prg and a few testing/example programs & games</li>
 <li>mdbasic.prg - Only the compiled prg to be saved to your media format</li>
 <li>mdbasic.asm - Compile it yourself (see below)</li>
 </ol>
-<br>
 Download Turbo Assembler to compile source:<br>
 https://style64.org/file/TMPx_v1.1.0-STYLE.zip<br>
-<br>
 <br>
 See the shell script "compile.sh" for an example of how to compile using Turbo Assembler and execute with Vice.
 <br>
 <br>
-<u><b>Various Examples of statements (not complete list):</b></u><br>
+<u><b>Various Examples of statements (not complete list; commands have many optional parameters):</b></u><br>
 <br>
 <i>Immediate Mode:</i><br>
 <pre style="font-family:'Courier New'">
@@ -34,7 +32,6 @@ AUTO 0,10      :REM AUTO LINE NUMBERING START 0 INC 10
 DELETE 150-170 :REM DELETE PROGRAM LINES 150 TO 170 INCLUSIVELY
 TRACE          :RUN PROGRAM WITH TRACE ENABLED
 </pre>
-<br>
 <i>Program Mode:</i><br>
 <pre style="font-family:'Courier New'">
 0 SCREEN CLR              :REM CLEAR TEXT SCREEN
@@ -46,12 +43,15 @@ TRACE          :RUN PROGRAM WITH TRACE ENABLED
 8 POKE 1024 TO 2023,1     :REM POKE ADDRESS RANGE WITH VALUE 1
 9 DUMP"HELLO THERE"       :REM PRINT EXPRESSION TO PRINTER
 10 SPRITE0,1              :REM MAKE SPRITE 0 VISIBLE
-11 MOVE0,50,24            :REM LOCATE SPRITE 0 AT COORD 50,24
+11 SPRITE1,1,6,1,13       :REM SPRITE 1 VISIBLE, BLUE, ABOVE FOREGND, DTPTR 13
+12 MOVE0,50,24            :REM LOCATE SPRITE 0 AT COORD 50,24
+13 MOVE1 TO 159,99,50     :REM SLIDE SPRITE 1 TO CENTER SCREEN AT SPEED 50
+14 MOVE0,0,0TO511,255     :REM MOVE SPRITE 0 FROM TOP LEFT TO BOTTOM RIGHT, FAST 
 20 BITMAP 1, 0            :REM SHOW BITMAP IN MULTICOLOR MODE WITH BLACK BKGD
 21 MAPCOL 2, 1, 6         :REM SET MULTICOLOR REG 1,2,3
 22 PLOT 16,10,1,1         :REM PLOT A POINT TO START DRAW LOCATION
 25 DRAW "R60,D55,L60,U55" :REM DRAW A RECT
-30 CIRCLE 48,37,23,18     :REM DRAW A CIRCLE
+30 CIRCLE 48,37,23,18     :REM DRAW A CIRCLE CTR 48,37 SIZEX 23, SIZEY 18
 35 PAINT48,27,1,1         :REM PAINT INSIDE CIRCLE
 37 TEXT 0,0,"MARK"        :REM TEXT ON BITMAP W/DEFAULT CHRSET & SIZING
 38 DUMP BITMAP            :REM PRINT BITMAP TO PRINTER
@@ -77,7 +77,7 @@ TRACE          :RUN PROGRAM WITH TRACE ENABLED
 75 PRINT INSTR(2,"TEST THIS INSTR","IS") :REM INDEX OF "IS" START AT IDX 2 
 80 LINE INPUT A$          :REM TAKE INPUT FROM KEYBOARD TILL ENTER KEY PRESSED
 81 LINE INPUT#1,A$        :REM READ LINE FROM FILE 1 TERMINATED BY CR
-85 SCROLL 0,0 TO 39,24    :REM SCROLL WHOLE SCREEN UP, NO WRAPPING (DEFAULTS)
+85 SCROLL 0,0 TO 39,24    :REM SCROLL WHOLE SCREEN UP 1 CHAR, NO WRAPPING (DEFAULTS)
 90 DESIGN NEW             :REM COPIES CHARACTER SET FOR DESIGN MODE
 91 DESIGN ON              :REM SWITCH TO REDEFINED CHAR MODE ON
 92 DESIGN 1,0, 0,0,0,8,8,0,0,0 :REM CHR A NOW LOOKS LIKE A DOT
