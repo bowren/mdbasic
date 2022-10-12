@@ -280,7 +280,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.10.10"
+.text "mdbasic 22.10.12"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -2048,7 +2048,7 @@ crap jsr chrget
 tokgo tax
  beq strt
  bpl nocrap  ;x reg is zero-based index of token
- ldx #9      ;there are 9 tokens that reference a line number
+ ldx #10     ;there are 10 tokens that reference a line number
 chktok
  cmp gotok-1,x
  beq sav7a
