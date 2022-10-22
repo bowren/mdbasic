@@ -111,7 +111,18 @@ CI2PRB = $dd01 ;Data Port Register B
 ;*See zero-page memory location $01 bits 0 & 1 for RAM/ROM switching
 ;
 C2DDRA = $dd02 ;Data Direction Register for port A (CI2PRA)
+;TOD #2 Registers
+TO2TEN = $dd08 ;TOD clock tenths of a seconds in BCD format (lower nibble)
+TO2SEC = $dd09 ;TOD clock seconds in BCD format
+TO2MIN = $dd0a ;TOD clock minutes in BCD format
+TO2HRS = $dd0b ;TOD clock hours in BCD format
+
 CI2ICR = $dd0d ;Interrupt Control Register
+CI2CRA = $dd0e ;Control Register A
+CI2CRB = $dd0f ;Control Register B
+;Bit7: Select TOD or Alarm Time
+; 0=writing to TOD registers sets clock
+; 1=writing to ROD registers sets alarm
 
 ;CBM command line functions
 CHRGET = $0073 ;Get Next BASIC Text Character
@@ -178,7 +189,7 @@ POKE   = $b824 ;perform POKE
 WAIT   = $b82d ;perform WAIT
 FADDH  = $b849 ;add 0.5 to FAC1
 NEGFAC = $b947 ;replace FAC1 with its 2's complement (make it a negative number)
-FMULT  = $ba28 ;multiply FAC1 by value in memory pointed to by A (lobyte) and Y (hibyte) registers
+FMULT  = $ba28 ;copy mem pointed by Y(hi),A(lo) to FAC2 then FAC1=FAC1*FAC2
 FDIVT  = $bb12 ;divide FAC2 by FAC1 FAC1 = (FAC2/FAC1)
 MOVFM  = $bba2 ;move a 5-byte floating point number from memory to FAC1, ptr = A=lobyte, Y=hibyte
 MOV2F  = $bbca ;move a 5-byte floating point number from FAC1 to memory $57-$5B BASIC numeric work area
@@ -232,7 +243,7 @@ PLOT   = $fff0 ;Read/Set Location of the Cursor
 RESLST = $a09e ;$A09E-$A19D List of Keywords
 
 TOKEN_NEXT    = $82
-TOKEN_INPUT_  = $84
+TOKEN_INPUTN  = $84
 TOKEN_INPUT   = $85
 TOKEN_DIM     = $86
 TOKEN_READ    = $87
@@ -259,6 +270,7 @@ TOKEN_OFF     = $cb  ;OFF keyword token
 TOKEN_ELSE    = $cc
 TOKEN_VARS    = $cf
 TOKEN_FILL    = $d1
+TOKEN_TIME    = $d6
 TOKEN_COLOR   = $d8
 TOKEN_SPRITE  = $da
 TOKEN_BITMAP  = $df
@@ -280,7 +292,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.10.12"
+.text "mdbasic 22.10.22"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -302,7 +314,7 @@ newcmd
 .shift "swap"
 .shift "locate"
 .shift "disk"
-.shift "delay"
+.shift "time"
 .shift "files"
 .shift "color"
 .shift "move"
@@ -368,7 +380,7 @@ cmdtab
 .rta REM    ;$8f
 .rta $a82f  ;$90 STOP
 .rta on     ;$91 ON augmented
-.rta WAIT   ;$92
+.rta wait   ;$92
 .rta $e168  ;$93 LOAD
 .rta $e156  ;$94 SAVE
 .rta VERIFY ;$95
@@ -441,7 +453,7 @@ cmdtab
 .rta swap    ;$d3
 .rta locate  ;$d4
 .rta disk    ;$d5
-.rta delay   ;$d6
+.rta time    ;$d6
 .rta files   ;$d7
 .rta color   ;$d8
 .rta move    ;$d9
@@ -750,8 +762,8 @@ tstcmd
  bcc oldcmd     ;normal CBM BASIC cmd
  cmp #FIRST_CMD_TOK+1-$80 ;token $cc is first executable
  bcc badtok
- sbc #FIRST_CMD_TOK-$80-$22 ;index of first executable token $cc is 42
- cmp #79        ;78 total tokens (0-78)
+ sbc #FIRST_CMD_TOK-$80-$22 ;index of first executable token $cc is 35
+ cmp #79        ;79 total tokens (0-78)
  bcs badtok     ;MDBASIC function or PI token is not a stmt
 oldcmd
  asl            ;index * 2 for word pointer indexing
@@ -797,6 +809,11 @@ newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
 oldfun jsr CHRGOT ;process func as usual
  jmp $ae8d        ;execute original CBM basic func
 funtok
+ cmp #TOKEN_TIME
+ bcc oldfun
+ bne fun1
+ jmp dotime
+fun1
  cmp #FIRST_FUN_TOK  ;CBM basic max token for functions?
  bcc oldfun       ;original basic func token
  beq rounder      ;perform ROUND
@@ -870,6 +887,70 @@ zero pla
  jsr FINLOG ;add signed int to FAC1
  jmp nexth
 ;
+; TIME CLR    reset time to all zeros
+; TIME$ = T$  set the time start, format="00:00:00"
+time
+ cmp #TOKEN_CLR
+ beq timeclr
+ cmp #"$"
+ beq settime
+badtime jmp SNERR
+badtime2 jmp TMERR
+;set the clock
+settime
+ jsr CHRGET
+ cmp #$b2         ;equal sign token
+ bne badtime
+ jsr getstr
+ dec $01
+ jsr settimee
+ inc $01
+ bcs badtime2
+ rts
+;reset clock to 12AM
+timeclr
+ jsr CHRGET      ;skip over CLR token
+clrtime
+ lda #%10010010  ;BCD 12am (am/pm flag=1 because it flips on write when hour is 12)
+ sta TO2HRS      ;writing this reg stops time reg updates
+ lda #0
+ sta TO2MIN
+ sta TO2SEC
+ sta TO2TEN      ;writing this reg resumes time reg updates
+ rts
+;
+; T$ = TIME$  get current time as string value
+; T  = TIME   get current time as float number of seconds since start
+dotime
+ jsr chrget
+ cmp #"$"
+ bne time2
+ dec $01
+ jsr dotime2
+ inc $01
+ jsr STRLIT
+ jmp CHRGET
+;get time in seconds since midnight
+time2
+ dec $01
+ jsr dotime3
+ inc $01
+ lda $7a
+ pha
+ lda $7b
+ pha
+ lda #<tim2sec
+ sta $7a
+ lda #>tim2sec
+ sta $7b
+ jsr CHRGOT
+ jsr $ad8a
+ pla
+ sta $7b
+ pla
+ sta $7a
+ rts
+;
 ;******************************************
 ;LIST command re-write to decode new tokens via vector ($0306)
 ;Supports freezing the listing while holding down the shift key.
@@ -912,7 +993,7 @@ found iny     ;found a command match for every chr in string
 oldend jmp $a6ef ;list old
 ;
 ;**************************************
-; if statement re-write to support else
+; IF statement re-write to support ELSE
 ;**************************************
 if
  jsr FRMEVL
@@ -1444,11 +1525,31 @@ vol
  rts
 ;
 ;*******************
-; DELAY n   where n=0-65535 jiffies
-delay
- jsr skp73_  ;get 2-byte int in x (lobyte) and y (hibyte)
-delay2       ;entry point for internal use; set x and y reg accordingly
- clc         ;flag for STOP key
+; WAIT location, mask1 [,mask2]
+; WAIT jiffies
+wait
+ jsr skp73_   ;get 2-byte int in x (lobyte) and y (hibyte)
+ jsr CHRGOT   ;another param?
+ beq delay2   ;no, do jiffy wait
+ jsr $b7f1    ;evaluate expression to single byte int to x reg
+ stx $49      ;mask1
+ ldx #0       ;default for mask2
+ jsr CHRGOT   ;mask2 param?
+ beq setmask2 ;not provided, use default
+ jsr $b7f1    ;evaluate expression to single byte int to x reg
+setmask2
+ stx $4a      ;mask2
+ ldy #$00
+waiting
+ lda ($14),y  ;check mem loc value
+ eor $4a      ;apply mask2
+ and $49      ;and mask1
+ bne waited   ;match, stop now
+ jsr STOP
+ bne waiting  ;STOP key pressed, stop now
+waited rts
+delay2        ;entry point for internal use; set x and y reg accordingly
+ clc          ;flag for STOP key
  txa
  bne decx
  tya
@@ -1820,103 +1921,17 @@ nomtch jmp TMERR ;TYPE MISMATCH ERROR
 ; FIND cmd - tokenized search, ie: FIND FOR
 ; FIND"chars - text search, ie: FIND"FOR
 find
- ldy #0
- lda ($2b),y ;should be $0801
- sta $fb
- iny
- lda ($2b),y ;should be $0802
- sta $fc
- ora $fb
- bne prgyes
- jmp prgend
-prgyes
- iny
- lda ($2b),y ;should be $0803
- sta $39
- iny
- lda ($2b),y ;should be $0804
- sta $3a
- jsr CHRGOT
- bne dofind
- jmp prgend
-dofind cmp #"""
- bne noquo
- jsr CHRGET
-noquo lda $2b
- clc
- adc #4
- sta $fd
- lda $2c
- adc #0
- sta $fe
-check ldy #$00
- lda ($7a),y
- beq linend
- tax
- lda ($fd),y
- beq linend
- txa
- cmp ($fd),y
- beq search
- inc $fd
- bne check
- inc $fe
- jmp check
-search iny
- lda ($7a),y
- beq founit
- cmp ($fd),y
- beq search
- tya
- clc
- adc $fd
- sta $fd
- lda $fe
- adc #$00
- sta $fe
- jmp check
-founit lda $39
- sta $14
- lda $3a
- sta $15
- jsr FINDLN   ;search for line#
- lda #$01
- sta listflag
- jsr $a6c9    ;perform list (print line on screen)
- lda #$91     ;crsr up
- jsr CHROUT
- jsr STOP
- beq prgend
-linend lda $fb
- sta $fd
- lda $fc
- sta $fe
- ldy #$00
- lda ($fd),y
- sta $fb
- iny
- lda ($fd),y
- sta $fc
- iny
- lda ($fd),y
- sta $39
- iny
- lda ($fd),y
- sta $3a
- iny
- tya
- clc
- adc $fd
- sta $fd
- lda $fe
- adc #$00
- sta $fe
- lda $fc
- ora $fb
- bne check
-prgend
+ dec $01
+ jsr findd
+ inc $01
  jsr printcr
  jmp endprg
+findlnr
+ inc $01 
+ jsr FINDLN   ;search for line#
+ jsr $a6c9    ;perform list (print line on screen)
+ dec $01
+ rts
 ;
 ;*******************
 ; DELETE line  (delete one line)
@@ -2239,9 +2254,7 @@ newpoke
  jmp FCERR
 gopoke
  dec $01
- jsr pokee
- inc $01
- rts
+ jmp pokee
 ;
 ;*******************
 ;get BASIC line number ($14,$15) and text ptr-1 in X,Y
@@ -2289,13 +2302,31 @@ baderr jmp SNERR  ;syntax err
 ; ON ERROR GOTO line
 ; ON ERROR RESUME NEXT
 ; ON KEY GOSUB line
-; ON n GOTO line
+; ON i GOTO line1,line2,...linen
 on
  cmp #TOKEN_ERROR
  beq onerror
  cmp #TOKEN_KEY
  beq onkey
+; cmp #TOKEN_TIME
+; beq ontime
  jmp ONGOTO   ;perform ON
+;ontime jsr dbyval
+; stx timerval
+; sty timerval+1
+; jsr CHRGOT
+; cmp #TOKEN_GOSUB
+; bne baderr
+; jsr getline
+; stx timerptr   ;of the line# specified
+; sty timerptr+1
+; lda $14
+; sta timerline
+; lda $15
+; sta timerline+1
+; lda #1
+; sta timerflag  ;turn on key trapping
+; rts
 onkey jsr CHRGET
  cmp #TOKEN_GOSUB
  bne baderr
@@ -3270,7 +3301,7 @@ plotit dec $01
 ; LINE INPUT# filenum, A$
 ; LINE x1,y1 TO x2, y2, plotType, color
 line
- cmp #TOKEN_INPUT_ ;input# token (line input#)
+ cmp #TOKEN_INPUTN ;input# token (line input#)
  bcc liner     ;line x,y to a,z
  jsr ERRDIR    ;throw error if direct mode; only x reg is affected
  cmp #TOKEN_INPUT  ;input token (line input)
@@ -4067,7 +4098,6 @@ addhalf
 ;move decimal point to the left
  ldx $14
  beq nomul
- jmp movedec
 ;move decimal point
 movedec
  txa
@@ -4167,8 +4197,8 @@ port2 lsr
 setprt stx CIAPRA
  sty $02
  ldy #$80       ;wait for latch to fully engage
-wait dey
- bpl wait
+waitl dey
+ bpl waitl
  lsr
  tay
  lda POTX,y
@@ -4277,6 +4307,17 @@ resvec
  jsr $e453  ;copy BASIC vectors to RAM
  jsr INIT   ;initialize BASIC
  jsr newvec ;set vectors
+;init TOD clock #2
+ lda CI2CRA
+ and #127   ;60 hz
+ sta CI2CRA
+ lda CI2CRB ;bit7: select target 0=clock,1=alarm
+ and #127   ;writing to TOD registers set the clock
+ sta CI2CRB
+; jsr clrtime
+ lda #0
+ sta TO2TEN ;writing to this reg starts clock capture to registers
+;
  lda $2b    ;ptr to start of BASIC program text
  ldy $2c
  jsr REASON ;check free mem
@@ -4578,7 +4619,7 @@ missop ldx #31     ;missing operand error
 ;*******************
 getstr jsr CHRGET  ;get next basic text chr
 getstr0 beq missop
-getstr_ jsr FRMEVL ;evaluate expression
+ jsr FRMEVL ;evaluate expression
 getstr2 jsr FRESTR ;discard temp string
  stx $50           ;lowbyte
  sty $51           ;hibyte
@@ -4617,6 +4658,30 @@ skp73 jsr FRMNUM   ;eval numeric expr & type
  ldy $15
  rts
 ;*******************
+types jsr comchk ;current char a comma?
+ bne etypes
+ jsr comchkget
+ beq noparam    ;another comma found so skip plot type param
+ jsr skip73     ;get plot type value
+ cmp #4         ;plot type 0=erase, 1=plot, 2=toggle, 3=none (locate only)
+ bcs illqty4
+ sta lastplott
+noparam jsr chkcomm  ;if current char is not a comma do not return here
+ lda SCROLX
+ and #%00010000 ;check if multicolor mode on or off
+ bne mcplot
+ jsr CHRGET
+ jmp getc1      ;get hires plot color 0-15
+mcplot jsr getval ;get color selection, multicolor selection index 1-3
+ beq illqty4
+ cmp #4         ;mc mode color index selection is 1,2 or 3
+ bcs illqty4
+ asl            ;convert index to ptab offset 1=8, 2=16, 3=24
+ asl
+ asl
+ sta mapcolbits ;offset = index * 8 where index in (1,2,3)
+etypes rts
+;*****************
 sprnum
  jsr skip73_
  cmp #8            ;valid sprite numbers 0-7
@@ -4642,32 +4707,6 @@ getpnt
  jsr pntweg     ;get x,y, plot type
  jmp savepoint
 ;*******************
-types jsr comchk ;current char a comma?
- bne etypes
- jsr comchkget
- beq noparam    ;another comma found so skip plot type param
- jsr skip73     ;get plot type value
- cmp #4         ;plot type 0=erase, 1=plot, 2=toggle, 3=none (locate only)
- bcc goodtype
-badtype jmp FCERR ;illegal quantity error
-goodtype sta lastplott
-noparam jsr chkcomm  ;if current char is not a comma do not return here
- lda SCROLX
- and #%00010000 ;check if multicolor mode on or off
- bne mcplot
- jsr CHRGET
- jmp getc1      ;get hires plot color 0-15
-mcplot jsr getval ;get color selection, multicolor selection index 1-3
- beq badtype
- cmp #4         ;mc mode color index selection is 1,2 or 3
- bcs badtype
- asl            ;convert index to ptab offset 1=8, 2=16, 3=24
- asl
- asl
- sta mapcolbits ;offset = index * 8 where index in (1,2,3)
-etypes rts
-;
-;*****************
 ;these routines are used by command under ROM
 rom1 inc $01     ;switch to rom (a000-bfff)
  jsr GIVAYF      ;convert 16-bit signed int to float (a=hibyte y=lobyte)
@@ -4736,8 +4775,8 @@ gotok
 .byte TOKEN_RESUME,TOKEN_TRACE,TOKEN_DELETE,TOKEN_RUN,TOKEN_RESTORE
 ;
 ;VOICE command use VOICE voc#, frequency
-;REG_VAL=FREQUENCY/(CLOCK/16777216)
-;FREQUENCY=REG_VALUE*(CLOCK/16777216)Hz
+;REGVAL=FREQ/(CLOCK/16777216)
+;FREQ=REGVAL*(CLOCK/16777216)Hz
 ;where CLOCK NTSC=1022730, PAL=985250
 ;NTSC 1Hz Freq Value = 1022730/16777216 = 0.060959458351
 ;PAL  1Hz Freq Value =  985250/16777216 = 0.058725476326
@@ -4748,7 +4787,7 @@ pal  .byte $7c,$70,$8a,$20,$00
 ;
 ;PULSE command use PULSE voc#, width%
 ;used for converting register value to frequency in Hz
-;Formula REG_VALUE = 40.95 * width%
+;Formula REGVAL=40.95*width%
 m4095 .byte $86,$23,$cc,$cc,$cd ;FAC binary representation of 40.95
 ;FILTER command use FILTER frequency, resonance, type
 five8 .byte $83,$39,$99,$99,$9a  ;FAC binary representation of 5.8
@@ -4761,7 +4800,7 @@ five8 .byte $83,$39,$99,$99,$9a  ;FAC binary representation of 5.8
 traceflag  .byte 0 ;trace flag 0=off, 1-on
 listflag   .byte 0 ;list flag 0=off, 1=on
 keyflag    .byte 0 ;key capture mode 0=disabled, 1=enabled, 2=paused
-keyentry   .byte 0 ;byte0 the scan code of the last key captured with ON KEY statement enabled
+keyentry   .byte 0 ;scan code of the last key captured with ON KEY statement enabled
 errnum     .byte 0 ;last error number that occured, default 0 (no error)
 errline    .word $FFFF ;last line number causing error, default -1 (not applicable)
 errtrap    .word 0 ;error handler line number
@@ -4769,6 +4808,22 @@ txtptr     .word 0 ;basic txt ptr of statement causing error
 stackptr   .byte 0 ;stack ptr before cmd execution for use by ON ERROR
 keyptr     .word 0 ;basic txt ptr of statement for ON KEY GOSUB line#
 keyline    .word $FFFF ;line number for ON KEY subroutine
+;expression to calc seconds since midnight
+tim2sec
+.text "(d"  ;placholder for 1/10 sec
+.byte $ad   ;divide token
+.text "10)"
+.byte $aa   ;plus token
+.text "ss"  ;placeholder for seconds
+.byte $aa   ;plus token
+.text "(60"
+.byte $ac   ;times token
+.text "mm)" ;placeholder for minutes
+.byte $aa   ;plus token
+.text "(3600"
+.byte $ac   ;times token
+.text "hh)" ;placeholder for hours
+.byte 0
 
 ;VOICE COMMAND:
 md417      .byte 0   ;holds current filter control and resonance
@@ -4841,8 +4896,8 @@ playindex .byte 0  ;index of current char in play string for each voice
 ;** play table ***
 ;These numbers represent the middle octave and are only for the SID freq control registers
 ;CLOCK is NTSC=1022730, PAL=985250
-;FREQUENCY=REG_VALUE*(CLOCK/16777216)Hz
-;REG_VALUE=FREQUENCY/(CLOCK/16777216)Hz
+;FREQUENCY=REGVAL*(CLOCK/16777216)Hz
+;REGVAL=FREQUENCY/(CLOCK/16777216)Hz
 ;https:;pages.mtu.edu/~suits/notefreqs.html
 ;There are 8 octaves each with 12 notes 8*12 = 96 total notes
 ;The notes here are octave 4 on NTSC clock. The others are derived from these.
@@ -7486,19 +7541,19 @@ openrs232
  ldy #0          ;secondary channel
  jsr SETLFS
  jsr $f30f       ;find the file in the logical file table
- bne _f359       ;zero flag=1 means file not currently open
+ bne xf359       ;zero flag=1 means file not currently open
  jsr $f6fe       ;handle FILE OPEN error
  tax             ;error code 2
  sec
  rts
-_f359 ldx $98    ;number of open i/o files/index to the end of file tables
+xf359 ldx $98    ;number of open i/o files/index to the end of file tables
  cpx #10         ;limit 10
- bcc _f362
+ bcc xf362
  jsr $f6fb       ;handle TOO MANY FILES error
  tax             ;error code 1
  sec
  rts
-_f362 inc $98    ;inc total file handle count
+xf362 inc $98    ;inc total file handle count
  lda $b8         ;current logical file number
  sta LAT,x       ;store file descriptors into master table
  lda $b9         ;current secondary address
@@ -7660,38 +7715,38 @@ open232
  stx BITNUM     ;RS-232: number of bits left to be sent/received
  lda M51CTR     ;RS-232: Mock 6551 Control Register
  and #$0f       ;if baud (first 4 bits) = 0 then
- beq _f446      ;user defined baud rate
+ beq xf446      ;user defined baud rate
  asl            ;else calc word ptr offset of baud timing prescaler
  tax
  lda $02a6      ;PAL/NTSC Flag
- bne _f43a      ;0=NTSC
+ bne xf43a      ;0=NTSC
 ;NTSC timing
  ldy $fec1,x    ;prescaler table for NTSC
  lda $fec0,x
- jmp _f440
+ jmp xf440
 ;PAL timing
-_f43a
+xf43a
  ldy $e4eb,x    ;prescaler table for PAL
  lda $e4ea,x
 ;set prescaler timing registers
-_f440           ;RS-232: Nonstandard Bit Timing (user defined baud rate)
+xf440           ;RS-232: Nonstandard Bit Timing (user defined baud rate)
  sty M51AJB+1
  sta M51AJB
 ;
-_f446
+xf446
  lda M51AJB
  asl
  jsr $ff2e      ;calculate time required to send a bit
  lda M51CDR     ;RS-232: Mock 6551 Command Register
  lsr            ;bit 7=handshake 0=3-line, 1=x-line
- bcc _f45c      ;clear carry means x-line
+ bcc xf45c      ;clear carry means x-line
  lda CI2PRB     ;Data Port B
  asl            ;check bit 7 Data Set Ready (DSR) Pin L on User Port
- bcs _f45c      ;carry set then ready for transmission
+ bcs xf45c      ;carry set then ready for transmission
 ;set error status and skip to end of buffer
  jsr $f00d      ;set error status: bit 6 DTR (Data Set Ready) Signal Missing
 ;advance index to send/receive buffers
-_f45c lda RIDBE ;index to end of receive buffer
+xf45c lda RIDBE ;index to end of receive buffer
  sta RIDBS      ;index to start of receive buffer
  lda RODBE      ;RODBE RS-232 index to end of transmit buffer
  sta RODBS      ;index to start of transmit buffer
@@ -7750,7 +7805,7 @@ nxtpg
  bne poker
  inc $fc
  bne poker
-poked rts
+poked jmp memnorm
 ;
 hexx
  ldy #$00
@@ -7759,23 +7814,18 @@ hexx
  lda $14
  jsr dechex
  lda #$00
- sta $00ff,y
- ldy #$ff
-nxzro iny
- lda $00ff,y
+ sta $0100,y
+;find most significant digit index
+ ldy #0
+nxzro
+ lda $0100,y
  cmp #"0"
- beq nxzro
- cpy #$04
- bne addy
- dey
-addy tya
- clc
- adc #$ff
- pha
- lda #$00
- adc #$00
- tay  ;str ptr hibyte
- pla  ;str ptr lobyte
+ bne msd
+ iny
+ cpy #3
+ bne nxzro
+msd tya   ;A(lo) Y(hi) is ptr to zero-term str
+ ldy #$01
  rts
 dechex pha
  lsr
@@ -7788,7 +7838,7 @@ dechex pha
  adc #$07
 add48 clc
  adc #48
- sta $00ff,y
+ sta $0100,y
  iny
  pla
  and #$0f
@@ -7798,8 +7848,265 @@ add48 clc
  adc #$07
 noadd7 clc
  adc #48
- sta $00ff,y
+ sta $0100,y
  iny
+ rts
+;
+findd
+ ldy #0
+ lda ($2b),y ;should be $0801
+ sta $fb
+ iny
+ lda ($2b),y ;should be $0802
+ sta $fc
+ ora $fb
+ bne prgyes
+ rts
+prgyes
+ iny
+ lda ($2b),y ;should be $0803
+ sta $39
+ iny
+ lda ($2b),y ;should be $0804
+ sta $3a
+ jsr CHRGOT
+ bne dofind
+ rts
+dofind cmp #"""
+ bne noquo
+ jsr CHRGET
+noquo lda $2b
+ clc
+ adc #4
+ sta $fd
+ lda $2c
+ adc #0
+ sta $fe
+check ldy #$00
+ lda ($7a),y
+ beq linend
+ tax
+ lda ($fd),y
+ beq linend
+ txa
+ cmp ($fd),y
+ beq search
+ inc $fd
+ bne check
+ inc $fe
+ jmp check
+search iny
+ lda ($7a),y
+ beq founit
+ cmp ($fd),y
+ beq search
+ tya
+ clc
+ adc $fd
+ sta $fd
+ lda $fe
+ adc #$00
+ sta $fe
+ jmp check
+founit lda $39
+ sta $14
+ lda $3a
+ sta $15
+ lda #$01
+ sta listflag
+ jsr findlnr  ;search for line#
+ lda #$91     ;crsr up
+ jsr CHROUT
+ jsr STOP
+ beq prgend
+linend lda $fb
+ sta $fd
+ lda $fc
+ sta $fe
+ ldy #$00
+ lda ($fd),y
+ sta $fb
+ iny
+ lda ($fd),y
+ sta $fc
+ iny
+ lda ($fd),y
+ sta $39
+ iny
+ lda ($fd),y
+ sta $3a
+ iny
+ tya
+ clc
+ adc $fd
+ sta $fd
+ lda $fe
+ adc #$00
+ sta $fe
+ lda $fc
+ ora $fb
+ bne check
+prgend
+ rts
+;
+dotime2
+ ldy #0
+ lda TO2HRS      ;reading pauses capture of time to these registers
+;convert 12 hour clock to 24 hour clock
+ php
+ and #%00011111
+ cmp #%00010010  ;12 in BCD format
+ bne not12
+ plp
+ bmi gethr       ;12pm use as is
+ lda #0          ;12am is first hour
+ beq gethr       ;always branches
+not12
+ plp
+ bpl gethr       ;1am to 11am use as is
+ clc             ;adjust 1pm to 11pm ==> 13 to 23 
+ sed
+ adc #%00010010  ;12 in BCD format
+ cld
+gethr
+ jsr timedig
+;
+ lda TO2MIN
+ jsr timedig
+;
+ lda TO2SEC
+ jsr timedig
+;
+ lda TO2TEN ;reading resumes capture of time to these registers
+;
+ ldy #1
+ lda #$00
+ rts
+;
+timedig
+ pha
+ lsr
+ lsr
+ lsr
+ lsr
+ clc
+ adc #"0"
+ sta $0100,y
+ iny
+ pla
+hwedge
+ and #15
+ clc
+ adc #"0"
+ sta $0100,y
+ iny
+ cpy #8
+ beq nulterm
+ lda #":"
+.byte $2c
+nulterm lda #0
+ sta $0100,y
+ iny
+ rts
+;
+dotime3
+ jsr dotime2
+;1/10 second
+ lda TO2TEN
+ and #15
+ clc
+ adc #"0"
+ ldy #1
+ sta tim2sec,y
+;seconds
+ ldx #7
+ lda $0100,x
+ ldy #8
+ sta tim2sec,y
+ dey
+ dex
+ lda $0100,x
+ sta tim2sec,y
+;minutes
+ ldx #4
+ ldy #15
+ lda $0100,x
+ sta tim2sec,y
+ dey
+ dex
+ lda $0100,x
+ sta tim2sec,y
+;hours
+ ldx #1
+ ldy #25
+ lda $0100,x
+ sta tim2sec,y
+ dey
+ dex
+ lda $0100,x
+ sta tim2sec,y
+ rts
+;
+settimee
+ ldy $52
+ cpy #8
+ bne badtim2+1
+ dey             ;index 0 to 7
+ jsr timenum     ;seconds
+ sta $24
+ dey             ;ignore colon 
+ jsr timenum     ;minutes
+ sta $23
+ dey             ;ignore colon 
+ jsr timenum     ;hours
+ beq morn        ;midnight
+ sed
+ cmp #%00100100  ;BCD 24
+ bcs badtim2
+ cmp #%00010011  ;BCD 13
+ bcc morn        ;noon will flip am/pm flag
+pm
+ sec
+ sbc #%00010010  ;BCD 12
+ ora #%10000000  ;set am/pm flag to pm
+morn
+ sta TO2HRS
+ lda $23
+ sta TO2MIN
+ lda $24
+ sta TO2SEC
+ lda #0
+ sta TO2TEN  ;start clock capture
+ cld
+ clc
+ rts
+timenum
+ lda ($50),y ;seconds one's places
+ cmp #"0"
+ bcc badtim
+ cmp #":"
+ bcs badtim
+ sec
+ sbc #"0"
+ sta $25
+ dey
+ lda ($50),y  ;seconds ten's place
+ cmp #"0"
+ bcc badtim
+ cmp #"6"
+ bcs badtim
+ dey
+ asl
+ asl
+ asl
+ asl
+ ora $25
+ rts
+badtim
+ pla
+ pla
+badtim2 cld
+ sec
  rts
 ;
 .end
