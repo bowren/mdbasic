@@ -98,10 +98,13 @@ POTX   = $d419 ;Read Position of Game Paddle 1 or 3, POTX+1 ($d41a) = Paddle 2 o
 CIAPRA = $dc00 ;Data Port Register A
 CIAPRB = $dc01 ;Data Port Register B
 CIDDRA = $dc02 ;Data Direction Register A
+CIACRA = $dc0e ;Control Register A
 
 ;Complex Interface Adapter (CIA) #2 Registers ($DD00-$DD0F)
 CI2PRA = $dd00 ;Data Port Register A
 CI2PRB = $dd01 ;Data Port Register B
+TI2ALO = $dd04 ;Timer A (lo byte)
+TI2AHI = $dd05 ;Timer A (hi byte)
 ;
 ;Bits 0-1 Select VIC-II 16K addressable memory bank (0-3)
 ;  00 Bank 3 (49152-65535, $C000-$FFFF) 16K RAM / Memory mapped I/O, character ROM, 4K Kernal
@@ -292,7 +295,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.10.22"
+.text "mdbasic 28.10.24"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -538,63 +541,6 @@ cantre .shift "can't resume"          ;35
 usrerr .shift "user defined"          ;36
 ;
 erradd .word misop, ilvne, illspr, ilcoor, cantre, usrerr
-;
-newvec jsr nwvec2
- lda #<mesge
- ldy #>mesge
- jmp STROUT 
-nwvec2 lda #0
- sta EXTCOL     ;border color black
- sta BGCOL0     ;background color black
- sta traceflag  ;trace flag off
- sta keyflag    ;key trapping off
- ldy #15
-noblink sta blinkcol,y   ;all colors turn off flash flag
- dey
- bpl noblink
- jsr sidclr
- lda #$80       ;all keys to repeat
- sta RPTFLAG
- lda #14        ;light blue
- sta COLOR      ;current foreground color for text
- lda #<toknew
- sta $0304
- lda #>toknew
- sta $0305
- lda #<newfun
- sta $030a
- lda #>newfun
- sta $030b
- lda #<list
- sta $0306
- lda #>list
- sta $0307
- lda #<execut
- sta IGONE
- lda #>execut
- sta IGONE+1
- jsr detrap
- lda #<brkirq
- sta $0316
- lda #>brkirq
- sta $0317
- lda #<keychk
- sta $028f
- lda #>keychk
- sta $0290
- lda #<newload
- sta $0330
- lda #>newload
- sta $0331
- lda #<newsave
- sta $0332
- lda #>newsave
- sta $0333
- lda #$FF   ;MDBASIC takes 8k of the BASIC RAM area
- sta $37    ;the highest address is now $7FFF (32767)
- lda #$7F   ;$37-$38 holds value of highest address used by BASIC, originally $9FFF (40959)
- sta $38
- rts
 ;
 ;Program Tokenization process - text to tokens via vector ($0304)
 ;
@@ -926,8 +872,10 @@ dotime
  cmp #"$"
  bne time2
  dec $01
- jsr dotime2
+ jsr getimstr
  inc $01
+ ldy #1
+ lda #$00
  jsr STRLIT
  jmp CHRGET
 ;get time in seconds since midnight
@@ -944,7 +892,7 @@ time2
  lda #>tim2sec
  sta $7b
  jsr CHRGOT
- jsr $ad8a
+ jsr FRMNUM
  pla
  sta $7b
  pla
@@ -4306,18 +4254,15 @@ resvec
  cli
  jsr $e453  ;copy BASIC vectors to RAM
  jsr INIT   ;initialize BASIC
- jsr newvec ;set vectors
-;init TOD clock #2
- lda CI2CRA
- and #127   ;60 hz
- sta CI2CRA
- lda CI2CRB ;bit7: select target 0=clock,1=alarm
- and #127   ;writing to TOD registers set the clock
- sta CI2CRB
-; jsr clrtime
- lda #0
- sta TO2TEN ;writing to this reg starts clock capture to registers
-;
+ lda $01
+ and #%11111110
+ sta $01     ;switch LOROM to LORAM
+ jsr newvec  ;set new vectors to MDBASIC routines
+ jsr initclk ;init TOD clock #2
+ inc $01     ;switch LORAM to LOROM
+ lda #<mesge
+ ldy #>mesge
+ jsr STROUT ;display MDBASIC banner
  lda $2b    ;ptr to start of BASIC program text
  ldy $2c
  jsr REASON ;check free mem
@@ -4340,7 +4285,11 @@ brkirq jsr IOINIT
  lda #$04        ;initialize to 1024 ($0400)
  sta HIBASE      ;text page hi byte pointer
  jsr $e518       ;initialize screen and keyboard
- jsr nwvec2
+ lda $01
+ and #%11111110
+ sta $01         ;switch LOROM to LORAM
+ jsr newvec      ;init vectors
+ inc $01         ;switch LORAM to LOROM
  jsr CLALL
  lda #0
  sta CI2ICR      ;disable IRQ
@@ -4777,13 +4726,13 @@ gotok
 ;VOICE command use VOICE voc#, frequency
 ;REGVAL=FREQ/(CLOCK/16777216)
 ;FREQ=REGVAL*(CLOCK/16777216)Hz
-;where CLOCK NTSC=1022730, PAL=985250
-;NTSC 1Hz Freq Value = 1022730/16777216 = 0.060959458351
-;PAL  1Hz Freq Value =  985250/16777216 = 0.058725476326
+;where CLOCK NTSC=1022727.143, PAL=985248.611
+;NTSC 1Hz Freq Value = 1022727.143/16777216 = 0.060959288
+;PAL  1Hz Freq Value =  985248.611/16777216 = 0.058725393
 ;below are the FAC values for 1 unit in Hz for both CLOCK speeds
 ;
-ntsc .byte $7c,$79,$b0,$a0,$00
-pal  .byte $7c,$70,$8a,$20,$00
+ntsc .byte $7c,$79,$b0,$72,$44
+pal  .byte $7c,$70,$8a,$09,$a8
 ;
 ;PULSE command use PULSE voc#, width%
 ;used for converting register value to frequency in Hz
@@ -4891,14 +4840,13 @@ temp1     .byte 0
 temp2     .byte 0
 playoct   .byte 4  ;default octave 4
 playlen   .byte 30 ;notelength for each voice
-playfreq  .byte 0  ;note freq value offset for each voice
 playindex .byte 0  ;index of current char in play string for each voice
 ;** play table ***
 ;These numbers represent the middle octave and are only for the SID freq control registers
-;CLOCK is NTSC=1022730, PAL=985250
+;CLOCK is NTSC=1022727.143, PAL=985248.611
 ;FREQUENCY=REGVAL*(CLOCK/16777216)Hz
 ;REGVAL=FREQUENCY/(CLOCK/16777216)Hz
-;https:;pages.mtu.edu/~suits/notefreqs.html
+;https://pages.mtu.edu/~suits/notefreqs.html
 ;There are 8 octaves each with 12 notes 8*12 = 96 total notes
 ;The notes here are octave 4 on NTSC clock. The others are derived from these.
 ;
@@ -4911,7 +4859,10 @@ fnotes .word 3406
 ;             B-  *C-   D-   E-  *F-   G-
 ;             A#  *B#   C#   D#  *E#   F#   G#
 snotes .word 3824,4051,4547,5104,5407,6069,6813
-;
+;these are the same notes above but for PAL systems (30 byte offset)
+.word        3746,4205,4455,5001,5613,5947,6675
+.word        3536
+.word        3969,4205,4720,5298,5613,6300,7072
 
 ;table of video screen matrix hibyte offset per line 0-24
 btab .byte 0,0,0,0,0,0,0,1,1,1,1,1,1,2,2,2,2,2,2,2,3,3,3,3,3
@@ -7120,13 +7071,17 @@ nextn2
  beq nextn2-1
 nextn
  cmp #"h"       ;notes A-G only
- bcs nonnote
+ bcc goodnote
+ jmp nonnote
 goodnote
  sec            ;ascii of notes must start at A (65)
  sbc #"a"       ;ascii - A(65) starts at 0 for A, 1 for B, etc.
  bmi octchg
- asl            ;note# * 2 --> note numbers A=0, B=1, etc.
- sta playfreq   ;save current note freq offset (word ptr)
+ ldx $02a6      ;NTSC or PAL?
+ beq wrdidx
+ clc            ;adjust note index for PAL
+ adc #15        ;to use regvals for 50Hz clock
+wrdidx asl      ;convert node index to word index
  tax
  jsr noteget
  beq regnote
@@ -7187,7 +7142,7 @@ octup2
 nextoct
  inc playoct
  lda playoct
- cmp #8
+ cmp #9
  bcs prevoct
 nextn3
  inc playindex  ;skip over char
@@ -7227,7 +7182,7 @@ noteoct
  cmp #"o"
  bne notewave
  jsr getdigitval
- cmp #8
+ cmp #9
  bcs skipnote
  sta playoct
  bcc skipnote   ;always branches
@@ -7308,7 +7263,8 @@ octadj
  tax
 octup
  asl temp1
- rol temp2 
+ rol temp2
+ bcs octmax ;max regval reached
  dex
  bne octup
  beq octend
@@ -7326,6 +7282,10 @@ octend
  lda temp1
  ldy temp2
 octdone rts
+octmax
+ lda #$ff ;max regval reached starting at
+ tay      ;octave 8 note B for PAL
+ rts      ;octave 8 note C for NTSC
 ;
 godraww
  stx $bb    ;draw length
@@ -7949,7 +7909,8 @@ linend lda $fb
 prgend
  rts
 ;
-dotime2
+;get 8-byte time string at $0100 
+getimstr
  ldy #0
  lda TO2HRS      ;reading pauses capture of time to these registers
 ;convert 12 hour clock to 24 hour clock
@@ -7958,31 +7919,25 @@ dotime2
  cmp #%00010010  ;12 in BCD format
  bne not12
  plp
- bmi gethr       ;12pm use as is
+ bmi getime      ;12pm use as is
  lda #0          ;12am is first hour
- beq gethr       ;always branches
+ beq getime      ;always branches
 not12
  plp
- bpl gethr       ;1am to 11am use as is
+ bpl getime      ;1am to 11am use as is
  clc             ;adjust 1pm to 11pm ==> 13 to 23 
  sed
  adc #%00010010  ;12 in BCD format
  cld
-gethr
+getime
  jsr timedig
-;
  lda TO2MIN
  jsr timedig
-;
  lda TO2SEC
  jsr timedig
-;
  lda TO2TEN ;reading resumes capture of time to these registers
-;
- ldy #1
- lda #$00
  rts
-;
+;get time digit
 timedig
  pha
  lsr
@@ -7994,7 +7949,6 @@ timedig
  sta $0100,y
  iny
  pla
-hwedge
  and #15
  clc
  adc #"0"
@@ -8003,16 +7957,16 @@ hwedge
  cpy #8
  beq nulterm
  lda #":"
-.byte $2c
+.byte $2c  ;makes lda #0 a NOP
 nulterm lda #0
  sta $0100,y
  iny
  rts
 ;
+;build expression to convert time$ to time in seconds since midnight
 dotime3
- jsr dotime2
+ jsr getimstr  ;returns TO2TEN in A reg
 ;1/10 second
- lda TO2TEN
  and #15
  clc
  adc #"0"
@@ -8020,8 +7974,8 @@ dotime3
  sta tim2sec,y
 ;seconds
  ldx #7
- lda $0100,x
  ldy #8
+ lda $0100,x
  sta tim2sec,y
  dey
  dex
@@ -8047,6 +8001,7 @@ dotime3
  sta tim2sec,y
  rts
 ;
+;set time from string
 settimee
  ldy $52
  cpy #8
@@ -8065,8 +8020,6 @@ settimee
  bcs badtim2
  cmp #%00010011  ;BCD 13
  bcc morn        ;noon will flip am/pm flag
-pm
- sec
  sbc #%00010010  ;BCD 12
  ora #%10000000  ;set am/pm flag to pm
 morn
@@ -8107,6 +8060,104 @@ badtim
  pla
 badtim2 cld
  sec
+ rts
+;
+;init TOD clocks
+;determines what the TOD clock frequency should be (50 or 60 Hz)
+;by measuring how fast the timer can count down during the TOD's
+;one-tenth of a second cycle.
+initclk
+ lda CI2CRB      ;bit7: select target 0=clock,1=alarm
+ and #%01111111  ;writing to TOD registers set the clock
+ sta CI2CRB
+;
+ lda #$00
+ ldy #$ff
+ ldx #%00010001  ;start continous timer with forced latch
+                 ;count signals on CNT line at pin 4 of user port
+                 ;set TOD #2 to use 60Hz by default
+;init countdown timer A to count down from $ffff
+ sty TI2ALO
+ sty TI2AHI
+;wait for first change
+ sta TO2TEN       ;start TOD capture to registers
+t1 cmp TO2TEN     ;wait for first change
+ beq t1           ;to begin the measurement
+ stx CI2CRA       ;start the timer to measure TOD clock #2
+ lda TO2TEN       ;wait for the next change
+t2 cmp TO2TEN     ;to take a timer measurement
+ beq t2
+;capture time for TOD to increment one tenth of a second
+ ldx TI2AHI       ;only interested in hibyte value
+;set both 6526 CIA chips TOD frequency 
+ cpx #100         ;should be 112 for 60Hz, 50 for 50Hz
+ bcc clk50
+ lda #%01111111   ;clear bit 7 for 60Hz
+ and CIACRA       ;apply to TOD #1 (TOD #2 already set)
+ sta CIACRA
+ rts
+clk50
+ lda #%10000000   ;set bit 7 for 50Hz
+ ora CIACRA
+ sta CIACRA       ;apply to TOD #1
+ lda #%10000000
+ ora CI2CRA
+ sta CI2CRA       ;apply to TOD #1
+ rts
+;
+;initialize BASIC vectors
+newvec
+ lda #0
+ sta EXTCOL     ;border color black
+ sta BGCOL0     ;background color black
+ sta traceflag  ;trace flag off
+ sta keyflag    ;key trapping off
+ ldy #15
+noblink sta blinkcol,y   ;all colors turn off flash flag
+ dey
+ bpl noblink
+ jsr sidclr
+ lda #$80       ;all keys to repeat
+ sta RPTFLAG
+ lda #14        ;light blue
+ sta COLOR      ;current foreground color for text
+ lda #<toknew
+ sta $0304
+ lda #>toknew
+ sta $0305
+ lda #<newfun
+ sta $030a
+ lda #>newfun
+ sta $030b
+ lda #<list
+ sta $0306
+ lda #>list
+ sta $0307
+ lda #<execut
+ sta IGONE
+ lda #>execut
+ sta IGONE+1
+ jsr detrap
+ lda #<brkirq
+ sta $0316
+ lda #>brkirq
+ sta $0317
+ lda #<keychk
+ sta $028f
+ lda #>keychk
+ sta $0290
+ lda #<newload
+ sta $0330
+ lda #>newload
+ sta $0331
+ lda #<newsave
+ sta $0332
+ lda #>newsave
+ sta $0333
+ lda #$FF   ;MDBASIC takes 8k of the BASIC RAM area
+ sta $37    ;the highest address is now $7FFF (32767)
+ lda #$7F   ;$37-$38 holds value of highest address used by BASIC, originally $9FFF (40959)
+ sta $38
  rts
 ;
 .end
