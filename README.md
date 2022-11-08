@@ -1,6 +1,6 @@
 # MDBASIC
 MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
-MDBASIC version 2022.11.05<br>
+MDBASIC version 2022.11.07<br>
 <br>
 Download the MS Word document mdbasic.pdf for details about each command.<br>
 <br>
@@ -23,14 +23,16 @@ See the shell script "compile.sh" for an example of how to compile using Turbo A
 <br>
 <i>Immediate Mode:</i><br>
 <pre style="font-family:'Courier New'">
-RUN "MYPRG",8  :REM LOAD AND RUN MYPRG FROM DISK
-RENUM 10,10    :REM RENUMBER PRG START AT 10 INC BY 10
-FILES          :REM LIST ALL FILES TO SCREEN
-FILES"M*"      :REM LIST ALL FILES STARTING WITH M
-DUMP LIST      :REM PRINT BASIC PROGRAM ON PRINTER
-AUTO 0,10      :REM AUTO LINE NUMBERING START 0 INC 10
-DELETE 150-170 :REM DELETE PROGRAM LINES 150 TO 170 INCLUSIVELY
-TRACE          :RUN PROGRAM WITH TRACE ENABLED
+RUN "MYPRG",8        :REM LOAD AND RUN MYPRG FROM DISK
+RENUM 10,10          :REM RENUMBER PRG START AT 10 INC BY 10
+FILES                :REM LIST ALL FILES TO SCREEN
+FILES"M*"            :REM LIST ALL FILES STARTING WITH M
+KEY LIST             :REM DISPLAY FUNCTION KEY ASSIGNMENTS
+KEY 2,"RUN"+CHR$(13) :REM ASSIGN FUNCTION KEY 2
+DUMP LIST            :REM PRINT BASIC PROGRAM ON PRINTER
+AUTO 0,10            :REM AUTO LINE NUMBERING START 0 INC 10
+DELETE 150-170       :REM DELETE PROGRAM LINES 150 TO 170 INCLUSIVELY
+TRACE                :RUN PROGRAM WITH TRACE ENABLED
 </pre>
 <i>Program Mode:</i><br>
 <pre style="font-family:'Courier New'">
