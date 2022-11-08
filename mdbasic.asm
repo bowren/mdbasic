@@ -136,6 +136,7 @@ KEYD   = $0277 ;Keyboard Buffer (Queue)
 IERROR = $0300 ;Vector to the Print BASIC Error Message Routine
 IMAIN  = $0302 ;Vector to the Main BASIC Program Loop
 IGONE  = $0308 ;Vector to the Routine That Executes the Next BASIC Program Token
+CINV   = $0314 ;Vector to IRQ Interrupt Routine
 
 ;CBM BASIC functions
 GETSTK = $a3fb ;check for space on stack
@@ -297,7 +298,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 28.11.05"
+.text "mdbasic 28.11.07"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -841,13 +842,13 @@ nexto jsr CHRGET
  bmi end1
  cmp #8
  bcs end1
- pha
+ tax
  lda $61    ;exponent
  beq zero3
  adc #3     ;increase by 2^3 = 8
  sta $61
  beq over
-zero3 pla
+zero3 txa
  beq nexto
  jsr FINLOG
  jmp nexto
@@ -862,12 +863,12 @@ nextb jsr CHRGET
  bmi end1
  cmp #2
  bcs end1
- pha
+ tax
  lda $61    ;exponent
  beq zero2
  inc $61    ;increase by 2^1 = 2
  beq over
-zero2 pla
+zero2 txa
  beq nextb
  jsr FINLOG
  jmp nextb
@@ -884,14 +885,14 @@ nexth jsr CHRGET
  sbc #7     ;'0'=0,'1'=1,...'A'=10,...'F'=15
 digit sec
  sbc #"0"
- pha
+ tax
  lda $61    ;exponent
  beq zero
  clc
  adc #4     ;increase by 2^4 = 16
  bcs over
  sta $61
-zero pla
+zero txa
  beq nexth
  jsr FINLOG ;add signed int to FAC1
  jmp nexth
@@ -913,7 +914,7 @@ list pha      ;save a reg from CHRGET
  tya          ;also 
  pha          ;save y reg from CHRGET
 shift lda #$01 ;check mem ctrl reg
- bit SHFLAG   ;shift flag 1=shift key, 2=commodore key, 4=ctrl key
+ bit SHFLAG   ;0=none, 1=shift key, 2=logo key, 4=ctrl key
  bne shift    ;bit pattern 001=shift, 010=commodore, 100=ctrl (any combo)
  pla          ;restore y reg
  tay
@@ -1529,9 +1530,9 @@ auto
  jsr applyauto
  jmp CHRGET
 autooff
- lda #$83     ;$A483 is original main loop
+ lda $e449     ;$A483 is original main loop
  sta IMAIN
- lda #$a4
+ lda $e44a
  sta IMAIN+1
  jmp CHRGET
 autoset jsr skp73
@@ -2509,8 +2510,8 @@ chkblink lda blinkcol,y
  dey
  bpl chkblink
 irqea31
- ldx #$31       ;re-apply original irq vector of $EA31
- ldy #$ea
+ ldx $fd9f      ;re-apply original irq vector of $EA31
+ ldy $fda0
  bne setirqvec  ;always branches
 setfsh
  lda #20        ;blink delay - irq executes 20 times before blink code executes
@@ -2519,8 +2520,8 @@ setfsh
  ldy #>flash
 setirqvec       ;change IRQ vector
  sei            ;disable irq
- stx $0314
- sty $0315
+ stx CINV
+ sty CINV+1
  cli            ;enable irq
 ecolor rts
 ;
@@ -3811,8 +3812,9 @@ settype
 play
  cmp #TOKEN_STOP
  bne playy
- jsr playstop
- jmp CHRGET 
+ jsr irqea31    ;restore original IRQ vector $EA31
+ jsr endplay
+ jmp CHRGET
 playy
  jsr getstr0
  beq play-1     ;quit now if string is empty
@@ -3834,7 +3836,8 @@ cpystr lda ($50),y
  ldx #<playit
  ldy #>playit
  jmp setirqvec
-
+;
+; IRQ routine to play next note
 playit
  dec playtime
  bne jea31
@@ -3845,19 +3848,20 @@ playit
  jsr notegot
  beq stoplay
  jsr nextn
-playgo
  pla
  sta $01
-jea31 jmp $ea31
+jea31 jmp ($fd9f) ;original IRQ vector $EA31
 stoplay
- jsr playstop
- bne playgo  ;always branches
+ jsr endplay
+ pla
+ sta $01
+ jmp alldone
 
-playstop
+endplay
  ldx playvoice  ;SID reg offset
  lda playwave   ;select current waveform; start release cycle
  sta VCREG1,x   ;start decay cycle
- jmp irqea31
+ rts
 
 initvoice
  sta playvoice  ;voice register offset
@@ -4357,59 +4361,73 @@ inline
  ldy #$00
  clc
  jsr PLOT
- jmp $a483  ;main BASIC loop
+ jmp (IMAIN)  ;main BASIC loop
 ;
-; keypress decode intercept for function keys
+; IRQ for key decode overriden to support function keys
 keychk
  lda $9d        ;control messages enabled?
- beq nokey      ;no func key, prg mode
- lda $d4        ;quote mode?
- bne nokey
- lda SHFLAG
- bne lgoshf
- lda #$81
- bne bsky       ;always branches
-lgoshf cmp #$02
- bcs nokey
- lda #$c2
-bsky sta $f5
+ beq nokey      ;no, use original routine
+ lda $d4        ;editor in quote mode?
+ bne nokey      ;yes, use original routine
+ lda CINV+1     ;is IRQ vector currently overriden?
+ cmp $fda0      ;$EA31 is normal IRQ vector
+ bne nokey      ;yes, use normal decode routine
+ lda #$81       ;standard keyboard matrix decode table $eb81
+ ldy SHFLAG     ;0=none, 1=shift key, 2=logo key, 4=ctrl key
+ beq stdkey
+ dey            ;zero flag set if only shift key pressed
+ bne nokey      ;unsupported key combo for function keys
+ lda #$c2       ;shifted keyboard matrix decode table $ebc2
+stdkey sta $f5
  lda #$eb
  sta $f6
- ldy $cb
+ ldy $cb        ;matrix coordinate of current key pressed
  lda ($f5),y
- tax
  cpy $c5        ;matrix coordinate of last key pressed, 64=None Pressed
- bne norep
- jmp $eaf0      ;resume CBM func to decode keystroke 
-norep cmp #$85  ;first func key? F1=$85, F3=$86, F5=$87, F7=$88, F2=$89, F4=$8A, F6=$9B, F8=$9C
+ bne norep      ;not a repeat keypress
+ jmp $eaf0      ;resume CBM func to decode keystroke
+norep sec
+ sbc #$85       ;first func key? F1=$85, F3=$86, F5=$87, F7=$88, F2=$89, F4=$8A, F6=$9B, F8=$9C
  bcc nokey
- cmp #$8d       ;last function key (F8 = $8d)?
+ cmp #8         ;valid function key index is 0-7
  bcc fkey
 nokey jmp $eb48 ;setup proper keyboard decode table
-fkey sec
- sbc #$85       ;convert to func key index 0-7
+fkey
  asl
- asl            ;key index*16  (16 chars per function key)
+ asl            ;key index*32  (32 chars per function key)
  asl
  asl
- tay            ;key string index 
- ldx #$00       ;clear keyboard buffer
- stx $c6        ;count of keys in keyboard buffer
- lda $01
- pha
- dec $01
-getlet lda keybuf,y ;get letter
- beq prnkey
- sta KEYD,x     ;keyboard buffer
- iny
- inx
- bne getlet
-prnkey stx $c6  ;set num chars in keyboard buffer
- pla
- sta $01
+ asl
+ sta keyidx
+ ldx #<keypump
+ ldy #>keypump
+ stx CINV
+ sty CINV+1
  ldx #$ff
  jmp $eae9      ;continue regular key decode func
 ;
+; IRQ driven key pump into keyboard buffer
+keypump
+ ldx $c6        ;if keyboard buffer is empty
+ bne irqdone2   ;then forward to original IRQ vector
+ ldx keyidx     ;offset to next char to process
+ dec $01
+ lda keybuf,x   ;get next char
+ inc $01
+ tax
+ beq alldone    ;zero-terminated string
+ sta KEYD       ;place char in keyboard buffer
+ inc $c6        ;indicate 1 char waiting in buffer
+ inc keyidx     ;advance index to next char
+ bne irqdone2   ;continue original IRQ vector
+alldone
+ ldx $fd9f      ;restore IRQ vector
+ ldy $fda0      ;back to original $EA31
+ stx CINV
+ sty CINV+1
+irqdone2
+ jmp ($fd9f)
+
 ;*******************
 ;* color flash irq *
 ;*******************
@@ -4449,7 +4467,7 @@ nxtblk dey
  bne irqdone
  ldy #255-24
  bne mem1         ;always branches
-irqdone jmp $ea31 ;orgininal irq vector
+irqdone jmp ($fd9f) ;orgininal irq vector $EA31
 ;
 ;*******************************
 ;* general purpose subroutines *
@@ -4741,6 +4759,8 @@ txtptr     .word 0 ;basic txt ptr of statement causing error
 stackptr   .byte 0 ;stack ptr before cmd execution for use by ON ERROR
 keyptr     .word 0 ;basic txt ptr of statement for ON KEY GOSUB line#
 keyline    .word $FFFF ;line number for ON KEY subroutine
+keyidx     .byte 0 ;current index of char to put in keyboard buffer via IRQ
+
 ;expression to calc seconds since midnight
 tim2sec
 .text "(d"  ;placholder for 1/10 sec
@@ -4798,26 +4818,6 @@ lastplotx2
 ;
 *=$a000 ;"MDBASIC RAM under ROM Memory Block"
 .byte 0 ;place holder for this spot seems to be messed up on start
-;*** function key assignments ***
-keybuf .text "list"
-.byte 13,0,0,0,0,0,0,0,0,0,0,0   ;F1
-.text "load"
-.byte 34,0,0,0,0,0,0,0,0,0,0,0   ;F3
-.text "files"
-.byte 13,0,0,0,0,0,0,0,0,0,0     ;F5
-.text "keylist"
-.byte 13,0,0,0,0,0,0,0,0         ;F7
-.text "run"
-.byte 13,0,0,0,0,0,0,0,0,0,0,0,0 ;F2
-.text "save"
-.byte 34,0,0,0,0,0,0,0,0,0,0,0   ;F4
-.text "text"
-.byte 13,0,0,0,0,0,0,0,0,0,0,0   ;F6
-.text "screenclr"
-.byte 13,0,0,0,0,0,0             ;F8
-;
-;strings for keylist
-addcr .shift "+chr$(13)"
 ;
 ;PLAY command temp vars used during IRQ
 temp1     .byte 0
@@ -4861,9 +4861,56 @@ baudrates .word 50,75,110,134,150,300,600,1200,1800,2400
 ;4 = 111 (224) = Space Parity Transmitted and Received
 parity .byte %00000000,%00100000,%01100000,%10100000,%11100000
 ;
+;tables for plotting dots on a bitmap per line 0-24
+lbtab .byte 0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0
+hbtab .byte 224,225,226,227,229,230,231,232,234,235,236,237,239,240,241,242,244,245,246,247,249,250,251,252,254
+
+ptab2
+.byte %10000000,%01000000,%00100000,%00010000,%00001000,%00000100,%00000010,%00000001
+.byte %01000000,%00000000,%00010000,%00000000,%00000100,%00000000,%00000001,%00000000
+.byte %10000000,%00000000,%00100000,%00000000,%00001000,%00000000,%00000010,%00000000
+.byte %11000000,%00000000,%00110000,%00000000,%00001100,%00000000,%00000011,%00000000
+ptab3
+.byte %01111111,%10111111,%11011111,%11101111,%11110111,%11111011,%11111101,%11111110
+.byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
+.byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
+.byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
+;
+;scroll direction vectors up,down,left,right
+scrolls .rta scroll0,scroll1,scroll2,scroll3
+
+;strings for keylist
+addcr .shift "+chr$(13)"
 
 ;align tables to the nearest page boundary (saves a cycle on read)
 * = (* & $ff00)+$0100
+
+;function key assignments, 8 keys, 32 bytes each
+keybuf
+.text "list"
+.byte 13
+.repeat 32-5,0   ;F1
+.text "load"
+.byte 34
+.repeat 32-5,0   ;F3
+.text "files"
+.byte 13
+.repeat 32-6,0   ;F5
+.text "keylist"
+.byte 13
+.repeat 32-8,0   ;F7
+.text "run"
+.byte 13
+.repeat 32-4,0   ;F2
+.text "save"
+.byte 34
+.repeat 32-5,0   ;F4
+.text "text"
+.byte 13
+.repeat 32-5,0   ;F6
+.text "screenclr"
+.byte 13
+.repeat 32-10,0  ;F8
 
 playbuf1 .repeat 256,0
 
@@ -4900,26 +4947,6 @@ ascctlfn
 .word txtrvsoff,txtbitclr,txtbrown,txtlred,txtgray1,txtgray2,txtlgreen,txtlblue
 .word txtgray3,txtpurple,txtleft,txtyellow,txtcyan
 
-;tables for plotting dots on a bitmap per line 0-24
-lbtab .byte 0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0
-hbtab .byte 224,225,226,227,229,230,231,232,234,235,236,237,239,240,241,242,244,245,246,247,249,250,251,252,254
-
-ptab2
-.byte %10000000,%01000000,%00100000,%00010000,%00001000,%00000100,%00000010,%00000001
-.byte %01000000,%00000000,%00010000,%00000000,%00000100,%00000000,%00000001,%00000000
-.byte %10000000,%00000000,%00100000,%00000000,%00001000,%00000000,%00000010,%00000000
-.byte %11000000,%00000000,%00110000,%00000000,%00001100,%00000000,%00000011,%00000000
-ptab3
-.byte %01111111,%10111111,%11011111,%11101111,%11110111,%11111011,%11111101,%11111110
-.byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
-.byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
-.byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
-;
-;scroll direction vectors up,down,left,right
-scrolls .rta scroll0,scroll1,scroll2,scroll3
-;
-.repeat 47,0 ;***unused/reserved bytes to fit to page boundary***
-;
 ;table for printing a bitmap screen
 bmdt
 .byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
@@ -4940,13 +4967,14 @@ keyy stx $fb
  ldx #<keybuf
  stx $fd
  jmp strbuf
-even ldx #<keybuf+$40
+even ldx #<keybuf+$80
  stx $fd
  sec
  sbc #1
 strbuf asl
  asl
  asl           ;key(#1-4)*16
+ asl
  asl
  clc
  adc $fd
@@ -4958,14 +4986,14 @@ strbuf asl
 nextc lda ($fb),y
  sta ($fd),y
  iny
- cpy #15     ;only the first 15 chars of string (indexed 0-14)
+ cpy #31     ;only the first 15 chars of string (indexed 0-14)
  beq endass
  cpy $52     ;end of new string?
  bne nextc
 endass lda #0 ;terminate string with zero-byte
  sta ($fd),y
  iny
- cpy #16     ;fill remaining bytes with 0
+ cpy #32     ;fill remaining bytes with 0
  bcc endass+2
  jmp memnorm ;switch LORAM back to LOROM
 ;***************
@@ -4984,12 +5012,12 @@ keylistt
  sta $fc  ;hi byte for odd keys
  sta $bf
  sta $fe  ;hi byte for even keys is same hi byte since all keys live inside 64 bytes
- lda #<keybuf+$40
+ lda #<keybuf+$80
  sta $fd ;even keys offset F2, F4, F6, F8
 nextke jsr kprnt
  lda $fb
  clc
- adc #$10
+ adc #$20
  sta $fb
  lda $fd
  sta $be
@@ -4999,7 +5027,7 @@ nextke jsr kprnt
  jsr kprnt
  lda $fd
  clc
- adc #$10 ;16 bytes per string, per key
+ adc #$20 ;16 bytes per string, per key
  sta $fd
  dec $02
  bne exchng
@@ -6684,15 +6712,15 @@ dumpscreen2
  ldy #$07        ;7=upper and lower case, 0 = upper case and symbols
 upcase jsr openprint
  lda #27
- jsr CHROUT      ;Kernal Routine CHROUT output a character
+ jsr CHROUT
  lda #"3"
  jsr CHROUT
  lda #25
  jsr CHROUT
  lda #0
  sta $fb
- sta $fe     ;column counter
- lda HIBASE  ;top page of screen mem hibyte
+ sta $fe         ;column counter
+ lda HIBASE      ;top page of screen mem hibyte
  sta $fc
  ldy #$00
 pchr lda ($fb),y
@@ -6701,14 +6729,14 @@ pchr lda ($fb),y
  sec
  sbc #128
 testit cmp #32
- bcs big32    ;larger than 32
+ bcs big32       ;larger than 32
 add64 clc
  adc #64
  jmp dumpit
 big32 cmp #64
  bcc dumpit
 big64 cmp #96
- bcs add64    ;larger than 96
+ bcs add64       ;larger than 96
  clc
  adc #32
 dumpit sta $02
@@ -6725,7 +6753,7 @@ regchr lda $02
  jsr CHROUT
 nxchar inc $fe
  lda $fe
- cmp #40      ;40 columns?
+ cmp #40         ;40 columns?
  bne infbfc
  jsr printcr
  lda #0
@@ -6734,7 +6762,7 @@ infbfc inc $fb
  bne stopyn
  inc $fc
 stopyn lda $fc
- cmp #7    ;check if last address 
+ cmp #7          ;check if last address 
  bne pchr
  lda $fb
  cmp #232
@@ -6743,7 +6771,7 @@ stopyn lda $fc
  jmp CHROUT
 ;
 dumpbitmap2 
- ldy #5   ;secondary param - binary graphic 
+ ldy #5          ;secondary param - binary graphic
  jsr openprint
 ;send printer control codes
  lda #27
@@ -6814,7 +6842,7 @@ ttatx tax
  bne s1fbfc
  dec $fc
 s1fbfc dec $fb
- dec $61 ;temp var
+ dec $61     ;temp var
  bne pekbyt
  lda $fb
  sec
@@ -7938,11 +7966,11 @@ timedig
  adc #"0"
  sta $0100,y
  iny
- cpy #8
- beq nulterm
  lda #":"
-.byte $2c  ;makes lda #0 a NOP
-nulterm lda #0
+ cpy #8
+ bcc setterm
+ lda #0
+setterm
  sta $0100,y
  iny
  rts
