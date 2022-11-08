@@ -298,7 +298,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 28.11.07"
+.text "mdbasic 22.11.08"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -4383,6 +4383,7 @@ stdkey sta $f5
  sta $f6
  ldy $cb        ;matrix coordinate of current key pressed
  lda ($f5),y
+ tax
  cpy $c5        ;matrix coordinate of last key pressed, 64=None Pressed
  bne norep      ;not a repeat keypress
  jmp $eaf0      ;resume CBM func to decode keystroke
