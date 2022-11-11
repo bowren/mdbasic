@@ -21,7 +21,7 @@ http://vice-emu.sourceforge.net/<br>
 <u><b>Load & Run MDBASIC:</b></u><br>
 <pre style="font-family:'Courier New'">
 LOAD"MDBASIC",8,1
-<br>
+&nbsp;
 READY.
 SYS64738
 </pre>
