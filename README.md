@@ -18,7 +18,6 @@ See the shell script "compile.sh" for an example of how to compile using Turbo A
 Download the VICE emulator for the Commodore 64:<br>
 http://vice-emu.sourceforge.net/<br>
 <br>
-<br>
 <u><b>Load & Run MDBASIC:</b></u><br>
 <pre style="font-family:'Courier New'">
 LOAD"MDBASIC",8,1
@@ -26,8 +25,6 @@ LOAD"MDBASIC",8,1
 READY.
 SYS64738
 </pre>
-<br>
-<br>
 <u><b>General Features:</b></u><br>
 <pre style="font-family:'Courier New'">
 * Displays address range when LOADing programs
