@@ -21,19 +21,18 @@ http://vice-emu.sourceforge.net/<br>
 <u><b>Load & Run MDBASIC:</b></u><br>
 <pre style="font-family:'Courier New'">
 LOAD"MDBASIC",8,1
-
+<br>
 READY.
 SYS64738
 </pre>
 <u><b>General Features:</b></u><br>
 <pre style="font-family:'Courier New'">
-* Displays address range when LOADing programs
+* Displays memory address range after LOADing programs
 * LOAD/SAVE directly to/from the text screen, bitmap or character definition memory
-* Binary, Hexadecimal and Octal in expressions
-* 8 assignable function keys with up to 31 characters
+* Binary, Hexadecimal and Octal values in expressions
+* 8 assignable function keys each with up to 31 characters
 * Freeze LISTing by holding down the shift key
 </pre>
-<br>
 <u><b>Various Examples of statements (not complete list; commands have many optional parameters):</b></u><br>
 <br>
 <i>Immediate Mode:</i><br>
