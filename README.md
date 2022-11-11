@@ -21,12 +21,12 @@ http://vice-emu.sourceforge.net/<br>
 <u><b>Load & Run MDBASIC:</b></u><br>
 <pre style="font-family:'Courier New'">
 READY.
-LOAD"MDBASIC",8,1
+<b>LOAD"MDBASIC",8,1</b>
 &nbsp;
 SEARCHING FOR MDBASIC.PRG
 LOADING
 READY.
-SYS64738
+<b>SYS64738</b>
 </pre>
 <u><b>General Features:</b></u><br>
 <pre style="font-family:'Courier New'">
@@ -105,7 +105,7 @@ TRACE                     :REM RUN PROGRAM WITH TRACE ENABLED
 93 DESIGN OFF             :REM RETURN TO STD TEXT MODE
 95 RUN "PROG2",8          :REM LOAD AND RUN ANOTHER PROGRAM
 99 END
-100 PRINT "ERROR #";ERROR(0);" LINE #";ERROR(1)<br>
+100 PRINT "ERROR #";ERROR(0);" LINE #";ERROR(1)
 105 IF ERROR(0) = 20 THEN RESUME NEXT :REM DIV BY 0, SKIP ERRORED STMT
 110 IF ERROR(0) = 29 THEN RESUME 65   :REM LOAD ERR, CONT AT LINE 65
 115 IF ERROR(0) = 15 THEN RESUME      :REM OVERFLOW, TRY STMT AGAIN
