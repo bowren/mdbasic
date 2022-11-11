@@ -1,68 +1,88 @@
 # MDBASIC
 MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
-MDBASIC version 2022.11.07<br>
+MDBASIC version 2022.11.08<br>
 <br>
 Download the MS Word document mdbasic.pdf for details about each command.<br>
-<br>
-Download the VICE emulator for the Commodore 64:<br>
-http://vice-emu.sourceforge.net/<br>
 <br>
 Download Options:<br>
 <ol>
 <li>mdbasic.d64 - Contains mdbasic.prg and a few testing/example programs & games</li>
-<li>mdbasic.prg - Only the compiled prg to be saved to your media format</li>
+<li>mdbasic.prg - Only the compiled prg to be copied to your media format</li>
 <li>mdbasic.asm - Compile it yourself (see below)</li>
 </ol>
 Download Turbo Assembler to compile source:<br>
 https://style64.org/file/TMPx_v1.1.0-STYLE.zip<br>
 <br>
-See the shell script "compile.sh" for an example of how to compile using Turbo Assembler and execute with Vice.
+See the shell script "compile.sh" for an example of how to compile using Turbo Assembler and execute on the VICE emulator.
 <br>
+Download the VICE emulator for the Commodore 64:<br>
+http://vice-emu.sourceforge.net/<br>
+<br>
+<br>
+<u><b>Load & Run MDBASIC:</b></u><br
+<pre style="font-family:'Courier New'">
+LOAD"MDBASIC",8,1
+
+READY.
+SYS64738
+</pre>
+<br>
+<br>
+<u><b>General Features:</b></u><br>
+<pre style="font-family:'Courier New'">
+* Displays address range when LOADing programs
+* LOAD/SAVE directly to/from the text screen, bitmap or character definition memory
+* Binary, Hexadecimal and Octal in expressions
+* 8 assignable function keys with up to 31 characters
+* Freeze LISTing by holding down the shift key
+</pre>
 <br>
 <u><b>Various Examples of statements (not complete list; commands have many optional parameters):</b></u><br>
 <br>
 <i>Immediate Mode:</i><br>
 <pre style="font-family:'Courier New'">
-RUN "MYPRG",8        :REM LOAD AND RUN MYPRG FROM DISK
-RENUM 10,10          :REM RENUMBER PRG START AT 10 INC BY 10
-FILES                :REM LIST ALL FILES TO SCREEN
-FILES"M*"            :REM LIST ALL FILES STARTING WITH M
-KEY LIST             :REM DISPLAY FUNCTION KEY ASSIGNMENTS
-KEY 2,"RUN"+CHR$(13) :REM ASSIGN FUNCTION KEY 2
-DUMP LIST            :REM PRINT BASIC PROGRAM ON PRINTER
-AUTO 0,10            :REM AUTO LINE NUMBERING START 0 INC 10
-DELETE 150-170       :REM DELETE PROGRAM LINES 150 TO 170 INCLUSIVELY
-TRACE                :RUN PROGRAM WITH TRACE ENABLED
+RUN "MYPRG",8             :REM LOAD AND RUN MYPRG FROM DISK
+RENUM 10,10               :REM RENUMBER PRG START AT 10 INC BY 10
+FILES                     :REM LIST ALL FILES TO SCREEN
+FILES"M*"                 :REM LIST ALL FILES STARTING WITH M
+KEY LIST                  :REM DISPLAY FUNCTION KEY ASSIGNMENTS
+KEY 2,"RUN"+CHR$(13)      :REM ASSIGN FUNCTION KEY 2
+DUMP LIST                 :REM PRINT BASIC PROGRAM ON PRINTER
+AUTO 0,10                 :REM AUTO LINE NUMBERING START 0 INC 10
+DELETE 150-170            :REM DELETE PROGRAM LINES 150 TO 170 INCLUSIVELY
+TRACE                     :REM RUN PROGRAM WITH TRACE ENABLED
 </pre>
 <i>Program Mode:</i><br>
 <pre style="font-family:'Courier New'">
 0 SCREEN CLR              :REM CLEAR TEXT SCREEN
 1 BITMAP CLR              :REM CLEAR BITMAP
 2 VOICE CLR               :REM CLEAR SID REGISTERS
-5 ON ERROR GOTO 100       :REM JUST LIKE GWBASIC
-6 REM ON ERROR RESUME NEXT
+5 ON ERROR GOTO 100       :REM WHEN ERROR OCCURS GOTO LINE 100
+6 ON ERROR RESUME NEXT    :REM WHEN ERROR OCCURS SKIP TO NEXT STATEMENT
 7 DISK"S0:MYPRG"          :REM ERASE FILE MYPRG - ALL DOS CMD SUPPORTED
 8 POKE 1024 TO 2023,1     :REM POKE ADDRESS RANGE WITH VALUE 1
 9 DUMP"HELLO THERE"       :REM PRINT EXPRESSION TO PRINTER
-10 SPRITE0,1              :REM MAKE SPRITE 0 VISIBLE
-11 SPRITE1,1,6,1,13       :REM SPRITE 1 VISIBLE, BLUE, ABOVE FOREGND, DTPTR 13
-12 MOVE0,50,24            :REM LOCATE SPRITE 0 AT COORD 50,24
+10 SPRITE 0,1             :REM MAKE SPRITE 0 VISIBLE
+11 SPRITE 1,1,6,1,13      :REM SPRITE 1 VISIBLE, BLUE, ABOVE FOREGND, DTPTR 13
+12 MOVE 0,50,24           :REM LOCATE SPRITE 0 AT COORD 50,24
 13 MOVE1 TO 159,99,50     :REM SLIDE SPRITE 1 TO CENTER SCREEN AT SPEED 50
 14 MOVE0,0,0TO511,255     :REM MOVE SPRITE 0 FROM TOP LEFT TO BOTTOM RIGHT, FAST 
+15 X = $C000: B=%10101010 :REM HEX $, BINARY % AND OCTAL @ IN EXPRESSIONS
 20 BITMAP 1, 0            :REM SHOW BITMAP IN MULTICOLOR MODE WITH BLACK BKGD
 21 MAPCOL 2, 1, 6         :REM SET MULTICOLOR REG 1,2,3
 22 PLOT 16,10,1,1         :REM PLOT A POINT TO START DRAW LOCATION
 25 DRAW "R60,D55,L60,U55" :REM DRAW A RECT
 30 CIRCLE 48,37,23,18     :REM DRAW A CIRCLE CTR 48,37 SIZEX 23, SIZEY 18
-35 PAINT48,27,1,1         :REM PAINT INSIDE CIRCLE
-37 TEXT 0,0,"MARK"        :REM TEXT ON BITMAP W/DEFAULT CHRSET & SIZING
+34 PAINT 48,27,1,1        :REM PAINT INSIDE CIRCLE
+35 TEXT 0,0,"MARK"        :REM TEXT ON BITMAP W/DEFAULT CHRSET & SIZING
+36 DUMP SCREEN            :REM PRINT TEXT SCREEN TO PRINTER
 38 DUMP BITMAP            :REM PRINT BITMAP TO PRINTER
 39 TEXT                   :REM RETURN TO TEXT MODE
 40 PLAY "AA#BCC#DD#FF#"   :REM PLAY NOTES IN BKGRND
-42 VOICE1,1000            :REM SET VOICE 1 PITCH TO 1000HZ
-43 DELAY 60               :REM PAUSE FOR 60 JIFFIES (1 SEC)
-45 ENVELOPE1,0,0,15,0     :REM SET VOICE 1 ATTACK/DECAY/SUSTAIN/RELEASE
-48 FILTER 1500.5, 15, 1   :REM LOW PASS FILTER, CUTOFF=1500.5Hz
+42 VOICE 1,1000           :REM SET VOICE 1 PITCH TO 1000HZ
+43 WAIT 60                :REM PAUSE FOR 60 JIFFIES (1 SEC)
+45 ENVELOPE 1,0,0,15,0    :REM SET VOICE 1 ATTACK/DECAY/SUSTAIN/RELEASE
+48 FILTER 500, 15, 1      :REM LOW PASS FILTER, CUTOFF=500Hz
 50 X1 = ROUND(0.125, 2)   :REM X1 = 0.13
 51 X2 = ROUND(121, -3)    :REM X2 = 100
 55 PRINT PTR(X1)          :REM DISPLAY MEM LOC OF VAR X1
