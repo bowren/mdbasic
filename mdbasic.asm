@@ -298,7 +298,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.11.08"
+.text "mdbasic 22.12.18"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -1127,7 +1127,7 @@ fprint
  bne prtdone
  jsr CHRIN
  bne fprint
- jsr printcr 
+ jsr printcr
  jsr READST
 prtdone rts
 ;
@@ -1175,9 +1175,10 @@ fill
  jsr getcoords
  jsr comchkget
  beq srncol
- jsr pokchr
- jsr chkcomm
-srncol jsr getval
+ jsr pokchr      ;get scanCode and perform fill
+ jsr chkcomm     ;check for comma and quit if not found
+srncol
+ jsr getval      ;get color
  sta $02
  ldx $bf
 nxtc ldy $be
@@ -1195,7 +1196,8 @@ nxtcol sta ($fd),y
  dex
  bpl nxtc
  rts
-pokchr jsr skip73
+pokchr
+ jsr skip73      ;get scan code
  sta $bb
  ldx $bf
 pokep ldy $be
@@ -1214,14 +1216,14 @@ nextp lda $bb
  bpl pokep
  rts
 ;
-tokopn 
+tokopn
  dec $01
  jsr openrs232
  inc $01
  bcc tokopn-1 ;clear carry indicates success
  jmp (IERROR) ;otherwise x reg has error number
 ;
-tokclse 
+tokclse
  lda #126     ;logical file number
  jsr $f314    ;find the index of an opened logical file number to X reg
  bne clsd232  ;zero flag indicates not found
@@ -1235,7 +1237,7 @@ tokclse
 clsd232
  jmp CHRGET   ;finally, skip over token
 ;
-tokprt 
+tokprt
  ldx #126
  stx $13      ;set current I/O channel (logical file) number
  jsr $e118    ;BASIC wrapper for CHKOUT with error handling
@@ -1661,23 +1663,19 @@ endprg
  jmp HALT
 ;
 ;*******************
+oldrun jmp RUN  ;CBM BASIC - perform RUN
 newrun
- pha
+ php
  jsr detrap     ;turn off error trapping incase it was enabled in previous run
  jsr clearerr   ;clear last error info
  lda #0
  sta keyflag    ;ensure key trapping is off
- pla
- beq oldrun
- cmp #"""       ;literal string?
- beq lodrun
- cmp #"a"       ;variable?
- bcs lodrun
- cmp #0         ;prepare for original RUN with line num
-oldrun jmp RUN  ;CBM BASIC - perform RUN
-lodrun lda #$00 ;prepare for load
+ plp
+ beq oldrun     ;RUN without params
+ bcc oldrun     ;RUN with line num param
+ lda #$00       ;RUN with file params
  sta $0a        ;load or verify? 0=load, 1=verify
- jsr $e1d4      ;set parms for LOAD, VERIFY, and SAVE
+ jsr $e1d4      ;process file parameters
  jsr RUNC       ;reset ptr to current text char to the beginning of program text
  jsr $e16f      ;perform load
  jsr old        ;set BASIC prg ptrs
@@ -1881,7 +1879,7 @@ find
  jsr printcr
  jmp endprg
 findlnr
- inc $01 
+ inc $01
  jsr FINDLN   ;search for line#
  jsr $a6c9    ;perform list (print line on screen)
  dec $01
@@ -2193,7 +2191,7 @@ newpoke
  stx $fb
  sty $fc
  lda #TOKEN_TO   ;token to skip over
- jsr CHKCOM+2    ;check for and skip over TO token, syntax error if not found 
+ jsr CHKCOM+2    ;check for and skip over TO token, syntax error if not found
  jsr skp73_      ;get 2-byte int in $14,$15
  jsr ckcom2      ;throw misop if current char is not comma
  jsr GETBYTC     ;get poke value
@@ -2219,7 +2217,7 @@ getline
 getlin jsr FINDLN  ;search for line#
  bcc undef
  ldy $60
- ldx $5f 
+ ldx $5f
  bne dec5f2
  dey
 dec5f2 dex
@@ -2469,7 +2467,7 @@ return beq oldrtn
  pla          ;discard call to this subroutine
  pla
  tsx
- lda $0101,x 
+ lda $0101,x
  cmp #TOKEN_GOSUB
  beq resume0
  ldx #12      ;RETURN WITHOUT GOSUB
@@ -2490,7 +2488,7 @@ color
  jsr chkcomm    ;if no more params then stop now
 nochar jsr comchkget
  beq noback
- jsr getval15   ;skip73
+ jsr getval15
  sta BGCOL0     ;background color
  jsr chkcomm
 noback jsr getval15_
@@ -2602,10 +2600,24 @@ nosped lda #$01
  jmp restorepoint
 badxy jmp hellno
 ;
+spriteon
+ dey            ;0 dec to 255 for all sprites
+spriteoff
+ sty SPENA
+ plp
+ jmp CHRGET
 ;*******************
+;SPRITE ON | OFF  - turns on or off all 8 sprites
 ;SPRITE [sprite# 0-7], [0=on,1=off], [color 0-15], [0=normal,1=multicolor],
 ;       [data pointer 0-255], [foreground priority 0=over,1=under]
 sprite
+ php
+ ldy #0
+ cmp #TOKEN_OFF
+ beq spriteoff
+ cmp #TOKEN_ON
+ beq spriteon
+ plp
  jsr sprnum     ;sprite# returned in $be and 2^sprite# in $bf
  jsr ckcom2     ;throw misop if current char is not comma
  jsr comchkget  ;get next char and compare to comma
@@ -2648,8 +2660,7 @@ spntr jsr comchkget
  lda CI2PRA     ;which VIC2 16K memory bank?
  and #%00000011 ;00=bank3, 01=bank2, 10=bank1, 11=bank0
  eor #%00000011 ;11=bank3, 10=bank2, 01=bank1, 00=bank0
- clc
- ror            ;move bits 0-1 to position 6-7 via carry
+ lsr            ;move bits 0-1 to position 6-7 via carry
  ror
  ror
  sta $62        ;VIC-II Base Address hibyte 0=$00, 1=$40, 2=$80 ,3=$C0
@@ -2658,7 +2669,7 @@ spntr jsr comchkget
  and #%11110000 ;upper nibble holds the number of 1K chunks
  lsr            ;convert to offset for hibyte, 1K=(4*256), 1=4, 2=8, 3=12, etc.
  lsr
- clc
+;clc not needed here since zero was shifted into carry by lsr
  adc $62        ;base+offset
  adc #3         ;the end of screen RAM is 1K more
  sta $62        ;sprite pointers are in the last 8 bytes of 1K screen RAM
@@ -2681,10 +2692,24 @@ okpri lda $bf   ;2^sprite#
  sta SPBGPR     ;apply new value
  rts
 ;
+xpon dey        ;0 dec to 255 for all sprites
+xpoff
+ sty XXPAND
+ sty YXPAND
+ plp
+ jmp CHRGET
 ;*******************
+; EXPAND ON | OFF
 ; EXPAND sprite#           :expand both x and y axis of sprite#
 ; EXPAND sprite#, [x], [y] :where x and y are 0=expand off, 1=expand on
 expand
+ php
+ ldy #0
+ cmp #TOKEN_OFF
+ beq xpoff
+ cmp #TOKEN_ON
+ beq xpon
+ plp
  jsr sprnum     ;get sprite# and store in $be and 2^sprite# in $bf
  jsr CHRGOT
  bne getexpxy
@@ -2996,10 +3021,10 @@ pokcol sta $c800,y  ;fill color mem for entire screen
 ; c1 plot color (0-15) of dot in same 8x8 square (upper 4-bits scan code in Video Matrix)
 ; c2 background color (0-15) of dot in 8x8 square (lower 4-bits in Color RAM)
 ;In multi color mode (c1,c2,c3):
-;    00 Background Color Register 0 (53281, $D021)
-; c1 01 Upper four bits of Video Matrix (scan code)
-; c2 10 Lower four bits of Video Matrix (scan code)
-; c3 11 Color RAM nybble (area starts at 55296 ($D800))
+;    00 Background Color Register 0 BGCOL0 ($D021)
+; c1 01 Upper nibble of Video Matrix (scan code)
+; c2 10 Lower nibble of Video Matrix (scan code)
+; c3 11 Lower nibble of Color RAM for Video Matrix ($D800-$DBE8)
 ;
 ;hires mapcol 0,1   dot color black, background (of 8x8 square of dot) white
 ;multi mapcol 0,1,2 bit patterns 01=black, 10=white, 11=red (00 is the background color in BGCOL0)
@@ -3395,41 +3420,41 @@ paint jsr getpnt
 ; options are represented in 8 bits grouped by nibbles:
 ; bits0-3: quadrant visible 0=no,1=yes, bits4-7: radius line visible 0=no,1=yes
 circle
- jsr getpnt   ;center point x,y
- jsr ckcom2   ;throw misop if current char is not comma
- jsr getval   ;x radius size
- bmi illqty8  ;max x radius 127
+ jsr getpnt     ;center point x,y
+ jsr ckcom2     ;throw misop if current char is not comma
+ jsr getval     ;x radius size
+ bmi illqty8    ;max x radius 127
  sta $35
  lda SCROLX
  and #%00010000 ;check if multicolor mode on or off
- sta $29     ;0=hires mode, otherwise multicolor mode
+ sta $29        ;0=hires mode, otherwise multicolor mode
  beq hirescir
- asl $35     ;mc mode needs 2x size
- bmi illqty8 ;mc mode limit is 63
+ asl $35        ;mc mode needs 2x size
+ bmi illqty8    ;mc mode limit is 63
 hirescir
- jsr ckcom2  ;throw misop if current char is not comma
- jsr getval  ;y radius size
- bmi illqty8 ;max y radius 127
+ jsr ckcom2     ;misop error if current char is not comma
+ jsr getval     ;y radius size
+ bmi illqty8    ;max y radius 127
  sta $36
  lda #%00001111 ;default options
- sta $2a     ;variable to hold value
+ sta $2a        ;variable to hold value
  jsr CHRGOT
  beq docircle
- jsr comchkget ;position for options param
- beq circlept  ;skip if comma found
- jsr skip73  ;get options value
- sta $2a     ;circle options
+ jsr comchkget  ;position for options param
+ beq circlept   ;skip if comma found
+ jsr skip73     ;get options value
+ sta $2a        ;circle options
 circlept
- jsr types   ;get optional plot type and color; use last used values if not supplied
+ jsr types      ;get optional plot type and color; use last used values if not supplied
 docircle
  lda $35
  ora $36
- beq endcir  ;x and y radius size are both zero
- cmp #2      ;smallest valid x,y radius size is 2,1 or 1,2
- bcs okcirc  ;plot the circle
- jmp plotit  ;just plot a dot
+ beq endcir     ;x and y radius size are both zero
+ cmp #2         ;smallest valid x,y radius size is 2,1 or 1,2
+ bcs okcirc     ;plot the circle
+ jmp plotit     ;just plot a dot
 okcirc
- dec $01     ;switch LOROM to LORAM
+ dec $01        ;switch LOROM to LORAM
  jsr circel
  jsr ciropts
  inc $01
@@ -3475,7 +3500,7 @@ text
  bcs illqty8
  asl          ;calc hibyte offset
  asl          ;0=0, 1=4, 2=8, 3=12
- clc
+;clc not needed here since zero was shifted into carry by asl
  adc $26
  sta $26      ;charset 0=$d000,1=$d400,2=$d800,3=$dc00
 ;sizes
@@ -3582,16 +3607,16 @@ okscroll
 ;-----------
 badscroll jmp hellno ;illegal coordinate error
 getcoords
- jsr skp73     ;x1
- bne badscroll ;hibyte should be 0
- cpx #40       ;max columns
+ jsr skp73       ;x1
+ bne badscroll   ;hibyte should be 0
+ cpx #40         ;max columns
  bcs badscroll
  stx $fb
  stx $be
- jsr ckcom2    ;throw misop if current char is not comma
- jsr dbyval    ;y1
- bne badscroll ;hibyte must be 0
- cpx #25       ;max rows
+ jsr ckcom2      ;throw misop if current char is not comma
+ jsr dbyval      ;y1
+ bne badscroll   ;hibyte must be 0
+ cpx #25         ;max rows
  bcs badscroll
  stx $bf
  dec $01
@@ -3604,7 +3629,7 @@ getcoords
  cpx #40
  bcs badscroll
  txa
- sec 
+ sec
  sbc $be
  sta $be
  jsr ckcom2
@@ -3613,17 +3638,17 @@ getcoords
  cpx #25
  bcs badscroll
  txa
- sec 
+ sec
  sbc $bf
  sta $bf
- rts 
+ rts
 ;
 ;*******************
 ; ENVELOPE voice#, attack, decay
 ; ENVELOPE voice#, attack, decay, sustain, release
 adsr jsr ppw
  sta $bb       ;SID register offset for voice
- jsr ckcom2    ;raise error if current char is not a comma
+ jsr ckcom2    ;misop error if current char is not a comma
  jsr getval15_ ;attack
  asl
  asl
@@ -3925,8 +3950,6 @@ keylist dec $01
 ;******************************************
 ;* mdbasic functions instr(), ptr(), csr(), pen(), joy(), pot(), hex$() *
 ;******************************************
-badsubscript
- jmp BSERR    ;BAD SUBSCRIPT ERROR
 ; I = INSTR(offset,src$,find$)
 ;if first expression is int type then offset provided otherwise offset=1 (default)
 instr
@@ -3938,14 +3961,15 @@ instr
  lda #0       ;default zero index
  sta $02
  jsr getstr2  ;get source string as first param
- beq notfound ;empty source string always returns 0
- bne getsrcparam
+ jmp getsrcparam
+badidx
+ jmp BSERR    ;BAD SUBSCRIPT ERROR
 getoffsetparam
- jsr fac2int  ;get binary byte value 0-255 into A reg
- beq badsubscript ;BASIC strings index are based at 1 (not 0)
- sta $02      ;offset
+ jsr fac2int  ;convert FAC1 to unsigned byte value 0-255 into A reg
+ beq badidx   ;BASIC string indexes are based at 1 (not 0)
+ sta $02      ;start index
  dec $02      ;convert to zero-based index
- jsr ckcom2   ;throw misop if current text is not a comma
+ jsr ckcom2   ;misop err if current text is not a comma
  jsr getstr   ;get source string as second param
 getsrcparam
  stx $fb
@@ -3953,39 +3977,35 @@ getsrcparam
  sta $fd      ;len of src str
  jsr ckcom2   ;throw misop if current text is not a comma
  jsr getstr   ;find string a = len($52), x=lobyte($50) ptr, y=hibyte($51) ptr
- stx hack+1
- sty hack+2
-;
  lda $fd      ;src len
- beq notfound
- cmp $52      ;find len
- bmi notfound ;find len > src len
+ beq notfound ;zero length strings cannot be searched
+ cmp $52      ;find len > src len
+ bmi notfound ;find str cannot be found in a shorter src string
 tryagain
  ldy $02      ;index of current char in source str
  ldx #0       ;index of first char in find str
+ inc $02      ;prepare index for return value or next position to compare
 nextchr
  cpy $fd      ;did we reach source str length?
  beq notfound ;yes then stop trying
+ stx $61
+ sty $62
  lda ($fb),y
-hack cmp $ffff,x ;hack writing to this mem loc to set address
- bne nextchr2
+ ldy $61
+ cmp ($50),y
+ bne tryagain
+ ldy $62
  iny
  inx
  cpx $52      ;did we reach find str length?
  bne nextchr  ;no, keep going
- lda #0       ;hibyte 0 since strings cannot be longer than 255
  ldy $02      ;index of beginning of str found in source str
- iny          ;BASIC string index begins at 1 (not 0)
+.byte $2c     ;defeat ldy #0 as BIT $00A0
+notfound ldy #0
+ lda #0       ;hibyte 0 since strings cannot be longer than 255
 instrend
- jsr GIVAYF   ;convert 16-bit signed int value to FAC then return 
- jmp CHKCLS   ;Check for and Skip Closing Parentheses
-nextchr2
- inc $02      ;advance forward 1 char in source
- bne tryagain ;it should always be not equal to zero here!
-notfound
- ldy #0
- tya
- beq instrend
+ jsr GIVAYF   ;convert 16-bit signed int in A,Y regs to 5-byte float in FAC1
+ jmp CHKCLS   ;check for and skip closing parentheses
 ;*******************
 ; P=PTR(x) or P=PTR(x%) or P=PTR(x$) where x is the variable name
 ptr
@@ -4216,7 +4236,6 @@ pen
  ldy LPENY   ;y=lobyte
  jmp nobutt
 penx lda LPENX
- clc
  asl         ;multiply by 2, bit 7 into carry
  tay         ;lo byte
  bcc nobutt  ;result was less than 256 so hi byte = 0
@@ -4311,7 +4330,7 @@ doerr
  lda $9d      ;0=prg mode
  beq prgmode
  lda #13      ;cr
- bne prgmode+2
+.byte $2c     ;defeat lda #147 by making it BIT $93A9
 prgmode lda #147 ;clr screen
  jsr CHROUT
  lda #$80     ;only control messages - SEARCHING, SAVING, FOUND, etc.
@@ -4686,6 +4705,8 @@ doround
  jsr FADDH       ;add .5 to value in FAC1
  jmp INT         ;perform INT
 ;
+printqt lda #"""
+.byte $2c
 printcr lda #$0d
  jmp CHROUT
 ;
@@ -4960,122 +4981,101 @@ bmdt
 .byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
 ;
 ;KEY LIST continued while LOROM is switched to LORAM
-keyy stx $fb
- sty $fc
- lda $02
- lsr
- bcc even
- ldx #<keybuf
- stx $fd
- jmp strbuf
-even ldx #<keybuf+$80
- stx $fd
+keyy
+ lda #0
+ sta $61
+ lda $02       ;key# 1 to 8
+ lsr           ;values from 0 to 4
+ bcs oddkey    ;carry set for odd key nums
  sec
- sbc #1
-strbuf asl
+ sbc #1        ;convert 1-4 as index 0-3
+ ror $61       ;$61 now has #$80 from carry
+oddkey
+ asl           ;key index (0 to 3) * 32
  asl
- asl           ;key(#1-4)*16
+ asl
  asl
  asl
  clc
- adc $fd
- sta $fd
- lda #>keybuf
- adc #0
- sta $fe
+ adc $61
+ tax
  ldy #0
-nextc lda ($fb),y
- sta ($fd),y
+nextc lda ($50),y
+ sta keybuf,x
+ inx
  iny
- cpy #31     ;only the first 15 chars of string (indexed 0-14)
+ cpy #31      ;only the first 31 chars of string (indexed 0-31)
  beq endass
- cpy $52     ;end of new string?
+ cpy $52      ;end of new string?
  bne nextc
 endass lda #0 ;terminate string with zero-byte
- sta ($fd),y
+ sta keybuf,x
+ inx
  iny
- cpy #32     ;fill remaining bytes with 0
+ cpy #32      ;fill remaining bytes with 0
  bcc endass+2
- jmp memnorm ;switch LORAM back to LOROM
-;***************
-;KEY LIST (code in LORAM)
+ jmp memnorm  ;switch LORAM back to LOROM
+;
+;KEY LIST (continued from LORAM)
 ;
 keylistt
  jsr printcr
- lda #$04
- sta $02
+ lda #0
+ sta $63      ;string offset in buffer
  lda #"1"
- sta $bb ;key#
- lda #<keybuf
- sta $fb ;odd keys F1, F3, F5, F7
- sta $be
- lda #>keybuf
- sta $fc  ;hi byte for odd keys
- sta $bf
- sta $fe  ;hi byte for even keys is same hi byte since all keys live inside 64 bytes
- lda #<keybuf+$80
- sta $fd ;even keys offset F2, F4, F6, F8
-nextke jsr kprnt
- lda $fb
- clc
- adc #$20
- sta $fb
- lda $fd
- sta $be
- lda $fe
- sta $bf
- inc $bb ;key#+1
+ sta $62      ;current key#
+nextke
  jsr kprnt
- lda $fd
+ inc $62      ;next key#
+ lda $63      ;bit7=0 is odd key# else even key#
+ eor #%10000000
+ sta $63
+ bmi nextke
+ lda $63
  clc
- adc #$20 ;16 bytes per string, per key
- sta $fd
- dec $02
- bne exchng
+ adc #32
+ sta $63
+ bvc nextke
  jsr CHRGET
- jmp memnorm ;switch LORAM back to LOROM
-exchng lda $fb
- sta $be
- lda $fc
- sta $bf
- inc $bb
- jmp nextke
+ jmp memnorm  ;switch LORAM back to LOROM
 ;--------
 kprnt
  lda #<keystr
  ldy #>keystr
  jsr printstr
- ldy #$ff
- lda $bb
+ lda $62     ;key#
  jsr CHROUT
  lda #","
  jsr CHROUT
-printq lda #"""
- jsr CHROUT
-nextlt iny
- lda ($be),y
+ lda $63     ;index offset
+ sta $61     ;current index
+pkstr
+ jsr printqt
+nextlt
+ ldy $61
+ lda keybuf,y
  beq stoppr
- cmp #13 ;cr?
+ cmp #13     ;cr?
  bne nocr
- sty $61
- lda #"""
- jsr CHROUT
+ jsr printqt
  lda #<addcr
  ldy #>addcr
  jsr printstr
+ inc $61
  ldy $61
- iny
- lda ($be),y
+ lda keybuf,y
  beq chrprs
  lda #"+"
  jsr CHROUT
- dey
- bpl printq     ;always branches
-nocr lda ($be),y
+ inc $61
+ jmp pkstr
+nocr cmp #"""
+ beq noquot
  jsr CHROUT
+noquot inc $61
  jmp nextlt
-stoppr lda #"""
- jsr CHROUT
+stoppr
+ jsr printqt
 chrprs jmp printcr
 ;
 ;**************************
@@ -5409,18 +5409,18 @@ txtcr
  sta lastplotx
  sta lastplotx+1
 txtdwn
- lda $58  ;text height scale
- asl
+ lda $58     ;text height scale
+ asl         ;scale * 8
  asl
  asl
  clc
  adc lastploty
  cmp #200
  bcc oktxty
- bcs txtright-1
+ rts
 txtcsrup
- lda $58  ;text height scale
- asl
+ lda $58     ;text height scale
+ asl         ;scale * 8
  asl
  asl
  sec
@@ -5439,8 +5439,8 @@ oktxty
  rts
 ;
 txtright
- lda $57     ;char scale width
- asl
+ lda $57     ;char scale width (1-31)
+ asl         ;scale * 8
  asl
  asl
  clc
@@ -5453,8 +5453,8 @@ txtright
  bcc oktxtx
  rts
 txtleft
- lda $57     ;char width scale
- asl
+ lda $57     ;char scale width (1-31)
+ asl         ;scale * 8
  asl
  asl
  sta $61     ;temp storage
@@ -5462,7 +5462,7 @@ txtleft
  sec
  sbc $61
  tax
- lda lastplotx+1 
+ lda lastplotx+1
  sbc #0
  clc         ;flag indicating x not set
  bmi txtbs-1 ;not enough space so abort
@@ -5474,8 +5474,8 @@ oktxtx
 txtbs
  jsr txtleft
  bcc txtbs-1
- lda #32 ;print space
- jmp txtprint 
+ lda #32     ;print space
+ jmp txtprint
 ;
 txtlc ;lower case current charset
 ;charset $d0,$d4 uppercase $d8,$dc lowercase
@@ -6235,7 +6235,7 @@ loops
  sta $58
  lda #0
  sta $fb
- sta $fc 
+ sta $fc
  ldx #2
 c4af lda $22,x
  sta $50,x
@@ -6376,11 +6376,11 @@ x59 lda $59,x
  jsr curve
  lda $6c
  beq zero6c
-loops2_ jmp loops2
+loopy jmp loops2
 zero6c ldx #2
  lda $59,x
  cmp $69,x
- bcc loops2_
+ bcc loopy
  bne nencs
  dex
  bpl zero6c+2
@@ -6400,10 +6400,10 @@ fbm2d0 lda $67
  lda $68
  sbc $fc
  sta $6a
- bne loops2_
+ bne loopy
  lda $69
  cmp #3
- bcs loops2_
+ bcs loopy
 c69w3 rts
 ;validate calculated coordinate, plot if ok, skip if not
 plotc ldx $fc  ;x coordinate hibyte
@@ -6488,26 +6488,26 @@ lodbm jsr CHRIN
 savee
  ldx #1
  jsr lodsav
- jsr $f68f  ;print SAVING
- ldx $b8    ;current logical file number
- jsr CHKOUT ;set stdout to current logical file number
- lda $02    ;fake secondary address (2,3,4)
- cmp #2     ;2=screen
+ jsr $f68f   ;print SAVING
+ ldx $b8     ;current logical file number
+ jsr CHKOUT  ;set stdout to current logical file number
+ lda $02     ;fake secondary address (2,3,4)
+ cmp #2      ;2=screen
  bne sdvn2
 savscr jsr param
  lda $c4
  clc
  adc #3
  sta $02
- lda EXTCOL ;border color
+ lda EXTCOL  ;border color
  jsr CHROUT
- lda BGCOL0 ;background color
+ lda BGCOL0  ;background color
  jsr CHROUT
  lda VMCSB
  jsr CHROUT
- lda SCROLX       ;save bit 4 for multicolor text or bitmap flag 
+ lda SCROLX  ;save bit 4 for multicolor text or bitmap flag 
  jsr CHROUT
- lda SCROLY       ;save bit 5 for bitmap mode flag
+ lda SCROLY  ;save bit 5 for bitmap mode flag
  jsr CHROUT
  lda CI2PRA
  jsr CHROUT
@@ -6599,14 +6599,16 @@ param3 ldy #0
  rts
 ;
 ;*********************
-varss lda $2d  ;vector ($2d,$2e) beginning of non-array variable storage
+varss
+ lda $2d      ;vector ($2d,$2e) beginning of non-array variable storage
  ldy $2e
 chk2d
- cmp $2f       ;vector ($2f,$30) beginning of array variable storage
- bne copy2d    ;if both vectors point at same mem loc then no vars defined
+ cmp $2f      ;vector ($2f,$30) beginning of array variable storage
+ bne copy2d   ;if both vectors point at same mem loc then no vars defined
  cpy $30
  bne copy2d
-evar jmp memnorm ;switch LORAM back to LOROM
+evar
+ jmp memnorm  ;switch LORAM back to LOROM
 copy2d
  sta $fb
  sty $fc
@@ -6669,8 +6671,7 @@ string lda #"$"
  jsr CHROUT
  lda #"="
  jsr CHROUT
- lda #"""
- jsr CHROUT
+ jsr printqt
  ldy #0
  lda ($fb),y
  beq endquote
@@ -6687,8 +6688,8 @@ prtstr lda ($50),y
  iny
  dec $52
  bne prtstr
-endquote lda #"""
- jsr CHROUT
+endquote
+ jsr printqt
 nxtvar
  jsr printcr
 sft lda SHFLAG
@@ -6702,7 +6703,7 @@ sft lda SHFLAG
  adc #0
  tay
  txa
- jmp chk2d 
+ jmp chk2d
 ;
 ;***************
 dumpscreen2
@@ -6724,11 +6725,11 @@ upcase jsr openprint
  lda HIBASE      ;top page of screen mem hibyte
  sta $fc
  ldy #$00
-pchr lda ($fb),y
+pchr lda ($fb),y ;scan (screen) code
+;convert scan code to a printable standard character
  pha
  bpl testit
- sec
- sbc #128
+ and #%01111111
 testit cmp #32
  bcs big32       ;larger than 32
 add64 clc
@@ -6736,9 +6737,9 @@ add64 clc
  jmp dumpit
 big32 cmp #64
  bcc dumpit
-big64 cmp #96
+ cmp #96
  bcs add64       ;larger than 96
- clc
+; clc not needed here since already clear
  adc #32
 dumpit sta $02
  pla
@@ -6763,7 +6764,7 @@ infbfc inc $fb
  bne stopyn
  inc $fc
 stopyn lda $fc
- cmp #7          ;check if last address 
+ cmp #7          ;check if last address
  bne pchr
  lda $fb
  cmp #232
@@ -6771,7 +6772,7 @@ stopyn lda $fc
  lda #$13
  jmp CHROUT
 ;
-dumpbitmap2 
+dumpbitmap2
  ldy #5          ;secondary param - binary graphic
  jsr openprint
 ;send printer control codes
@@ -6811,7 +6812,7 @@ nxtbit lda $02
  lda #8
  sta $61  ;temp var
 pekbyt
-;select HIRAM and disabled IRQ
+;select HIRAM and disable IRQ
  lda $01        ;bit0 0=LORAM 1=LOROM ($a000-$bfff), bit1 0=HIRAM 1=HIROM ($e000-$ffff)
  pha            ;save current mem bank setting
  and #%11111101 ;turn bit 1 off for HIRAM
@@ -6820,9 +6821,8 @@ pekbyt
 ;read byte from bitmap image in HIRAM
  lda ($fb),y
  tax            ;save in x
-;restore mem bank original selection
  pla
- sta $01
+ sta $01        ;restore mem bank original selection
  cli            ;****enable irqs
  txa            ;get saved value
  and $02
@@ -6891,21 +6891,21 @@ aldone
 scroll0
  jsr wrapit
  lda $fb
- clc 
+ clc
  adc #40
  sta $ac
  lda $fc
  adc #0
  sta $ad
  lda $fd
- clc 
+ clc
  adc #40
  sta $ae
  lda $fe
  adc #0
  sta $af
 ;
- ldy $be       ;num bytes to move 
+ ldy $be       ;num bytes to move
  dec $bf
  bpl cpyup
 wrapup
@@ -6944,7 +6944,7 @@ scroll1 jsr calcptr
  jsr wrapit
 nxtdwn ldy $be
  lda $fb
- sec 
+ sec
  sbc #40
  sta $ac
  lda $fc
@@ -7056,7 +7056,7 @@ cpybuf lda ($fb),y
  sta paintbuf1,y ;char mem buffer
  lda ($fd),y
  sta paintbuf2,y ;color mem buffer
- dey 
+ dey
  bpl cpybuf
  rts
 ;calculate text and color RAM mem pointers
@@ -7123,7 +7123,7 @@ regnote
 
 playnote
  jsr octadj
- ldx playvoice 
+ ldx playvoice
  sta FRELO1,x   ;voice x freq lo byte
  tya 
  sta FREHI1,x   ;voice x freq hi byte
@@ -7151,7 +7151,7 @@ prevoct
  bmi nextoct
 octup2
  cmp #253  ;>
- bne nextn2 
+ bne nextn2
 nextoct
  inc playoct
  lda playoct
@@ -7217,13 +7217,13 @@ skipnote jmp nextn2
 
 getdigitval     ;get 2-digit value 0-99
  jsr noteget
- beq digitdone2 ;end of string, assume 0 value
+ beq digit9-1   ;end of string, assume 0 value
  sec            ;convert ascii digit to binary value
  sbc #"0"       ;first char must be digit between 0 and 9
  bpl digit9
 nondigit
  lda #$ff       ;flag for non numeric digit
- bne digitdone2
+ rts
 digit9
  cmp #10
  bcs nondigit
@@ -7243,13 +7243,13 @@ digit9
  asl            ;(8*x)
  asl
  asl
- clc
+;clc not needed here since asl will move 0 to carry since value is 0 to 9
  adc temp1      ;+(2*x)
  adc temp2      ;+y
  sta temp1
+ rts
 digitdone
  lda temp1
-digitdone2
  rts            ;result returned in accumulator
 
 ;returns char in A reg; zero-flag set indicate no more notes
@@ -7285,7 +7285,7 @@ octdwn
  lda #4
  sec
  sbc playoct
- tax 
+ tax
 octdwn2
  lsr temp2
  ror temp1
