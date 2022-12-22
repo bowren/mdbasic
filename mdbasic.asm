@@ -298,7 +298,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.12.18"
+.text "mdbasic 22.12.22"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -386,7 +386,7 @@ cmdtab
 .rta REM    ;$8f
 .rta $a82f  ;$90 STOP
 .rta on     ;$91 ON augmented
-.rta wait   ;$92
+.rta wait   ;$92 WAIT augmented
 .rta $e168  ;$93 LOAD
 .rta $e156  ;$94 SAVE
 .rta VERIFY ;$95
@@ -398,7 +398,7 @@ cmdtab
 .rta LIST   ;$9b
 .rta CLEAR  ;$9c CLR
 .rta CMD    ;$9d
-.rta SYS    ;$9e
+.rta sys    ;$9e SYS augmented
 .rta $e1be  ;$9f OPEN
 .rta $e1c7  ;$a0 CLOSE
 .rta GET    ;$a1
@@ -1038,35 +1038,45 @@ prtopen
  bcs err127
  rts
 ;
-;FILES (string expression optional)
+;FILES [volume$]
+;volume$ is an optional string for filtering directory results
+;the string can include the drive num prefix, ie: "0:DEMO*"
 files
- bne strng
- lda #0
- beq prepstr
-strng jsr getstr0
-prepstr tay
- iny            ;add one more byte
- tya
- jsr GETSPA     ;alloc space in mem for string returning address ptr in $35,$36
- sta $02        ;actual length allocated
- lda #"$"       ;insert $ in front of string
+ beq onechar    ;no param, just use $ as param
+ jsr getstr1    ;get volume$ (should never be more than 18 chars)
+ clc
+ adc #1         ;length plus one for new tmp str
+ bne prepstr    ;always branches (unless len was 255)
+onechar lda #1
+prepstr
+ jsr GETSPA     ;alloc space in mem for a new str
+;place str ptr in FAC1 so that it can be registered as a tmp str
+ sta $61        ;actual length allocated
+ stx $62        ;ptr lobyte
+ sty $63        ;ptr hibyte
+ jsr $b4ca      ;register str ptr in FAC1 as tmp str
+;copy the original str into the new buffer with a dollar symbol prefix
+ lda #"$"
  ldy #0
-copystr sta ($35),y
- lda ($50),y
+copystr
+ sta ($62),y    ;desination tmp str
+ lda ($50),y    ;source param str
  iny
- cpy $02
- bne copystr
- lda $02
- ldx $35
- ldy $36
+ cpy $61        ;reached tmp str len?
+ bne copystr    ;no, keep copying
+;prepare file params
+ lda $61
+ ldx $62
+ ldy $63
  jsr SETNAM
- jsr FRESTR     ;dealloc temp string
+ jsr FRESTR     ;dealloc tmp str
  lda #$7f       ;file handle 127
  ldx #$08       ;device 8
  ldy #$00       ;secondary 0
  jsr SETLFS
  jsr OPEN       ;perform OPEN 127,8,0,S$
  bcs err127     ;handle error
+;begin processing input stream
  lda #$ff       ;start file count at -1 to not count footer
  sta $50
  sta $51
@@ -1134,7 +1144,7 @@ prtdone rts
 ;*******************
 ;
 ;The DUMP command supports multiple options based on a second required token (or expression)
-;DUMP LIST
+;DUMP LIST [start]-[end]
 ;DUMP SCREEN
 ;DUMP BITMAP
 ;DUMP VARS
@@ -1481,10 +1491,28 @@ vol
  rts
 ;
 ;*******************
+; SYS address [,a] [,x],[,y],[,p]
+sys
+ jsr skp73_   ;get 2-byte int into $14 lobyte, $15 hibyte
+ lda #252     ;prepare for loop of 4 registers
+ sta $02      ;current register index offset
+regloop
+ jsr CHRGOT   ;another param?
+ beq sysend 
+ jsr $b7f1    ;evaluate expression to single byte int to x reg
+ txa
+ inc $02      ;next regsiter index
+ ldy $02
+ sta $030c-253,y
+ bne regloop
+sysend
+ jmp SYS+6    ;perform remainder of SYS
+;
+;*******************
 ; WAIT location, mask1 [,mask2]
 ; WAIT jiffies
 wait
- jsr skp73_   ;get 2-byte int in x (lobyte) and y (hibyte)
+ jsr skp73_   ;get 2-byte int into $14 lobyte, $15 hibyte
  jsr CHRGOT   ;another param?
  beq delay2   ;no, do jiffy wait
  jsr $b7f1    ;evaluate expression to single byte int to x reg
@@ -1823,53 +1851,6 @@ newsav
  jmp savee
 ;
 ;*******************
-; SWAP A, B    SWAP A%, B%    SWAP A$, B$
-swap
- jsr PTRGET    ;get param1
- sta $14
- sty $15
- lda $0d       ;data type string or numeric
- sta $fd       ;save param1 data type
- lda $0e       ;numeric type int or float
- sta $fe       ;save param1 numeric type
- jsr ckcom2
- jsr CHRGET
- jsr PTRGET    ;get param2
- lda $0e       ;param2 numeric type, int or float
- cmp $fe       ;does param2 have the same numeric type as param1?
- bne nomtch    ;mismatch
- ldx $fd       ;param1 numeric type, int or float
- cpx $0d       ;does param2 have the same num/string type as param1
- bne nomtch    ;mismatch
- lda #1
- inx           ;$FF=string so $FF+1 = 0
- beq isstr     ;string uses 3 bytes 0-2
- ldx $0e       ;int or float?
- bne isint     ;int uses 2 bytes 0-1
- asl           ;float uses 5 bytes 0-4
-isstr asl
-isint tax      ;hold that value
- tay
-cpyvar lda ($14),y ;save param1 in FAC2
- sta $0069,y
- dey
- bpl cpyvar
- txa
- tay
-cpyvr2 lda ($47),y ;param2->param1
- sta ($14),y
- dey
- bpl cpyvr2
- txa
- tay
-faccpy lda $0069,y ;param1->param2
- sta ($47),y
- dey
- bpl faccpy
- rts
-nomtch jmp TMERR ;TYPE MISMATCH ERROR
-;
-;*******************
 ; FIND cmd - tokenized search, ie: FIND FOR
 ; FIND"chars - text search, ie: FIND"FOR
 find
@@ -2180,7 +2161,7 @@ oldnew jmp NEW
 ; POKE mem, value
 ; POKE mem1 TO mem2, value, [operation]
 ;operation is optional (default 0): 0=SET,1=AND,2=OR,3=EOR
-poke 
+poke
  jsr skp73_      ;get 2-byte int in $14,$15
  jsr CHRGOT
  cmp #","
@@ -2250,13 +2231,64 @@ raiseerr
  tax
  jmp (IERROR)
 baderr2 jmp FCERR ;illegal qty err
+;
+; SWAP A, B    SWAP A%, B%    SWAP A$, B$
+swap
+ beq mop4
+ jsr PTRGET    ;get param1
+ sta $14
+ sty $15
+ lda $0d       ;data type string or numeric
+ sta $fd       ;save param1 data type
+ lda $0e       ;numeric type int or float
+ sta $fe       ;save param1 numeric type
+ jsr ckcom2
+ jsr CHRGET
+ jsr PTRGET    ;get param2
+ lda $0e       ;param2 numeric type, int or float
+ cmp $fe       ;does param2 have the same numeric type as param1?
+ bne nomtch    ;mismatch
+ ldx $fd       ;param1 numeric type, int or float
+ cpx $0d       ;does param2 have the same num/string type as param1
+ bne nomtch    ;mismatch
+ lda #1
+ inx           ;$FF=string so $FF+1 = 0
+ beq isstr     ;string uses 3 bytes 0-2
+ ldx $0e       ;int or float?
+ bne isint     ;int uses 2 bytes 0-1
+ asl           ;float uses 5 bytes 0-4
+isstr asl
+isint tax      ;hold that value
+ tay
+cpyvar lda ($14),y ;save param1 in FAC2
+ sta $0069,y
+ dey
+ bpl cpyvar
+ txa
+ tay
+cpyvr2 lda ($47),y ;param2->param1
+ sta ($14),y
+ dey
+ bpl cpyvr2
+ txa
+ tay
+faccpy lda $0069,y ;param1->param2
+ sta ($47),y
+ dey
+ bpl faccpy
+ rts
+mop4 jmp missop
+nomtch jmp TMERR ;TYPE MISMATCH ERROR
 baderr jmp SNERR  ;syntax err
+;
+;*******************
 ;
 ; ON ERROR GOTO line
 ; ON ERROR RESUME NEXT
 ; ON KEY GOSUB line
 ; ON i GOTO line1,line2,...linen
 on
+ beq mop4
  cmp #TOKEN_ERROR
  beq onerror
  cmp #TOKEN_KEY
@@ -2475,55 +2507,6 @@ return beq oldrtn
 oldrtn jmp RETURN+2
 ;
 ;*******************
-; COLOR [foregndColor (0-31)], [backgndColor (0-15)], [borderColor (0-15)]
-; when foregndColor is > 15 flashing mode for color nibble is toggled
-color
- cmp #","
- beq nochar
- jsr skip73
- sta COLOR      ;current cursor foreground color
- cmp #16
- bcc nochar-3   ;if char color > 15 then setup irq to blink that color
- jsr blinker    ;toggle blink flag for this color
- jsr chkcomm    ;if no more params then stop now
-nochar jsr comchkget
- beq noback
- jsr getval15
- sta BGCOL0     ;background color
- jsr chkcomm
-noback jsr getval15_
- sta EXTCOL     ;border color
- rts
-blinker
- and #%00001111 ;only lo nibble is the char color
-blinkcol2 tay
- lda blinkcol,y
- eor #1
- sta blinkcol,y ;apply new blink flag
- bne setfsh     ;not currently flashing so enable it
-;check if there are any other colors needing the blink irq
- ldy #15
-chkblink lda blinkcol,y
- bne ecolor     ;at least one flag still set so leave irq set
- dey
- bpl chkblink
-irqea31
- ldx $fd9f      ;re-apply original irq vector of $EA31
- ldy $fda0
- bne setirqvec  ;always branches
-setfsh
- lda #20        ;blink delay - irq executes 20 times before blink code executes
- sta blinkdly   ;global variable for char blink delay
- ldx #<flash    ;change irq vector to char flashing subroutine
- ldy #>flash
-setirqvec       ;change IRQ vector
- sei            ;disable irq
- stx CINV
- sty CINV+1
- cli            ;enable irq
-ecolor rts
-;
-;*******************
 ; MOVE sprite#, x1, y1 [TO x2, y2, speed]
 ; MOVE sprite# TO x2, y2, [speed]
 move
@@ -2572,7 +2555,8 @@ msb sta MSIGX  ;x coord hibyte
  sta $fd
  jsr CHRGOT
  cmp #TOKEN_TO
- bne ecolor    ;TO token not present so we are done
+ beq moveto    ;TO token not present so we are done
+ rts
 moveto
  jsr backuppoint ;save last plot used by graphics commands
  lda $bf       ;temp var holding 2^sprite# value
@@ -2747,11 +2731,64 @@ setmagy sta YXPAND
  rts
 ;
 ;*******************
+; COLOR [foregndColor (0-31)], [backgndColor (0-15)], [borderColor (0-15)]
+; when foregndColor is > 15 flashing mode for color nibble is toggled
+color
+ beq mop5
+ cmp #","
+ beq nochar
+ jsr skip73
+ sta COLOR      ;current cursor foreground color
+ cmp #16
+ bcc nochar-3   ;if char color > 15 then setup irq to blink that color
+ jsr blinker    ;toggle blink flag for this color
+ jsr chkcomm    ;if no more params then stop now
+nochar jsr comchkget
+ beq noback
+ jsr getval15
+ sta BGCOL0     ;background color
+ jsr chkcomm
+noback jsr getval15_
+ sta EXTCOL     ;border color
+ rts
+blinker
+ and #%00001111 ;only lo nibble is the char color
+blinkcol2 tay
+ lda blinkcol,y
+ eor #1
+ sta blinkcol,y ;apply new blink flag
+ bne setfsh     ;not currently flashing so enable it
+;check if there are any other colors needing the blink irq
+ ldy #15
+chkblink lda blinkcol,y
+ bne ecolor     ;at least one flag still set so leave irq set
+ dey
+ bpl chkblink
+irqea31
+ ldx $fd9f      ;re-apply original irq vector of $EA31
+ ldy $fda0
+ bne setirqvec  ;always branches
+setfsh
+ lda #20        ;blink delay - irq executes 20 times before blink code executes
+ sta blinkdly   ;global variable for char blink delay
+ ldx #<flash    ;change irq vector to char flashing subroutine
+ ldy #>flash
+setirqvec       ;change IRQ vector
+ sei            ;disable irq
+ stx CINV
+ sty CINV+1
+ cli            ;enable irq
+ecolor rts
+;
+mop5 jmp missop  ;missing operand error
+;
+;*******************
 ;MULTI COLOR [eb1], [eb2], [eb3]  - extended background color mode
 ;MULTI TEXT [cc1], [cc2]          - multicolor text mode
 ;MULTI SPRITE [sc1], [sc2]        - multicolor sprite mode color bit patterns 01,11
 ;
 multi
+ beq mop5
  cmp #TOKEN_TEXT   ;text token
  beq chrmap
  cmp #TOKEN_SPRITE ;sprite token
@@ -2793,7 +2830,7 @@ chrmap lda SCROLX  ;horiz fine scrolling and control reg
 ;*******************
 ; LOCATE [col], [row], [blink] - param values can be omitted to use current value
 locate
- beq misngop
+ beq mop6
  pha
  sec         ;flag for read
  jsr PLOT    ;read current position
@@ -2829,8 +2866,8 @@ column
  rts
 ;
 ;*****************
-badloc  jmp hellno  ;illegal coordinate error
-misngop jmp missop  ;missing operand error
+badloc jmp hellno  ;illegal coordinate error
+mop6 jmp missop    ;missing operand error
 ;*******************
 designon
  lda CI2PRA     ;bits 0-1 mem bank, 00=bank3, 01=bank2, 10=bank1, 11=bank0
@@ -2856,7 +2893,7 @@ designoff jsr norm
 ; DESIGN NEW
 ; DESIGN scancode, charset, d0,d1,d2,d3,d4,d5,d6,d7
 design
- beq misngop
+ beq mop6
  cmp #TOKEN_ON
  beq designon
  cmp #TOKEN_OFF
@@ -2931,6 +2968,8 @@ clrbyt sta ($62),y
  bne clrbyt
  rts
 ;
+mop7 jmp missop
+;
 ;BITMAP CLR (does not switch to bitmap mode)
 ;BITMAP FILL x1,y1 TO x2,y2, [plotType], [color]
 ;BITMAP OFF
@@ -2950,6 +2989,7 @@ clrbyt sta ($62),y
 ;as a color parameter to select the color from mc pallete
 ;
 bitmap
+ beq mop7
  cmp #TOKEN_CLR
  beq bmclr
  cmp #TOKEN_OFF
@@ -3037,11 +3077,15 @@ getc3
  jsr getval15_   ;c3 (0-15) is used in multicolor mode only bit pattern 11
  sta mapcolc3    ;this color can be in the same 8x8 square that c1 & c2 are in
  rts
-getc1 
+getc1a           ;alternate entry point
+ jsr CHRGET
+getc1
+ php
  lda mapcolc1c2  ;last plot color plotted
  and #%00001111  ;erase hi nibble
  sta $02         ;tmp storage
- jsr getval15    ;c1 (0-15) changes the color of the plotting dots 
+ plp
+ jsr getval15_0  ;c1 (0-15) changes the color of the plotting dots 
  asl             ;move low nibble to high nibble
  asl
  asl
@@ -3160,11 +3204,14 @@ clrsid sta FRELO1,y
 ;VOICE CLR
 ;VOICE voice#, frequency(0 to 3995 for NTSC machines)
 voice
+ php
  cmp #TOKEN_CLR  ;clr token?
  bne getfreq
+ plp
  jsr sidclr
  jmp CHRGET
 getfreq
+ plp
  jsr ppw         ;returns SID register offset (voice#-1)*7 in accumulator
  pha
  jsr CHRGET
@@ -3202,7 +3249,7 @@ memfac jsr MOVFM ;copy mem to FAC1 pointed by a & y
 ;G	DOWN & LEFT
 ;H	DOWN & RIGHT 
 ;
-draw 
+draw
  jsr getstr0
  beq draw-1
 ;save current txt ptr
@@ -3220,8 +3267,7 @@ draw
 drawloop
  cmp #"c"
  bne chkplottype
- jsr CHRGET
- jsr getc1
+ jsr getc1a
  jmp nxtmov
 chkplottype cmp #"p"
  bne godraw
@@ -3266,6 +3312,7 @@ plotit dec $01
 ; LINE INPUT# filenum, A$
 ; LINE x1,y1 TO x2, y2, plotType, color
 line
+ beq mop3
  cmp #TOKEN_INPUTN ;input# token (line input#)
  bcc liner     ;line x,y to a,z
  jsr ERRDIR    ;throw error if direct mode; only x reg is affected
@@ -3321,6 +3368,8 @@ copyer lda BUF,y ;copy string to variable storage
  beq readline
  rts
 ;
+mop3 jmp missop
+;
 ; LINE x1,y1 TO x2, y2, plotType, color
 liner jsr getpnt
  jsr point2
@@ -3371,13 +3420,15 @@ restorepoint  ;restore last plot coordinate
  bpl restorepoint+2
  rts
 ;
-point2 lda #TOKEN_TO
- jsr CHKCOM+2  ;skip over TO token, syntax error if not there
+point2
  jsr savepoint ;copy point 1 to last plot point acting as point 2
+ lda #TOKEN_TO
+ jsr CHKCOM+2  ;skip over TO token, syntax error if not there
  jsr pntweg    ;get the coordinates
  jmp swappoint ;swap point1 and point2
 ;get x,y coordinates
-pntweg jsr skp73 ;get x coordinate, returns lobyte in x, hibyte in y
+pntweg beq mop3
+ jsr skp73     ;get x coordinate, returns lobyte in x, hibyte in y
  jsr xytim2
  tya
  beq okvalu
@@ -3529,6 +3580,7 @@ memnorm inc $01
 ; SCREEN ON|OFF
 ; SCREEN cols, rows where cols=38|40, rows=24|25
 screen
+ beq mop
  cmp #TOKEN_ON
  bcc setscr
  bne scnoff
@@ -3576,6 +3628,31 @@ chk24 cmp #24
  rts
 ;
 illqty3 jmp FCERR
+mop jmp missop
+;
+;*******************
+; KEY n, "string"  where n = (1-8)
+key
+ beq mop
+ cmp #TOKEN_LIST  ;LIST token?
+ beq keylist
+ cmp #TOKEN_OFF
+ beq onkeyoff
+keyass jsr skip73 ;get key#
+ beq illqty3
+ cmp #9           ;only func keys 1-8
+ bcs illqty3
+okkey sta $02     ;save key#
+ jsr ckcom2       ;throw misop if current char is not comma
+ jsr getstr
+ dec $01
+ jmp keyy
+onkeyoff lda #0
+ sta keyflag
+ sta keyentry
+ jmp CHRGET
+keylist dec $01
+ jmp keylistt
 ;
 ;*******************
 ; SCROLL x1, y1 TO x2, y2, [direction 0-3], [wrap 0-1]
@@ -3607,7 +3684,7 @@ okscroll
 ;-----------
 badscroll jmp hellno ;illegal coordinate error
 getcoords
- jsr skp73       ;x1
+ jsr skp73_      ;x1
  bne badscroll   ;hibyte should be 0
  cpx #40         ;max columns
  bcs badscroll
@@ -3698,6 +3775,7 @@ adsr jsr ppw
 ;7. store the result in SID registers
 ;
 filter
+ beq mop2
  cmp #TOKEN_VOICE ;VOICE token?
  bne getfreq1
 ;FILTER VOICE voice#, boolean
@@ -3746,6 +3824,7 @@ getfreq1
  cmp #8           ;2048 or larger is above SID's range
  bcc okfilt
 illqty5 jmp FCERR ;illegal qty err
+mop2 jmp missop
 okfilt
 ;11-bit value stored in a wacky way in filter registers
 ;   $15       $14     Source binary number
@@ -3835,6 +3914,7 @@ settype
 ; PLAY S$
 ; PLAY STOP
 play
+ beq mop2
  cmp #TOKEN_STOP
  bne playy
  jsr irqea31    ;restore original IRQ vector $EA31
@@ -3921,31 +4001,6 @@ initvoice
  sta md418
  sta SIGVOL     ;SID main volume register
 vocrdy rts
-;
-;*******************
-; KEY n, "string"  where n = (1-8)
-key
- cmp #TOKEN_LIST  ;LIST token?
- beq keylist
- cmp #TOKEN_OFF
- beq onkeyoff
-keyass jsr skip73 ;get key#
- beq badkey
- cmp #9           ;only func keys 1-8
- bcc okkey
-badkey jmp FCERR  ;illegal quantity error
-okkey sta $02     ;save key#
- jsr ckcom2       ;throw misop if current char is not comma
- jsr getstr
- beq key-1        ;quit
- dec $01
- jmp keyy
-onkeyoff lda #0
- sta keyflag
- sta keyentry
- jmp CHRGET
-keylist dec $01
- jmp keylistt
 ;
 ;******************************************
 ;* mdbasic functions instr(), ptr(), csr(), pen(), joy(), pot(), hex$() *
@@ -4590,7 +4645,7 @@ missop ldx #31     ;missing operand error
 ;*******************
 getstr jsr CHRGET  ;get next basic text chr
 getstr0 beq missop
- jsr FRMEVL         ;evaluate expression
+getstr1 jsr FRMEVL ;evaluate expression
 getstr2 jsr FRESTR ;discard temp string
  stx $50           ;lowbyte
  sty $51           ;hibyte
@@ -4641,8 +4696,8 @@ noparam jsr chkcomm  ;if current char is not a comma do not return here
  lda SCROLX
  and #%00010000 ;check if multicolor mode on or off
  bne mcplot
- jsr CHRGET
- jmp getc1      ;get hires plot color 0-15
+; jsr CHRGET
+ jmp getc1a       ;get hires plot color 0-15
 mcplot jsr getval ;get color selection, multicolor selection index 1-3
  beq illqty4
  cmp #4         ;mc mode color index selection is 1,2 or 3
@@ -4999,13 +5054,17 @@ oddkey
  clc
  adc $61
  tax
- ldy #0
+ lda $52
+ beq endass   ;assign empty str
+ cmp #32      ;check max str len
+ bcc okass    ;length is between 1 and 31
+ lda #31      ;enforce max length of 31
+ sta $52
+okass ldy #0
 nextc lda ($50),y
  sta keybuf,x
  inx
  iny
- cpy #31      ;only the first 31 chars of string (indexed 0-31)
- beq endass
  cpy $52      ;end of new string?
  bne nextc
 endass lda #0 ;terminate string with zero-byte
@@ -7736,12 +7795,15 @@ xf45c lda RIDBE ;index to end of receive buffer
  clc            ;flag to calling subroutine that open was successful
  rts
 ;
-pokee lda $15
- sec
- sbc $fc
+pokee
+;make sure start is less than or equal to end
  lda $14
+ sec
  sbc $fb
- bcs okpoke
+ lda $15
+ sbc $fc
+ bcs okpoke ;start is less than end
+;swap start and end
  lda $14
  ldy $fb
  sta $fb
