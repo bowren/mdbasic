@@ -200,6 +200,7 @@ FDIVT  = $bb12 ;divide FAC2 by FAC1 FAC1 = (FAC2/FAC1)
 MOVFM  = $bba2 ;move a 5-byte floating point number from memory to FAC1, ptr = A=lobyte, Y=hibyte
 MOV2F  = $bbca ;move a 5-byte floating point number from FAC1 to memory $57-$5B BASIC numeric work area
 MOVEF  = $bc0f ;copy FAC1 to FAC2 without rounding
+QINT   = $bc9b ;convert FAC1 into a 4-byte (32-bit) signed integer within FAC1
 INT    = $bccc ;perform INT
 FINLOG = $bd7e ;add signed integer to FAC1
 INPRT  = $bdc2 ;print IN followed by a line number
@@ -298,7 +299,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.12.22"
+.text "mdbasic 22.12.27"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -4296,9 +4297,10 @@ penx lda LPENX
  bcc nobutt  ;result was less than 256 so hi byte = 0
  bcs butt    ;result was more than 256 so hi byte = 1
 ;
-;H$ = HEX$(n) where n is a unsigned 2-byte integer (0-65535)
+;H$ = HEX$(n) where n is a signed 32-bit signed integer
 hex
- jsr GETADR  ;convert FAC1 to unsigned 16-bit int
+ jsr FRMNUM2 ;ensure numeric value in FAC1, error if not
+ jsr QINT    ;convert FAC1 into a signed 32-bit int in FAC1
  pla         ;do not return to caller since assumes numeric result
  pla
  dec $01
@@ -4670,11 +4672,16 @@ illqty4 jmp FCERR  ;illegal quan.
 getval jsr CHRGET
 skip73_ beq missop
 skip73 jsr FRMNUM  ;eval numeric expr & type, store result in FAC1
-fac2int jsr GETADR ;convert FAC1 to unsigned 2 byte int in $14,$15
+fac2int2 jsr GETADR ;convert FAC1 to unsigned 2 byte int in $14,$15
  lda $15           ;if hi byte is not zero then
  bne illqty4       ;throw ill qty err
  lda $14           ;return the result in the a register
  rts
+;
+fac2int
+ jsr FRMNUM2       ;ensure numeric value in FAC1 error if not
+ jmp fac2int2      ;convert FAC1 to int
+;
 ;*******************
 dbyval jsr CHRGET  ;get a 2 byte int (0-65535)
 skp73_ beq missop
@@ -7844,9 +7851,13 @@ poked jmp memnorm
 ;
 hexx
  ldy #$00
- lda $15
+ lda $62
  jsr dechex
- lda $14
+ lda $63
+ jsr dechex
+ lda $64
+ jsr dechex
+ lda $65
  jsr dechex
  lda #$00
  sta $0100,y
@@ -7854,11 +7865,12 @@ hexx
  ldy #0
 nxzro
  lda $0100,y
- cmp #"0"
+ beq hexzro ;reached end of str so value is 0
+ cmp #"0"   ;ignore leading zeros
  bne msd
  iny
- cpy #3
  bne nxzro
+hexzro dey
 msd tya   ;A(lo) Y(hi) is ptr to zero-term str
  ldy #$01
  rts
@@ -7895,9 +7907,7 @@ findd
  lda ($2b),y ;should be $0802
  sta $fc
  ora $fb
- bne prgyes
- rts
-prgyes
+ beq findd-1
  iny
  lda ($2b),y ;should be $0803
  sta $39
