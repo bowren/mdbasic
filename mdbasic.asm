@@ -277,7 +277,7 @@ TOKEN_OFF     = $cb  ;OFF keyword token
 TOKEN_ELSE    = $cc
 TOKEN_VARS    = $cf
 TOKEN_FILL    = $d1
-TOKEN_TIME    = $d6
+TOKEN_DELETE  = $d6
 TOKEN_COLOR   = $d8
 TOKEN_SPRITE  = $da
 TOKEN_BITMAP  = $df
@@ -286,8 +286,8 @@ TOKEN_SCREEN  = $e7
 TOKEN_RESUME  = $e8
 TOKEN_VOICE   = $eb
 TOKEN_TRACE   = $f2
-TOKEN_DELETE  = $f4
-FIRST_FUN_TOK = $f5  ;first MDBASIC function
+TOKEN_TIME    = $f4
+FIRST_FUN_TOK = $f4  ;first MDBASIC function
 TOKEN_KEY     = $f6
 TOKEN_ERROR   = $f7
 TOKEN_PI      = $ff  ;PI symbol token
@@ -299,7 +299,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.12.27"
+.text "mdbasic 22.12.28"
 .byte 13
 .text "(c)1985-2022 mark bowren"
 .byte 13,0
@@ -321,7 +321,7 @@ newcmd
 .shift "swap"
 .shift "locate"
 .shift "disk"
-.shift "time"
+.shift "delete"
 .shift "files"
 .shift "color"
 .shift "move"
@@ -351,8 +351,8 @@ newcmd
 .shift "old"
 .shift "trace"
 .shift "find"
-.shift "delete"
 ;functions
+.shift "time"
 .shift "round"
 ;statement & function
 keystr .shift "key"
@@ -456,11 +456,11 @@ cmdtab
 .rta vars    ;$cf
 .rta circle  ;$d0
 .rta fill    ;$d1
-.rta scroll  ;$d2 
+.rta scroll  ;$d2
 .rta swap    ;$d3
 .rta locate  ;$d4
 .rta disk    ;$d5
-.rta time    ;$d6
+.rta delete  ;$d6
 .rta files   ;$d7
 .rta color   ;$d8
 .rta move    ;$d9
@@ -490,17 +490,16 @@ cmdtab
 .rta old     ;$f1
 .rta trace   ;$f2
 .rta find    ;$f3
-.rta delete  ;$f4
+.rta time    ;$f4
 .rta SNERR   ;$f5 placeholder for round (not a command, func only)
 .rta key     ;$f6 cmd & func
 .rta error   ;$f7 cmd & func
 ;MDBASIC Function Tokens
 funtab
-.word round                       ;$f5 (this entry not used by executor)
-.word keyfn, err                  ;$f6,$f7 are both a command and a function
-.word ptr,csr, pen, joy, pot, hex ;$f8,$f9,$fa,$fb,$fc,$fd
-;.word instr ($fe this entry not used by executor)
-;token $ff is reserved for PI
+.word fntime, round                ;$f4,$f5
+.word keyfn, err                   ;$f6,$f7 are both a command and a function
+.word ptr, csr, pen, joy, pot, hex ;$f8,$f9,$fa,$fb,$fc,$fd
+.word instr, $ae9e                 ;$fe,$ff (PI Constant)
 ;
 ;*** error messages ***
 ;To invoke, load x register with error# then jmp ($0300)
@@ -759,11 +758,13 @@ clrtime
 ;
 ; T$ = TIME$  get current time as string value
 ; T  = TIME   get current time as float number of seconds since start
-dotime
- jsr chrget
+fntime
+ pla          ;do not return to caller since it assumes num result
+ pla          ;this routine returns a string
+ jsr chrget   ;advance txtptr 1 position and get the char
+ dec $01
  cmp #"$"
  bne time2
- dec $01
  jsr getimstr
  inc $01
  ldy #1
@@ -772,8 +773,7 @@ dotime
  jmp CHRGET
 ;get time in seconds since midnight
 time2
- dec $01
- jsr dotime3
+ jsr dotime
  inc $01
  lda $7a
  pha
@@ -790,11 +790,6 @@ time2
  sta $7a
  rts
 ;
-rounder jmp round ;perform ROUND
-instr1 jmp instr  ;perform INSTR
-pi jmp $ae9e      ;move value of PI into FAC1
-xbcf3 jmp $bcf3   ;convert numerals into float result in FAC1
-;
 ;Evalutate functions via vector IEVAL ($030A) originaly pointing to EVAL $AE86
 ;
 newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
@@ -810,30 +805,19 @@ newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
  beq hexa
 oldfun
  jmp $ae92        ;execute original CBM BASIC function
+xbcf3 jmp $bcf3   ;convert numerals into float result in FAC1
 funtok
- cmp #TOKEN_TIME
- beq dotime
- bcc oldfun       ;token should be a CBM BASIC token
  cmp #FIRST_FUN_TOK ;CBM basic max token for functions?
  bcc oldfun       ;bad func token - will raise error
- beq rounder      ;perform ROUND
- cmp #$fe         ;$FE=INSTR, $FF=PI token
- beq instr1
- bcs pi
- sec              ;calc index for first mdbasic func starting at 0
  sbc #FIRST_FUN_TOK
  asl              ;index * 2 for word pointer indexing
- pha              ;save index on stack
- jsr CHRGET       ;process next cmd text
- jsr PARCHK       ;get term inside parentheses
- pla              ;retreive func index from stack
  tay              ;prepare for direct indexing
  lda funtab,y     ;lobyte value of address for function
  sta $55          ;lobyte for indirect addressing
  lda funtab+1,y   ;hibyte value of address for function
  sta $56          ;hibyte for indirect addressing
  jsr $0054        ;execute function
-end1 jmp FRMNUM2  ;ensure numeric expression in FAC1, error if not
+end1 jmp FRMNUM2  ;ensure numeric value in FAC1, error if not
 ;
 ;evaluate inline octal value denoted by @
 octal jsr clrfac
@@ -4021,10 +4005,10 @@ instr
 badidx
  jmp BSERR    ;BAD SUBSCRIPT ERROR
 getoffsetparam
- jsr fac2int  ;convert FAC1 to unsigned byte value 0-255 into A reg
+ jsr GETBYTC+6 ;convert FAC1 to an unsigned byte value 0-255 into X reg
+ txa
  beq badidx   ;BASIC string indexes are based at 1 (not 0)
  sta $02      ;start index
- dec $02      ;convert to zero-based index
  jsr ckcom2   ;misop err if current text is not a comma
  jsr getstr   ;get source string as second param
 getsrcparam
@@ -4035,8 +4019,11 @@ getsrcparam
  jsr getstr   ;find string a = len($52), x=lobyte($50) ptr, y=hibyte($51) ptr
  lda $fd      ;src len
  beq notfound ;zero length strings cannot be searched
+ cmp $02      ;start index
+ bcc notfound ;start index beyond src len
  cmp $52      ;find len > src len
  bmi notfound ;find str cannot be found in a shorter src string
+ dec $02      ;convert start index to a zero-based index
 tryagain
  ldy $02      ;index of current char in source str
  ldx #0       ;index of first char in find str
@@ -4065,6 +4052,8 @@ instrend
 ;*******************
 ; P=PTR(x) or P=PTR(x%) or P=PTR(x$) where x is the variable name
 ptr
+ jsr CHRGET
+ jsr PARCHK
  lda $48
  ldy $47
  jmp GIVAYF
@@ -4134,7 +4123,8 @@ nomul rts
 illqty7 jmp FCERR ;display illegal qty error
 ;*******************
 ; J = JOY(n) where n=joystick number 1 or 2
-joy jsr fac2int ;get single byte int via GETADR
+joy
+ jsr getfnparam
  beq illqty7
  cmp #3
  bcs illqty7
@@ -4167,7 +4157,7 @@ keybytes .word keyentry,SHFLAG,$00c5,$00cb,$00c6
 ;3 $00cb SFDX Matrix Coordinate of Current Key Pressed
 ;4 $00c6 Num chars in key buf
 keyfn
- jsr fac2int
+ jsr getfnparam
  cmp #5
  bcs badpot
  asl
@@ -4183,7 +4173,7 @@ keyfn
 ;*******************
 ; E = ERROR(n) where n=0 Error Number, n=1 Error Line Number
 err
- jsr fac2int
+ jsr getfnparam
  cmp #1
  beq geterrline
  bcs badpot
@@ -4196,7 +4186,8 @@ geterrline
 badpot jmp FCERR
 ;*******************
 ; P = POT(n) where n=potentiometer number (1-4)
-pot jsr fac2int ;get single byte value via GETADR
+pot
+ jsr getfnparam
  beq badpot
  cmp #5         ;valid values 1 to 4
  bcs badpot
@@ -4242,14 +4233,14 @@ endpot jmp GIVAYF  ;convert binary int to FAC then return
 ; 0=logical column, 1=physical line, 2=blink on/off, 3=max columns, 4=char under cursor
 ; 5=physical column, 6=color under cursor peek($0287), 7=address of csr line
 csr
- jsr fac2int
+ jsr getfnparam
  ldy #0
  tax
  cmp #5
  bcc usecsrbytes
  cmp #6
  bcs csrcolor
-;physical line = (logicalCol > maxCols) ? logicalCol-maxCols  logicalCol
+;physical line = (logicalCol > maxCols) ? logicalCol-maxCols : logicalCol
  lda $d3      ;logical column
  sec
  sbc #40      ;max column number for a physical line
@@ -4285,7 +4276,7 @@ gocsr tay     ;y=lobyte
 ;to approximate the actual horizontal dot position of the light pen.
 ;
 pen
- jsr fac2int ;FAC1 to single byte value returned in A reg
+ jsr getfnparam
  beq penx
  cmp #2
  bcs badcsr
@@ -4299,10 +4290,12 @@ penx lda LPENX
 ;
 ;H$ = HEX$(n) where n is a signed 32-bit signed integer
 hex
+ jsr CHRGET  ;process next cmd text
+ jsr PARCHK  ;get term inside parentheses
  jsr FRMNUM2 ;ensure numeric value in FAC1, error if not
  jsr QINT    ;convert FAC1 into a signed 32-bit int in FAC1
- pla         ;do not return to caller since assumes numeric result
- pla
+ pla         ;do not return to caller since it assumes numeric result
+ pla         ;this routine is returning a string result
  dec $01
  jsr hexx
  inc $01
@@ -4672,15 +4665,18 @@ illqty4 jmp FCERR  ;illegal quan.
 getval jsr CHRGET
 skip73_ beq missop
 skip73 jsr FRMNUM  ;eval numeric expr & type, store result in FAC1
-fac2int2 jsr GETADR ;convert FAC1 to unsigned 2 byte int in $14,$15
+fac2int jsr GETADR ;convert FAC1 to unsigned 2 byte int in $14,$15
  lda $15           ;if hi byte is not zero then
  bne illqty4       ;throw ill qty err
  lda $14           ;return the result in the a register
  rts
-;
-fac2int
+;*******************
+;get a single-byte numeric parameter inside parentheses
+getfnparam
+ jsr CHRGET        ;process next cmd text
+ jsr PARCHK        ;get term inside parentheses
  jsr FRMNUM2       ;ensure numeric value in FAC1 error if not
- jmp fac2int2      ;convert FAC1 to int
+ jmp fac2int       ;convert FAC1 to 16-bit int
 ;
 ;*******************
 dbyval jsr CHRGET  ;get a 2 byte int (0-65535)
@@ -8049,7 +8045,7 @@ setterm
  rts
 ;
 ;build expression to convert time$ to time in seconds since midnight
-dotime3
+dotime
  jsr getimstr  ;returns TO2TEN in A reg
 ;1/10 second
  and #15
