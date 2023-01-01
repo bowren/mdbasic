@@ -1,6 +1,6 @@
 ; ***MDBASIC***
 ; by Mark D Bowren
-; (c)1985-2022 Bowren Consulting, Inc. (www.bowren.com)
+; (c)1985-2023 Bowren Consulting, Inc. (www.bowren.com)
 ;
 BUF    = $0200 ;BASIC Line Editor Input Buffer
 COLOR  = $0286 ;Current Foreground Color for Text
@@ -31,8 +31,8 @@ ENABL  = $02a1 ;IRQ Statuses, 1=Transmittinging, 2=Receiving, 16=Waiting
 SP0X   = $d000 ;Sprite 0 Horizontal Position
 SP0Y   = $d001 ;Sprite 0 Vertical Position
 MSIGX  = $d010 ;Most Significant Bits of Sprites 0-7 Horizontal Position
+
 SCROLY = $d011 ;Vertical Fine Scrolling and Control Register
-;
 ;Bits 0-2 Fine scroll display vertically by X scan lines (0-7)
 ;Bit 3 Select a 24-row or 25-row text display (1=25 rows, 0=24 rows)
 ;Bit 4 Blank the entire screen to the same color as the background (0=blank)
@@ -41,10 +41,10 @@ SCROLY = $d011 ;Vertical Fine Scrolling and Control Register
 ;Bit 7 High bit (Bit 8) of raster compare register at 53266 ($D012)
 ;
 LPENX  = $d013 ;Light Pen Horizontal Position (0-160) must by multiplied by 2
-LPENY  = $d014 ;Light Pen Vertical Position (0-200) corresponds exactly to the current raster scan line.
+LPENY  = $d014 ;Light Pen Vertical Position (0-200) corresponds exactly to the current raster scan line
 SPENA  = $d015 ;Sprite Enable Register - Bit 0  Enable Sprite 0 (1=sprite is on, 0=sprite is off)
+
 SCROLX = $d016 ;Horizontal Fine Scrolling and Multicolor Control Register
-;
 ;Bits 0-2 Fine scroll display horizontally by X dot positions (0-7)
 ;Bit 3 Select a 38-column or 40-column text display (1=40 columns, 0=38 columns)
 ;Bit 4 Enable multicolor text or multicolor bitmap mode (1=multicolor on, 0=multicolor off)
@@ -56,8 +56,7 @@ YXPAND = $d017 ;Sprite Vertical Expansion Register
 ;Bit 0-7 is Sprite 0-7 flag to expand sprite n vertically (1=double height, 0=normal height)
 
 VMCSB  = $d018 ;VIC-II Chip Memory Control Register
-;
-;Bit 0 Unused,
+;Bit 0 Unused
 ;Bits 1-3 Text character dot-data base address within VIC-II 16K addressable memory.
 ;   The default is %100 (4) = 4 * 1K = $1000 (4096) the address of the Character Dot-Data area in ROM.
 ;   The uppercase characters are the first 2K.  The alternate character set which contains both
@@ -104,18 +103,19 @@ CIACRA = $dc0e ;Control Register A
 
 ;Complex Interface Adapter (CIA) #2 Registers ($DD00-$DD0F)
 CI2PRA = $dd00 ;Data Port Register A
-CI2PRB = $dd01 ;Data Port Register B
-TI2ALO = $dd04 ;Timer A (lo byte)
-TI2AHI = $dd05 ;Timer A (hi byte)
-;
 ;Bits 0-1 Select VIC-II 16K addressable memory bank (0-3)
 ;  00 Bank 3 (49152-65535, $C000-$FFFF) 16K RAM / Memory mapped I/O, character ROM, 4K Kernal
 ;  01 Bank 2 (32768-49151, $8000-$BFFF) 16K RAM / BASIC text, 8K BASIC interpreter ROM
 ;  10 Bank 1 (16384-32767, $4000-$7FFF) 16K RAM / BASIC text
 ;  11 Bank 0 (    0-16383, $0   -$3FFF) 16K RAM / system variables, screen RAM, BASIC text
 ;*See zero-page memory location $01 bits 0 & 1 for RAM/ROM switching
-;
+CI2PRB = $dd01 ;Data Port Register B
 C2DDRA = $dd02 ;Data Direction Register for port A (CI2PRA)
+
+;CIA #2 Timer A
+TI2ALO = $dd04 ;Timer A (lo byte)
+TI2AHI = $dd05 ;Timer A (hi byte)
+;
 ;TOD #2 Registers
 TO2TEN = $dd08 ;TOD clock tenths of a seconds in BCD format (lower nibble)
 TO2SEC = $dd09 ;TOD clock seconds in BCD format
@@ -174,7 +174,7 @@ INPUT  = $abbf ;perform INPUT
 READ   = $ac06 ;perform READ
 NEXT   = $ad1e ;perform NEXT
 FRMNUM = $ad8a ;evaluate a numeric expression and/or check for data type mismatch, store result in FAC1
-FRMNUM2= $ad8d ;validate numeric data type in FAC1
+TESTNUM= $ad8d ;test if last expression was numeric, error if not
 FRMEVL = $ad9e ;evaluate expression
 PARCHK = $aef1 ;eval expr inside parentheses
 CHKCLS = $aef7 ;check for and skip closing parentheses
@@ -299,9 +299,9 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 22.12.28"
+.text "mdbasic 23.01.01"
 .byte 13
-.text "(c)1985-2022 mark bowren"
+.text "(c)1985-2023 mark bowren"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -367,6 +367,7 @@ keystr .shift "key"
 .shift "instr"
 .byte 0 ;needed terminator
 ;
+;Command Dispatch Table
 cmdtab
 ;CBM BASIC
 .rta END    ;$80
@@ -494,7 +495,8 @@ cmdtab
 .rta SNERR   ;$f5 placeholder for round (not a command, func only)
 .rta key     ;$f6 cmd & func
 .rta error   ;$f7 cmd & func
-;MDBASIC Function Tokens
+;
+;MDBASIC Function Dispatch Table
 funtab
 .word fntime, round                ;$f4,$f5
 .word keyfn, err                   ;$f6,$f7 are both a command and a function
@@ -589,9 +591,9 @@ tstnxt lda BUF,x
 tachr1 ldy $71
 takchr inx
  iny
- sta $01fb,y
- lda $01fb,y
- beq end
+ sta BUF-5,y
+ lda BUF-5,y
+ beq endln
  sec
  sbc #":"
  beq skip2
@@ -607,7 +609,7 @@ remlop lda BUF,x
  cmp $08
  beq takchr
 getchr iny
- sta $01fb,y
+ sta BUF-5,y
  inx
  bne remlop
 nxtcmd ldx $7a
@@ -620,7 +622,7 @@ contin iny
  beq oldtok
 notfou lda BUF,x
  bpl tachr1
-end sta $01fd,y
+endln sta BUF-3,y
  dec $7b
  lda #$ff
  sta $7a
@@ -647,14 +649,6 @@ cont1 iny
  lda RESLST,y
  bne oldtst
  beq notfou
-;
-;after ON KEY RETURN re-enable key trapping
-onkey1
- lda keyflag   ;if key trapping turned off manually during subroutine
- beq nocmd     ;then no need to switch pause to on
- dec keyflag   ;otherwise switch from paused (2) to on (1)
-nocmd
- jmp NEWSTT    ;find beginning of next statement and execute
 ;
 ;Evaluate tokens via vector (IGONE)
 ;
@@ -700,9 +694,17 @@ xcmd jsr tstcmd
  sta $39
  lda keyline+1
  sta $3a
+nocmd
  jmp NEWSTT     ;find beginning of next statement and execute
 ;
-let jmp LET   ;perform LET
+;after ON KEY RETURN re-enable key trapping
+onkey1
+ lda keyflag    ;if key trapping turned off manually during subroutine
+ beq nocmd      ;then no need to switch pause to on
+ dec keyflag    ;otherwise switch from paused (2) to on (1)
+ jmp NEWSTT     ;find beginning of next statement and execute
+;
+let jmp LET     ;perform LET
 badtok jmp SNERR
 tstcmd
  sbc #$80
@@ -723,74 +725,7 @@ oldcmd
  pha
  jmp CHRGET
 ;
-;----------------
-; TIME CLR    reset time to all zeros
-; TIME$ = T$  set the time start, format="00:00:00"
-time
- cmp #TOKEN_CLR
- beq timeclr
- cmp #"$"
- beq settime
-badtime jmp SNERR
-badtime2 jmp TMERR
-;set the clock
-settime
- jsr CHRGET
- cmp #$b2         ;equal sign token
- bne badtime
- jsr getstr
- dec $01
- jsr settimee
- inc $01
- bcs badtime2
- rts
-;reset clock to 12AM
-timeclr
- jsr CHRGET      ;skip over CLR token
-clrtime
- lda #%10010010  ;BCD 12am (am/pm flag=1 because it flips on write when hour is 12)
- sta TO2HRS      ;writing this reg stops time reg updates
- lda #0
- sta TO2MIN
- sta TO2SEC
- sta TO2TEN      ;writing this reg resumes time reg updates
- rts
-;
-; T$ = TIME$  get current time as string value
-; T  = TIME   get current time as float number of seconds since start
-fntime
- pla          ;do not return to caller since it assumes num result
- pla          ;this routine returns a string
- jsr chrget   ;advance txtptr 1 position and get the char
- dec $01
- cmp #"$"
- bne time2
- jsr getimstr
- inc $01
- ldy #1
- lda #$00
- jsr STRLIT
- jmp CHRGET
-;get time in seconds since midnight
-time2
- jsr dotime
- inc $01
- lda $7a
- pha
- lda $7b
- pha
- lda #<tim2sec
- sta $7a
- lda #>tim2sec
- sta $7b
- jsr FRMNUM
- pla
- sta $7b
- pla
- sta $7a
- rts
-;
-;Evalutate functions via vector IEVAL ($030A) originaly pointing to EVAL $AE86
+;Evalutate functions via vector IEVAL ($030A) originally pointing to EVAL $AE86
 ;
 newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
  sta $0d          ;Flag Type of Data (String or Numeric) to enforce data type
@@ -805,7 +740,7 @@ newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
  beq hexa
 oldfun
  jmp $ae92        ;execute original CBM BASIC function
-xbcf3 jmp $bcf3   ;convert numerals into float result in FAC1
+xbcf3 jmp $bcf3   ;convert ASCII numerals into float with result in FAC1
 funtok
  cmp #FIRST_FUN_TOK ;CBM basic max token for functions?
  bcc oldfun       ;bad func token - will raise error
@@ -816,8 +751,7 @@ funtok
  sta $55          ;lobyte for indirect addressing
  lda funtab+1,y   ;hibyte value of address for function
  sta $56          ;hibyte for indirect addressing
- jsr $0054        ;execute function
-end1 jmp FRMNUM2  ;ensure numeric value in FAC1, error if not
+ jmp $0054        ;execute function
 ;
 ;evaluate inline octal value denoted by @
 octal jsr clrfac
@@ -882,12 +816,78 @@ zero txa
  jsr FINLOG ;add signed int to FAC1
  jmp nexth
 ;
-;clear $5d-$60 work area and $61-$66 FAC1 
+;clear $5d-$60 work area and $61-$66 FAC1
 clrfac lda #0
  ldx #10
 loop sta $5d,x
  dex
  bpl loop
+end1 rts
+;
+;----------------
+; TIME CLR    reset time to all zeros
+; TIME$ = T$  set the time start, format="00:00:00"
+time
+ cmp #TOKEN_CLR
+ beq timeclr
+ cmp #"$"
+ beq settime
+badtime jmp SNERR
+badtime2 jmp TMERR
+;set the clock
+settime
+ jsr CHRGET
+ cmp #$b2         ;equal sign token
+ bne badtime
+ jsr getstr
+ dec $01
+ jsr settimee
+ inc $01
+ bcs badtime2
+ rts
+;reset clock to 12AM
+timeclr
+ jsr CHRGET      ;skip over CLR token
+clrtime
+ lda #%10010010  ;BCD 12am (am/pm flag=1 because it flips on write when hour is 12)
+ sta TO2HRS      ;writing this reg stops time reg updates
+ lda #0
+ sta TO2MIN
+ sta TO2SEC
+ sta TO2TEN      ;writing this reg resumes time reg updates
+ rts
+;
+; T$ = TIME$  get current time as string value
+; T  = TIME   get current time as float number of seconds since start
+fntime
+ jsr chrget   ;advance txtptr 1 position and get the char
+ dec $01
+ cmp #"$"
+ bne time2
+;get time as a string
+ jsr getimstr
+ inc $01
+ ldy #1
+ lda #$00
+ jsr STRLIT
+ jmp CHRGET
+;get time in seconds since midnight
+time2
+ jsr dotime
+ inc $01
+ lda $7a
+ pha
+ lda $7b
+ pha
+ lda #<tim2sec
+ sta $7a
+ lda #>tim2sec
+ sta $7b
+ jsr FRMNUM
+ pla
+ sta $7b
+ pla
+ sta $7a
  rts
 ;
 ;******************************************
@@ -1023,6 +1023,7 @@ prtopen
  bcs err127
  rts
 ;
+;*******************
 ;FILES [volume$]
 ;volume$ is an optional string for filtering directory results
 ;the string can include the drive num prefix, ie: "0:DEMO*"
@@ -1127,7 +1128,6 @@ fprint
 prtdone rts
 ;
 ;*******************
-;
 ;The DUMP command supports multiple options based on a second required token (or expression)
 ;DUMP LIST [start]-[end]
 ;DUMP SCREEN
@@ -1164,6 +1164,7 @@ closer inc $01     ;switch to LOROM ($a000-$bfff)
 dumpbitmap dec $01 ;switch LOROM to LORAM
  jsr dumpbitmap2
  jmp closer
+;
 ;*******************
 ; FILL x1,y1 TO x2,y2, [scanCode], [color]
 fill
@@ -1251,6 +1252,7 @@ end232
  stx $13       ;set current I/O channel (logical file) number
  rts
 ;
+;*******************
 ;SERIAL OPEN [baud],[databits],[stopbits],[duplex],[parity],[handshake]
 ;SERIAL [WAIT timeout] READ s$ | f | i% [TO byte]
 ;SERIAL PRINT expression
@@ -1447,6 +1449,7 @@ chktimer
 endtimer rts
 ;
 ;*******************
+;OLD takes no parameters
 old lda #$08
  sta $0802
  jsr LINKPRG
@@ -1476,7 +1479,7 @@ vol
  rts
 ;
 ;*******************
-; SYS address [,a] [,x],[,y],[,p]
+; SYS address [,a] [,x] [,y] [,p]
 sys
  jsr skp73_   ;get 2-byte int into $14 lobyte, $15 hibyte
  lda #252     ;prepare for loop of 4 registers
@@ -1676,6 +1679,9 @@ endprg
  jmp HALT
 ;
 ;*******************
+; RUN
+; RUN linenum
+; RUN filename$,[device],[secondary]
 oldrun jmp RUN  ;CBM BASIC - perform RUN
 newrun
  php
@@ -1922,7 +1928,7 @@ ffff lda nolin,y
 ;
 ;*******************
 ; RENUM            :use defaults, start at 10 inc by 10
-; RENUM start      :start line specified, default inc 10 
+; RENUM start      :start line specified, default inc 10
 ; RENUM start, inc :use both start and inc specified
 renum
  bne renumm  ;param1 specified
@@ -2136,6 +2142,7 @@ restor
  rts
 oldrst jmp RESTORE ;original CBM RESTORE takes no params
 ;
+;*******************
 ; NEW [SYS]
 new beq oldnew
  cmp #TOKEN_SYS
@@ -2143,6 +2150,7 @@ new beq oldnew
  jmp ($fffc)
 oldnew jmp NEW
 ;
+;*******************
 ; POKE mem, value
 ; POKE mem1 TO mem2, value, [operation]
 ;operation is optional (default 0): 0=SET,1=AND,2=OR,3=EOR
@@ -2263,7 +2271,7 @@ faccpy lda $0069,y ;param1->param2
  bpl faccpy
  rts
 mop4 jmp missop
-nomtch jmp TMERR ;TYPE MISMATCH ERROR
+nomtch jmp TMERR  ;TYPE MISMATCH ERROR
 baderr jmp SNERR  ;syntax err
 ;
 ;*******************
@@ -2479,6 +2487,7 @@ stoppull
  jsr entrap   ;enable error trapping
  jmp (IGONE)  ;read and execute the next statement
 ;
+;*******************
 ;RETURN [line#]
 return beq oldrtn
  pla          ;discard call to this subroutine
@@ -2575,6 +2584,7 @@ spriteoff
  sty SPENA
  plp
  jmp CHRGET
+;
 ;*******************
 ;SPRITE ON | OFF  - turns on or off all 8 sprites
 ;SPRITE [sprite# 0-7], [0=on,1=off], [color 0-15], [0=normal,1=multicolor],
@@ -2667,6 +2677,7 @@ xpoff
  sty YXPAND
  plp
  jmp CHRGET
+;
 ;*******************
 ; EXPAND ON | OFF
 ; EXPAND sprite#           :expand both x and y axis of sprite#
@@ -3232,7 +3243,7 @@ memfac jsr MOVFM ;copy mem to FAC1 pointed by a & y
 ;E	UP & LEFT
 ;F	UP & RIGHT
 ;G	DOWN & LEFT
-;H	DOWN & RIGHT 
+;H	DOWN & RIGHT
 ;
 draw
  jsr getstr0
@@ -3895,6 +3906,7 @@ settype
  sta md418    ;save value to SID mock register
  sta SIGVOL   ;apply to SID register
  rts
+;
 ;*******************
 ; PLAY S$
 ; PLAY STOP
@@ -4292,10 +4304,8 @@ penx lda LPENX
 hex
  jsr CHRGET  ;process next cmd text
  jsr PARCHK  ;get term inside parentheses
- jsr FRMNUM2 ;ensure numeric value in FAC1, error if not
+ jsr TESTNUM ;ensure expression was numeric, error if not
  jsr QINT    ;convert FAC1 into a signed 32-bit int in FAC1
- pla         ;do not return to caller since it assumes numeric result
- pla         ;this routine is returning a string result
  dec $01
  jsr hexx
  inc $01
@@ -4675,8 +4685,8 @@ fac2int jsr GETADR ;convert FAC1 to unsigned 2 byte int in $14,$15
 getfnparam
  jsr CHRGET        ;process next cmd text
  jsr PARCHK        ;get term inside parentheses
- jsr FRMNUM2       ;ensure numeric value in FAC1 error if not
- jmp fac2int       ;convert FAC1 to 16-bit int
+ jsr TESTNUM       ;ensure expression was numeric, error if not
+ jmp fac2int
 ;
 ;*******************
 dbyval jsr CHRGET  ;get a 2 byte int (0-65535)
@@ -5078,7 +5088,7 @@ endass lda #0 ;terminate string with zero-byte
  bcc endass+2
  jmp memnorm  ;switch LORAM back to LOROM
 ;
-;KEY LIST (continued from LORAM)
+;KEY LIST (continued)
 ;
 keylistt
  jsr printcr
