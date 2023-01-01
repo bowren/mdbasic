@@ -2,13 +2,13 @@
 MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
 MDBASIC version 23.01.01<br>
 <br>
-Download the documentation file mdbasic.pdf for details about each command.<br>
+Download the documentation file <b>mdbasic.pdf</b> for details.<br>
 <br>
 Download Options:<br>
 <ol>
-<li>mdbasic.d64 - Contains mdbasic.prg and a few testing/example programs & games</li>
-<li>mdbasic.prg - Only the compiled prg to be copied to your media format</li>
-<li>mdbasic.asm - Compile it yourself (see below)</li>
+<li>mdbasic.d64 - A disk image that contains mdbasic.prg and a few testing/example programs & games</li>
+<li>mdbasic.prg - The compiled executable program</li>
+<li>mdbasic.asm - The source code</li>
 </ol>
 Download Turbo Assembler to compile source:<br>
 https://style64.org/file/TMPx_v1.1.0-STYLE.zip<br>
