@@ -278,6 +278,7 @@ TOKEN_ELSE    = $cc
 TOKEN_VARS    = $cf
 TOKEN_FILL    = $d1
 TOKEN_DELETE  = $d6
+TOKEN_FILES   = $d7
 TOKEN_COLOR   = $d8
 TOKEN_SPRITE  = $da
 TOKEN_BITMAP  = $df
@@ -299,7 +300,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.01.01"
+.text "mdbasic 23.01.04"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -402,7 +403,7 @@ cmdtab
 .rta CMD    ;$9d
 .rta sys    ;$9e SYS augmented
 .rta $e1be  ;$9f OPEN
-.rta $e1c7  ;$a0 CLOSE
+.rta close  ;$a0 CLOSE augmented
 .rta GET    ;$a1
 .rta new    ;$a2
 ;Commodore 64 BASIC Keyword Tokens
@@ -2275,7 +2276,18 @@ nomtch jmp TMERR  ;TYPE MISMATCH ERROR
 baderr jmp SNERR  ;syntax err
 ;
 ;*******************
+; CLOSE filenum   -close specified file number
+; CLOSE FILES     -close all open files
+close
+ beq mop4
+ cmp #TOKEN_FILES
+ beq clsfiles
+ jmp $e1c7        ;perform CLOSE
+clsfiles
+ jsr CLALL
+ jmp CHRGET
 ;
+;*******************
 ; ON ERROR GOTO line
 ; ON ERROR RESUME NEXT
 ; ON KEY GOSUB line
@@ -3627,9 +3639,14 @@ illqty3 jmp FCERR
 mop jmp missop
 ;
 ;*******************
+; KEY LIST   -list current function key assignments
+; KEY OFF    -turn off key trapping (enabled by ON KEY)
+; KEY CLR    -clear the keyboard buffer
 ; KEY n, "string"  where n = (1-8)
 key
  beq mop
+ cmp #TOKEN_CLR
+ beq keyclr
  cmp #TOKEN_LIST  ;LIST token?
  beq keylist
  cmp #TOKEN_OFF
@@ -3646,6 +3663,10 @@ okkey sta $02     ;save key#
 onkeyoff lda #0
  sta keyflag
  sta keyentry
+ jmp CHRGET
+keyclr
+ lda #0
+ sta $c6
  jmp CHRGET
 keylist dec $01
  jmp keylistt
@@ -4266,7 +4287,7 @@ csrcolor
  lda #<GDCOL
  bne goodcsr1 ;always branches
 lastcsr
- beq csraddr 
+ beq csraddr
 badcsr jmp FCERR
 csraddr       ;get text address of current line
  lda $d2      ;hibyte
