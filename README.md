@@ -21,7 +21,7 @@ http://vice-emu.sourceforge.net/<br>
 <u><b>Load & Run MDBASIC:</b></u><br>
 <pre style="font-family:'Courier New'">
 READY.
-<b>LOAD"MDBASIC",8,1</b>
+<b>LOAD"MDBASIC.PRG",8,1</b>
 &nbsp;
 SEARCHING FOR MDBASIC.PRG
 LOADING
