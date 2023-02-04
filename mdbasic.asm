@@ -300,7 +300,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.01.04"
+.text "mdbasic 23.02.04"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -983,46 +983,30 @@ disk
  jsr getstr0     ;get DOS string
  beq donehere
  jsr SETNAM
- lda #$7f        ;file handle 127
- ldx #$08        ;device 8
+ jsr getdskdev   ;get disk device num in x reg
+ lda #$7e        ;file handle 126
  ldy #$0f        ;secondary channel 15 = DOS channel
  jsr SETLFS
- jsr OPEN        ;performs OPEN 127,8,15, "string"
- bcs err127
- lda $9d         ;display message if not in prg mode, #$C0=kernal & ctrl, #$80=ctrl only
- bpl closeit     ;don't display load addresses
- ldx $b8         ;current file number
- jsr CHKIN       ;designate a Logical file as the current input channel
- bcs err127
-readio jsr CHRIN
- jsr CHROUT
- cmp #$0d
- bne readio
- jsr CLRCHN
+ jsr OPEN        ;performs OPEN 126,8,15, "string"
+ bcs err126
+ lda $9d         ;display message if not in prg mode
+ bpl closeit     ;don't display disk status
+ dec $01
+ jsr bufio
+ inc $01
+ bcs err126
+ jsr CLRCHN      ;restore default devices
 closeit
- jmp clse7f
+ jmp clse7e
 ;
-;Open MDBASIC file handle for printer
-openprint00
- ldy #$00     ;secondary parameter $FF=not used, 5=binary graphic
-openprint     ;7=upper/lower case chars, 0=Upper case and symbol chars
- lda #$7f     ;file handle 127
- ldx #$04     ;device 4
- jsr SETLFS   ;set logical file parameters BASIC eq open 127,4,0
- lda #$00     ;zero byte file name length (no name)
- jsr SETNAM   ;set file name
- jsr OPEN     ;perform OPEN 127,4,0,""
- bcc prtopen  ;clear carry flag means success
-err127 pha
- jsr clse7f
+err7ee
+ inc $01
+err126
+ pha
+ jsr clse7e
  pla
  tax
  jmp (IERROR)
-prtopen
- ldx #$7f     ;pass file handle param into CHKOUT via x reg
- jsr CHKOUT   ;redirect std output to device on file 127
- bcs err127
- rts
 ;
 ;*******************
 ;FILES [volume$]
@@ -1030,6 +1014,8 @@ prtopen
 ;the string can include the drive num prefix, ie: "0:DEMO*"
 files
  beq onechar    ;no param, just use $ as param
+ cmp #","
+ beq onechar
  jsr getstr1    ;get volume$ (should never be more than 18 chars)
  clc
  adc #1         ;length plus one for new tmp str
@@ -1057,76 +1043,60 @@ copystr
  ldy $63
  jsr SETNAM
  jsr FRESTR     ;dealloc tmp str
- lda #$7f       ;file handle 127
- ldx #$08       ;device 8
+ jsr getdskdev  ;get disk device num in x reg
+ lda #$7e       ;file handle 126
  ldy #$00       ;secondary 0
  jsr SETLFS
- jsr OPEN       ;perform OPEN 127,8,0,S$
- bcs err127     ;handle error
-;begin processing input stream
- lda #$ff       ;start file count at -1 to not count footer
- sta $50
- sta $51
- ldx $b8        ;current file number
- jsr CHKIN      ;designate a Logical file as the current input channel
- bcs err127
- jsr CHRIN      ;skip 2-byte file header
- jsr CHRIN
- jsr prtlin     ;get and print directory header (label & id)
- bne chkeof
- lda #$92       ;RVS off
- jsr CHROUT
-blocks
- jsr prtlin
- beq chkshft
-chkeof
- and #%01000000 ;bit6=EOF/EOI, bit7=device not present, bits0-1 indicate device timeout
- bne filecnt    ;bit6=1? EOF, print file count
- lda #5         ;DEVICE NOT PRESENT
- jmp err127
-chkshft lda #$01
-shift2 
- bit SHFLAG     ;shift key?
- bne shift2     ;wait till released
- inc $50        ;increment file count
- bne nxtfile
- inc $51
-nxtfile
- jsr STOP       ;stop key?
- bmi blocks
- bpl clse7f
-filecnt
- ldx $50
- lda $51
- jsr LINPRT     ;print 2-byte binary number in FAC1
- lda #<filestr
- ldy #>filestr
- jsr STROUT     ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
-clse7f
- lda #$7f
- jsr CLOSE
- jmp CLRCHN     ;input channel 0=keyboard, output channel 3=screen
-prtlin
- jsr CHRIN      ;skip 2 byte line header
- jsr CHRIN
- jsr CHRIN      ;get 2-byte block size
- sta $63        ;and store in FAC1
- jsr CHRIN      ;to later convert to string
- sta $62        ;and print to screen
- jsr READST     ;read i/o status word
- bne prtdone
+ jsr OPEN       ;perform OPEN 126,8,0,S$
+ bcs err126     ;handle error
+ dec $01
+ jsr filess
+ inc $01
+ rts
+;get and validate the disk device number 8-11, default 8
+getdskdev
+ ldx #8         ;default device 8
+ jsr comchk
+ bne getdskdev-1
+ jsr getval     ;get single byte value in x reg
+ cmp #8
+ bcc illdev
+ tax
+ cmp #12
+ bcc getdskdev-1
+illdev
+ ldx #9         ;illegal device number error
+ jmp (IERROR)
+;
+;calls from LORAM need LOROM
+pblocks
+ inc $01        ;LOROM
  jsr LINPRT+4   ;$bdd1 output 2-byte binary number in FAC1 to screen
- lda #" "
-;print zero-terminated string in file then print CR
-fprint
- jsr CHROUT
- jsr READST     ;Kernal I/O Status Word (ST)
- bne prtdone
- jsr CHRIN
- bne fprint
- jsr printcr
- jsr READST
-prtdone rts
+ dec $01        ;LORAM
+ rts
+;
+;Open MDBASIC file handle for printer
+opnprt0
+ ldy #$00       ;secondary parameter $FF=not used, 5=binary graphic
+opnprt          ;7=upper/lower case chars, 0=Upper case and symbol chars
+ lda #$7f       ;file handle 127
+ ldx #$04       ;device 4
+ jsr SETLFS     ;set logical file parameters BASIC eq open 127,4,0
+ lda #$00       ;zero byte file name length (no name)
+ jsr SETNAM     ;set file name
+ jsr OPEN       ;perform OPEN 127,4,0,""
+ bcc prtopen    ;clear carry flag means success
+err127
+ pha
+ jsr clse7f
+ pla
+ tax
+ jmp (IERROR)
+prtopen
+ ldx #$7f     ;pass file handle param into CHKOUT via x reg
+ jsr CHKOUT   ;make 127 the current I/O file number
+ bcs err127
+ rts
 ;
 ;*******************
 ;The DUMP command supports multiple options based on a second required token (or expression)
@@ -1134,6 +1104,7 @@ prtdone rts
 ;DUMP SCREEN
 ;DUMP BITMAP
 ;DUMP VARS
+;DUMP FILES
 ;DUMP {expression}
 dump
  cmp #TOKEN_LIST
@@ -1143,19 +1114,21 @@ dump
  cmp #TOKEN_BITMAP
  beq dumpbitmap
  cmp #TOKEN_VARS
- bne dumpexpr
-dumpvars jsr openprint00
- jsr vars
- jmp closer+3
-dumpexpr jsr openprint00
+ beq dumpvars
+ cmp #TOKEN_FILES
+ beq dumpfiles
+dumpexpr jsr opnprt0
  jsr $aa9d   ;perform print of expression
  jmp clse7f
-dumplist jsr openprint00
+dumpvars jsr opnprt0
+ jsr vars
+ jmp closer+3
+dumplist jsr opnprt0
  lda #$01
  sta listflag
  jsr opget   ;calls CHRGET first thing!
  jsr $a6c9   ;perform list
- jsr printcr
+ jsr printcr ;print carriage return
  jmp clse7f
 dumpscreen dec $01 ;switch to LORAM ($a000-$bfff)
  jsr dumpscreen2
@@ -1165,6 +1138,22 @@ closer inc $01     ;switch to LOROM ($a000-$bfff)
 dumpbitmap dec $01 ;switch LOROM to LORAM
  jsr dumpbitmap2
  jmp closer
+dumpfiles jsr opnprt0
+ ldx #$7f
+ stx $13    ;redirect std output to device on file 127
+ jsr CHRGET ;skip over FILES token
+ jsr files
+;close MDBASIC file handles and restore std io channels
+ lda #0
+ sta $13
+clse7e
+ lda #$7e
+ jsr CLOSE
+clse7f
+ lda #$7f
+clsclr
+ jsr CLOSE
+ jmp CLRCHN     ;restore default devices as current I/O channels
 ;
 ;*******************
 ; FILL x1,y1 TO x2,y2, [scanCode], [color]
@@ -1538,8 +1527,9 @@ dlay2 cmp $a2
 stopnow rts
 ;
 ;*******************
-; AUTO   (no params) uses last used setting, default is 10
-; AUTO OFF, AUTO n  where n=1 to 1023 
+; AUTO      :uses last used setting, default is 10
+; AUTO n    :where n=1 to 1023
+; AUTO OFF  :turn off auto numbering
 auto
  beq applyauto
  cmp #TOKEN_OFF
@@ -1666,7 +1656,7 @@ shftky
  bit SHFLAG ;is the shift key pressed?
  beq shftky ;wait for it to be pressed
 etrace rts
-weglst 
+weglst
  jsr FINDLN ;find BASIC line number in $14,$15
  bcc endprg ;line not found
  jsr $a82c  ;test STOP key for break in program
@@ -2216,6 +2206,7 @@ error
  beq errclr
  cmp #TOKEN_OFF
  bne raiseerr
+erroff
  jsr detrap
 errclr jsr clearerr
  jmp CHRGET
@@ -2273,7 +2264,6 @@ faccpy lda $0069,y ;param1->param2
  rts
 mop4 jmp missop
 nomtch jmp TMERR  ;TYPE MISMATCH ERROR
-baderr jmp SNERR  ;syntax err
 ;
 ;*******************
 ; CLOSE filenum   -close specified file number
@@ -2284,7 +2274,8 @@ close
  beq clsfiles
  jmp $e1c7        ;perform CLOSE
 clsfiles
- jsr CLALL
+ jsr CLALL        ;close all open files
+ jsr CLRCHN       ;restore default devices
  jmp CHRGET
 ;
 ;*******************
@@ -2292,6 +2283,8 @@ clsfiles
 ; ON ERROR RESUME NEXT
 ; ON KEY GOSUB line
 ; ON i GOTO line1,line2,...linen
+baderr jmp SNERR  ;syntax err
+;
 on
  beq mop4
  cmp #TOKEN_ERROR
@@ -2301,7 +2294,11 @@ on
  jmp ONGOTO   ;perform ON
 onkey jsr CHRGET
  cmp #TOKEN_GOSUB
+ beq onkeygo
+ cmp #TOKEN_OFF
  bne baderr
+ jmp onkeyoff
+onkeygo
  jsr getline
  stx keyptr   ;of the line# specified
  sty keyptr+1
@@ -2316,7 +2313,11 @@ onerror jsr CHRGET
  cmp #TOKEN_GOTO
  beq errgoto
  cmp #TOKEN_RESUME
+ beq onerres
+ cmp #TOKEN_OFF
  bne baderr
+ jmp erroff
+onerres
  jsr CHRGET
  cmp #TOKEN_NEXT
  bne baderr
@@ -2856,7 +2857,6 @@ locate
  beq column  ;end of statement
 row jsr comchkget
  beq column
-gavfy
  jsr skp73   ;get value as int: ;x=lobyte, y=hibyte
  bne badloc  ;hibyte must be zero
  cpx #25     ;25 is max line number
@@ -3013,7 +3013,7 @@ bitmap
  jsr types
  dec $01
  jsr bitfil ;perform FILL on rect; put code under ROM
- inc $01
+f inc $01
  rts
 bmon jsr bitmapon
  bne bmclr+3        ;always branches
@@ -4488,8 +4488,8 @@ stdkey sta $f5
  bne norep      ;not a repeat keypress
  jmp $eaf0      ;resume CBM func to decode keystroke
 norep sec
- sbc #$85       ;first func key? F1=$85, F3=$86, F5=$87, F7=$88, F2=$89, F4=$8A, F6=$9B, F8=$9C
- bcc nokey
+ sbc #$85       ;first func key?
+ bcc nokey      ;F1=$85, F3=$86, F5=$87, F7=$88, F2=$89, F4=$8A, F6=$9B, F8=$9C
  cmp #8         ;valid function key index is 0-7
  bcc fkey
 nokey jmp $eb48 ;setup proper keyboard decode table
@@ -4664,8 +4664,9 @@ comma rts
 ckcom2
  ldy #0
  lda ($7a),y
- cmp #","
- beq comma
+ cmp #","          ;good code should have comma
+ bne missop        ;branch not taken saves 1 cycle
+ rts               ;faster for non error condition
 missop ldx #31     ;missing operand error
  jmp (IERROR)      ;vector to print basic error message
 ;*******************
@@ -4689,8 +4690,9 @@ getval15_ jsr CHRGET
 getval15_0 beq missop
 getval15 jsr skip73
  cmp #16           ;enforce 0-15 range
- bcc comma
-illqty4 jmp FCERR  ;illegal quan.
+ bcs illqty4       ;branch not taken saves 1 cycle
+ rts               ;faster for non error condition
+illqty4 jmp FCERR  ;illegal quanity error
 ;*******************
 ;get a single byte int (0-255) throw error if bad data type or range
 getval jsr CHRGET
@@ -4718,40 +4720,42 @@ skp73 jsr FRMNUM   ;eval numeric expr & type
  ldy $15
  rts
 ;*******************
-types jsr comchk ;current char a comma?
- bne etypes
+types
+ jsr chkcomm     ;current char a comma?
  jsr comchkget
- beq noparam    ;another comma found so skip plot type param
- jsr skip73     ;get plot type value
- cmp #4         ;plot type 0=erase, 1=plot, 2=toggle, 3=none (locate only)
+ beq noparam     ;another comma found so skip plot type param
+ jsr skip73      ;get plot type value
+ cmp #4          ;plot type 0=erase, 1=plot, 2=toggle, 3=none (locate only)
  bcs illqty4
  sta lastplott
-noparam jsr chkcomm  ;if current char is not a comma do not return here
+noparam
+ jsr chkcomm     ;if current char is not a comma do not return here
  lda SCROLX
- and #%00010000 ;check if multicolor mode on or off
+ and #%00010000  ;check if multicolor mode on or off
  bne mcplot
-; jsr CHRGET
- jmp getc1a       ;get hires plot color 0-15
-mcplot jsr getval ;get color selection, multicolor selection index 1-3
+ jmp getc1a      ;get hires plot color 0-15
+mcplot
+ jsr getval      ;get color selection, multicolor selection index 1-3
  beq illqty4
- cmp #4         ;mc mode color index selection is 1,2 or 3
+ cmp #4          ;mc mode color index selection is 1,2 or 3
  bcs illqty4
- asl            ;convert index to ptab offset 1=8, 2=16, 3=24
+;convert index to ptab offset 1=8, 2=16, 3=24
  asl
  asl
- sta mapcolbits ;offset = index * 8 where index in (1,2,3)
-etypes rts
+ asl
+ sta mapcolbits  ;offset = index * 8 where index in (1,2,3)
+ rts
 ;*****************
 sprnum
  jsr skip73_
- cmp #8            ;valid sprite numbers 0-7
+ cmp #8          ;valid sprite numbers 0-7
  bcc less8
- ldx #33           ;illegal sprite number
+ ldx #33         ;illegal sprite number
  jmp (IERROR)
 less8 sta $be
  tay
  lda bitweights,y
- sta $bf           ;2^sprite#
+ sta $bf         ;2^sprite#
  rts
 ;*******************
 getvoc
@@ -4759,12 +4763,12 @@ getvoc
  beq iverr
  cmp #4
  bcc getvoc-1
-iverr ldx #32     ;illegal voice number
+iverr ldx #32    ;illegal voice number
  jmp (IERROR)
 ;*******************
 ;this function entry point is called by commands PLOT,LINE,CIRCLE,PAINT
 getpnt
- jsr pntweg     ;get x,y, plot type
+ jsr pntweg      ;get x,y, plot type
  jmp savepoint
 ;*******************
 ;these routines are used by command under ROM
@@ -4784,10 +4788,6 @@ rom3 inc $01
  dec $01
  plp
  rts
-;when LORAM ($a000-$bfff) is enabled use this label to raise error
-;do not use FCERR in said case
-illqtyerr ldx #14
- jmp (IERROR)
 ;
 ;round FAC1 to the nearest whole number by adding .5 then truncate
 doround
@@ -4810,7 +4810,9 @@ printer lda ($22),y
  jsr CHROUT
  iny
  plp
+ beq prtdone
  bpl printer
+prtdone
  rts
 ;
 ;********************************************************************
@@ -6805,7 +6807,7 @@ dumpscreen2
  bit VMCSB       ;text mode upper case with symbols or upper/lower case?
  bne upcase      ;yes, use upper/lower case text
  ldy #$07        ;7=upper and lower case, 0 = upper case and symbols
-upcase jsr openprint
+upcase jsr opnprt
  lda #27
  jsr CHROUT
  lda #"3"
@@ -6867,7 +6869,7 @@ stopyn lda $fc
 ;
 dumpbitmap2
  ldy #5          ;secondary param - binary graphic
- jsr openprint
+ jsr opnprt
 ;send printer control codes
  lda #27
  jsr CHROUT
@@ -8275,5 +8277,132 @@ noblink sta blinkcol,y   ;all colors turn off flash flag
  lda #$7F   ;$37-$38 holds value of highest address used by BASIC, originally $9FFF (40959)
  sta $38
  rts
+;
+;begin processing input stream
+filess
+ lda #$ff       ;start file count at -1 to not count footer
+ sta $50
+ sta $51
+ jsr chkin7e
+ bcs err7e
+ jsr CHRIN      ;skip 2-byte file header
+ bcs err7e
+ jsr CHRIN
+ jsr prtlin2    ;get and print directory header (label & id)
+ bne chkeof
+ lda #$92       ;RVS off
+ jsr CHROUT
+blocks
+ jsr prtlin
+ beq chkshft
+chkeof
+ and #%01000000 ;bit6=EOF/EOI, bit7=device not present, bits0-1 indicate device timeout
+ bne filecnt    ;bit6=1? EOF, print file count
+ lda #5         ;DEVICE NOT PRESENT
+err7e jmp err7ee
+chkshft lda #$01
+shift2 
+ bit SHFLAG     ;shift key?
+ bne shift2     ;wait till released
+ inc $50        ;increment file count
+ bne nxtfile
+ inc $51
+nxtfile
+ jsr STOP       ;stop key?
+ bmi blocks
+ bpl endfiles
+filecnt
+ ldx $50
+ lda $51
+ sta $62
+ stx $63
+ jsr pblocks    ;print 2-byte binary number in FAC1
+ lda #<filestr
+ ldy #>filestr
+ jsr printstr   ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
+endfiles jmp clse7e
+;
+prtlin
+ jsr chkin7e
+ bcs err7e
+prtlin2
+ jsr CHRIN      ;skip 2 byte line header
+ jsr CHRIN
+ jsr CHRIN      ;read the 2-byte disk block size
+ sta $63        ;and store result in FAC1
+ jsr CHRIN      ;to later convert to string
+ sta $62        ;for writing to output channel
+ jsr READST     ;get last input status, 0=ok
+ bne stdout0    ;stop now and switch to output channel if needed
+ jsr stdout0    ;set current i/o to output channel
+ bcs err7e
+ jsr pblocks ;LINPRT+4   ;$bdd1 output 2-byte binary number in FAC1 to screen
+ lda #" "
+ jsr CHROUT
+;print zero-terminated string in file then print CR
+ jsr bufio      ;on return, carry set means error in i/o
+ bcs err7e      ;either input or output failed
+ pha            ;save status result of i/o
+ jsr printcr    ;write carriage return to current output channel
+ pla            ;restore status result
+ rts
+;
+stdout0
+ pha
+ jsr stdout
+ pla
+ rts
+stdout
+ clc            ;clear carry used as error flag
+ ldx $13        ;current redirected output channel
+ beq stdout-1   ;0 indicates default so no need to CHKOUT
+ jmp CHKOUT     ;restore original I/O channel, carry set on error
+;
+chkin7e
+ ldx #$7e       ;current file number
+ jmp CHKIN      ;designate a Logical file as the current input channel
+;read with buffering from channel 126
+;write to current output channel
+bufio
+ jsr chkin7e
+ bcs rddone
+ ldy #0
+bufrd
+ jsr READST    ;last read status
+ bne bufwrite+3
+ jsr CHRIN
+ bcs rddone    ;carry indicates error, accumulator holds error#
+ sta paintbuf1,y
+ beq bufwrite
+ iny
+ bne bufrd
+ jsr bufwrite  ;if more than 255 bytes then print it
+ bcc bufio     ;read next 255 bytes
+rddone rts     ;return with carry set indicating error
+;write buffer up to 255 bytes
+bufwrite
+ iny
+ bne zzz
+ lda #0
+ sta paintbuf1,y
+zzz
+ jsr READST    ;last read status
+ sta $61       ;save for returning the read status
+ jsr stdout    ;switch current i/o channel to output channel
+ bcs rddone    ;carry indicates error, accumulator holds error#
+ ldy #0
+bufwr
+ lda paintbuf1,y
+ beq iodone    ;stop if zero-byte termination found
+ jsr CHROUT
+ bcs iodone1   ;stop if output error
+ iny
+ bne bufwr
+ rts
+ jsr stdout    ;switch current i/o channel to output channel
+ bcs iodone1   ;carry indicates error, accumulator holds error#
+iodone
+ lda $61
+iodone1 rts
 ;
 .end
