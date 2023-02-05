@@ -1122,7 +1122,7 @@ dumpexpr jsr opnprt0
  jmp clse7f
 dumpvars jsr opnprt0
  jsr vars
- jmp closer+3
+ jmp closer+2
 dumplist jsr opnprt0
  lda #$01
  sta listflag
