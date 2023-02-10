@@ -300,7 +300,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.02.04"
+.text "mdbasic 23.02.10"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -3639,19 +3639,23 @@ illqty3 jmp FCERR
 mop jmp missop
 ;
 ;*******************
-; KEY LIST   -list current function key assignments
-; KEY OFF    -turn off key trapping (enabled by ON KEY)
-; KEY CLR    -clear the keyboard buffer
+; KEY LIST      -list current function key assignments
+; KEY OFF       -turn off key trapping (enabled by ON KEY)
+; KEY CLR       -clear the keyboard buffer
+; KEY WAIT [A$] -wait for any keypress, optionally store in str var
 ; KEY n, "string"  where n = (1-8)
 key
  beq mop
  cmp #TOKEN_CLR
  beq keyclr
- cmp #TOKEN_LIST  ;LIST token?
- beq keylist
+ cmp #TOKEN_WAIT
+ beq keywait
  cmp #TOKEN_OFF
  beq onkeyoff
-keyass jsr skip73 ;get key#
+ cmp #TOKEN_LIST
+ beq keylist
+;assign function key
+ jsr skip73       ;get key#
  beq illqty3
  cmp #9           ;only func keys 1-8
  bcs illqty3
@@ -3664,6 +3668,14 @@ onkeyoff lda #0
  sta keyflag
  sta keyentry
  jmp CHRGET
+keywait
+ lda $c6
+ beq keywait
+ jsr CHRGET
+ bne doget
+ rts
+doget
+ jmp GET          ;peform GET
 keyclr
  lda #0
  sta $c6
