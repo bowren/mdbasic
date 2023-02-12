@@ -300,7 +300,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.02.10"
+.text "mdbasic 23.02.12"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -2266,13 +2266,19 @@ mop4 jmp missop
 nomtch jmp TMERR  ;TYPE MISMATCH ERROR
 ;
 ;*******************
-; CLOSE filenum   -close specified file number
-; CLOSE FILES     -close all open files
+; CLOSE filenum               -close a single file number (CBM BASIC)
+; CLOSE filenum1 [,filenum2]. -close mutiple file numbers
+; CLOSE FILES                 -close all open files
 close
  beq mop4
  cmp #TOKEN_FILES
  beq clsfiles
- jmp $e1c7        ;perform CLOSE
+gfn jsr skip73    ;get file number
+ jsr CLOSE        ;close file if open, ignore if not
+ jsr CHRGOT       ;get current BASIC txt char
+ beq mop4-1       ;stop if no more file numbers
+ jsr CHKCOM       ;skip over comma, error if missing
+ jmp gfn          ;process next file number
 clsfiles
  jsr CLALL        ;close all open files
  jsr CLRCHN       ;restore default devices
