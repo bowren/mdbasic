@@ -195,6 +195,8 @@ POKE   = $b824 ;perform POKE
 WAIT   = $b82d ;perform WAIT
 FADDH  = $b849 ;add 0.5 to FAC1
 NEGFAC = $b947 ;replace FAC1 with its 2's complement (make it a negative number)
+DIV10  = $bafe ;divide FAC1 by 10
+MUL10  = $bae2 ;multiply FAC1 by 10
 FMULT  = $ba28 ;copy mem pointed by Y(hi),A(lo) to FAC2 then FAC1=FAC1*FAC2
 FDIVT  = $bb12 ;divide FAC2 by FAC1 FAC1 = (FAC2/FAC1)
 MOVFM  = $bba2 ;move a 5-byte floating point number from memory to FAC1, ptr = A=lobyte, Y=hibyte
@@ -300,7 +302,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.02.12"
+.text "mdbasic 23.02.21"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -360,7 +362,7 @@ keystr .shift "key"
 .shift "error"
 ;functions only
 .shift "ptr"
-.shift "csr"
+.shift "inf"
 .shift "pen"
 .shift "joy"
 .shift "pot"
@@ -501,7 +503,7 @@ cmdtab
 funtab
 .word fntime, round                ;$f4,$f5
 .word keyfn, err                   ;$f6,$f7 are both a command and a function
-.word ptr, csr, pen, joy, pot, hex ;$f8,$f9,$fa,$fb,$fc,$fd
+.word ptr, inf, pen, joy, pot, hex ;$f8,$f9,$fa,$fb,$fc,$fd
 .word instr, $ae9e                 ;$fe,$ff (PI Constant)
 ;
 ;*** error messages ***
@@ -732,15 +734,18 @@ newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
  sta $0d          ;Flag Type of Data (String or Numeric) to enforce data type
  jsr CHRGET
  bcc xbcf3        ;numeric digit 0 to 9
+ jsr $b113        ;Check If .A Register Holds Alphabetic ASCII Character
+ bcs isvar        ;is alpha
  cmp #"@"
  beq octal        ;octal value
- bcs funtok
- cmp #"%"         ;binary value literal?
- beq binary
+ bcs funtok       ;probably token
  cmp #"$"         ;hex value literal?
  beq hexa
+ cmp #"%"         ;binary value literal?
+ beq binary
 oldfun
- jmp $ae92        ;execute original CBM BASIC function
+ jmp $aead        ;execute CBM BASIC function
+isvar jmp $af28   ;get value of variable
 xbcf3 jmp $bcf3   ;convert ASCII numerals into float with result in FAC1
 funtok
  cmp #FIRST_FUN_TOK ;CBM basic max token for functions?
@@ -3641,7 +3646,7 @@ chk24 cmp #24
  sta SCROLY
  rts
 ;
-illqty3 jmp FCERR
+
 mop jmp missop
 ;
 ;*******************
@@ -3660,11 +3665,30 @@ key
  beq onkeyoff
  cmp #TOKEN_LIST
  beq keylist
-;assign function key
- jsr skip73       ;get key#
+ jsr FRMEVL   ;eval expression
+ lda $0d      ;number or string?
+ beq keynum   ;number is key assign
+ jsr getstr2  ;get source string as first param
+ beq doget-1
+ ldy #0
+cpystr2
+ lda ($50),y    ;source param str
+ sta paintbuf3,y
+ iny
+ cpy $52
+ bne cpystr2    ;no, keep copying
+ lda #0
+ sta paintbuf3,y
+ inc keystrflg  ;flag for manual key string
+ jmp pumpon
+illqty3 jmp FCERR
+keynum
+ jsr GETBYTC+6    ;convert FAC1 to an unsigned byte value 0-255 into X reg
+ txa
  beq illqty3
  cmp #9           ;only func keys 1-8
  bcs illqty3
+;assign function key
 okkey sta $02     ;save key#
  jsr ckcom2       ;throw misop if current char is not comma
  jsr getstr
@@ -4163,15 +4187,14 @@ movedec
  pha
  lda $15          ;direction: 0=right else left
  beq xmul10
- jsr $BAFE        ;divide FAC1 by 10
+ jsr DIV10        ;divide FAC1 by 10
  jmp xmul10+3
-xmul10 jsr $BAE2  ;multiply FAC1 by 10
+xmul10 jsr MUL10  ;multiply FAC1 by 10
  pla
  tax
  dex
  bne movedec
 nomul rts
-illqty7 jmp FCERR ;display illegal qty error
 ;*******************
 ; J = JOY(n) where n=joystick number 1 or 2
 joy
@@ -4199,49 +4222,36 @@ joy
  ora #%10000000 ;fire flag
 nofire tay  ;lowbyte
  jmp nobutt
+illqty7 jmp FCERR ;display illegal qty error
+;
 ;*******************
-; K% = KEY(n) where n=0 ascii, n=1 flags
-keybytes .word keyentry,SHFLAG,$00c5,$00cb,$00c6
-;0 keyentry - used with ON KEY GOSUB to indicate key causing event
-;1 $028d SHFLAG Shift/Ctrl/Logo key flags
-;2 $00c5 LSTX Matrix Coordinate of Last Key Pressed
-;3 $00cb SFDX Matrix Coordinate of Current Key Pressed
-;4 $00c6 Num chars in key buf
+; K = KEY   - used with ON KEY GOSUB to indicate key causing event
 keyfn
- jsr getfnparam
- cmp #5
- bcs badpot
- asl
- tay
- lda keybytes,y
- sta $14
- lda keybytes+1,y
- sta $15
- ldy #0
- lda ($14),y
- tay
+ jsr CHRGET
+ ldy keyentry
  jmp nobutt
+;
 ;*******************
 ; E = ERROR(n) where n=0 Error Number, n=1 Error Line Number
 err
  jsr getfnparam
  cmp #1
  beq geterrline
- bcs badpot
+ bcs illqty7
  ldy errnum  ;y=lobyte
  jmp nobutt
 geterrline
  ldy errline
  lda errline+1
  jmp GIVAYF  ;convert binary int to FAC then return
-badpot jmp FCERR
+;
 ;*******************
 ; P = POT(n) where n=potentiometer number (1-4)
 pot
  jsr getfnparam
- beq badpot
+ beq illqty7
  cmp #5         ;valid values 1 to 4
- bcs badpot
+ bcs illqty7
  pha            ;save pot num
  ldx #%11000000 ;bits 0=input, 1=output, set bits 6 and 7 to output
  sei
@@ -4280,45 +4290,6 @@ nobutt lda #$00 ;hibyte
 endpot jmp GIVAYF  ;convert binary int to FAC then return
 ;
 ;*******************
-; C = CSR(n) where n = 0 to 7 to select cursor info:
-; 0=logical column, 1=physical line, 2=blink on/off, 3=max columns, 4=char under cursor
-; 5=physical column, 6=color under cursor peek($0287), 7=address of csr line
-csr
- jsr getfnparam
- ldy #0
- tax
- cmp #5
- bcc usecsrbytes
- cmp #6
- bcs csrcolor
-;physical line = (logicalCol > maxCols) ? logicalCol-maxCols : logicalCol
- lda $d3      ;logical column
- sec
- sbc #40      ;max column number for a physical line
- bpl gocsr    ;logicalCol was larger than maxCols
- ldx #0       ;use logical col (type 0)
- beq usecsrbytes
-csrcolor
- cmp #7
- bcs lastcsr
- ldy #>GDCOL  ;load address of register having color under cursor
- lda #<GDCOL
- bne goodcsr1 ;always branches
-lastcsr
- beq csraddr
-badcsr jmp FCERR
-csraddr       ;get text address of current line
- lda $d2      ;hibyte
- ldy $d1      ;lobyte
- jmp GIVAYF
-usecsrbytes lda csrbytes,x
-goodcsr1 sta $14
- sty $15
- ldy #0
- lda ($14),y
-gocsr tay     ;y=lobyte
- jmp nobutt
-;*******************
 ; P = PEN(n) where (n=0:x, n=1:y) to read $D013 (X) and $D014 (Y) Light Pen Registers.
 ;For PENY there are 200 visible scan lines possible so value is exact.
 ;For PENX there are only eight bits available for 320 possible horizontal
@@ -4330,7 +4301,7 @@ pen
  jsr getfnparam
  beq penx
  cmp #2
- bcs badcsr
+ bcs illqty7
  ldy LPENY   ;y=lobyte
  jmp nobutt
 penx lda LPENX
@@ -4349,6 +4320,15 @@ hex
  jsr hexx
  inc $01
  jmp STRLIT
+;*******************
+;
+; V = INF(n) where n = 0 to 15 to select info
+inf
+ jsr getfnparam
+ dec $01
+ jsr inff
+ inc $01
+ jmp GIVAYF
 ;
 ;********************
 ;* new reset vector *
@@ -4517,22 +4497,32 @@ fkey
  asl
  asl
  asl
+ jsr pumpon
+ ldx #$ff
+ jmp $eae9      ;continue regular key decode func
+;
+pumpon
  sta keyidx
  ldx #<keypump
  ldy #>keypump
  stx CINV
  sty CINV+1
- ldx #$ff
- jmp $eae9      ;continue regular key decode func
+ rts
 ;
 ; IRQ driven key pump into keyboard buffer
 keypump
  ldx $c6        ;if keyboard buffer is empty
  bne irqdone2   ;then forward to original IRQ vector
+ lda $01
+ and #%11111110
+ sta $01        ;switch LOROM to LORAM
  ldx keyidx     ;offset to next char to process
- dec $01
  lda keybuf,x   ;get next char
- inc $01
+ ldy keystrflg  ;manual key string flag?
+ beq nostrflg
+ lda paintbuf3,x
+nostrflg
+ inc $01        ;switch LORAM to LOROM
  tax
  beq alldone    ;zero-terminated string
  sta KEYD       ;place char in keyboard buffer
@@ -4540,6 +4530,8 @@ keypump
  inc keyidx     ;advance index to next char
  bne irqdone2   ;continue original IRQ vector
 alldone
+ lda #0
+ sta keystrflg
  ldx $fd9f      ;restore IRQ vector
  ldy $fda0      ;back to original $EA31
  stx CINV
@@ -4837,14 +4829,6 @@ prtdone
 ;* Global Constant Storage
 ;********************************************************************
 
-;CSR function memory locations
-csrbytes
-.byte $d3 ;logical column
-.byte $d6 ;physical line
-.byte $cc ;blink enabled
-.byte $d5 ;max columns for current line (39 or 79)
-.byte $ce ;char under csr (when blinking)
-
 nolin .null "65535"
 filestr .null " files."
 
@@ -4891,7 +4875,7 @@ stackptr   .byte 0 ;stack ptr before cmd execution for use by ON ERROR
 keyptr     .word 0 ;basic txt ptr of statement for ON KEY GOSUB line#
 keyline    .word $FFFF ;line number for ON KEY subroutine
 keyidx     .byte 0 ;current index of char to put in keyboard buffer via IRQ
-
+keystrflg  .byte 0 ;flag to indicate key string from KEY cmd
 ;expression to calc seconds since midnight
 tim2sec
 .text "(d"  ;placholder for 1/10 sec
@@ -5088,6 +5072,24 @@ bmdt
 .byte $a1,$bb,$f2,$1a,$08,$20,$20,$20,$f2,$09,$09,$be,$a1,$92,$bb,$f2
 .byte $1a,$09,$12,$20,$92,$20,$12,$20,$f2,$1a,$0a,$20,$92,$20,$12,$20
 .byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
+;
+;INF() memory locations
+infbytes
+.byte $d3 ;csr logical column
+.byte $d6 ;csr physical line
+.byte $cc ;csr blink enabled
+.byte $d5 ;csr max columns on current line (39 or 79)
+.byte $ce ;ASCII value of char under csr (when blinking)
+.byte $d7 ;ASCII value of last character printed to screen
+.byte $d8 ;insert char count
+.byte $98 ;num open files
+.byte $c6 ;num chars in keyboard buffer
+infwords
+.word SHFLAG
+.word $0286 ;current foreground color for text
+.word $0287 ;color under cursor
+.word $02A6 ;PAL or NTSC
+.word $FF80 ;Kernal version/system id
 ;
 ;KEY LIST continued while LOROM is switched to LORAM
 keyy
@@ -8422,5 +8424,44 @@ bufwr
 iodone
  lda $61
 iodone1 rts
+;
+inff
+ tax
+ beq phycol
+ cmp #10
+ bcc useinfbytes
+ beq csraddr
+ cmp #16
+ bcs goinf
+ sec
+ sbc #11
+ asl
+ tax
+ lda infwords+1,x
+ tay
+ lda infwords,x
+ jmp goodinf1
+csraddr         ;get text address of current line
+ lda $d2        ;hibyte
+ ldy $d1        ;lobyte
+ rts
+phycol
+;physical line = (logicalCol > maxCols) ? logicalCol-maxCols : logicalCol
+ lda $d3        ;logical column
+ sec
+ sbc #40        ;max column number for a physical line
+ bpl goinf      ;logicalCol was larger than maxCols
+ lda #1         ;use logical col (index 1)
+useinfbytes
+ ldy #0         ;hibyte
+ tax            ;register index
+ lda infbytes-1,x ;register indexed holds lobyte value
+goodinf1 sta $14
+ sty $15
+ ldy #0
+ lda ($14),y
+goinf tay       ;y=lobyte
+ lda #0
+ rts
 ;
 .end
