@@ -1,2 +1,8 @@
 *.sym
-/compile.bat
+compile.sh
+print.dump
+vice.log
+vicesnd.*
+mdbasic.lst
+mdbasic.odt
+.mdbasic.lst.swp

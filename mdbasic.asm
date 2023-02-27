@@ -302,7 +302,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.02.21"
+.text "mdbasic 23.02.26"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -402,7 +402,7 @@ cmdtab
 .rta CONT   ;$9a
 .rta LIST   ;$9b
 .rta CLEAR  ;$9c CLR
-.rta CMD    ;$9d
+.rta cmd    ;$9d CMD augmented
 .rta sys    ;$9e SYS augmented
 .rta $e1be  ;$9f OPEN
 .rta close  ;$a0 CLOSE augmented
@@ -1473,6 +1473,19 @@ vol
  sta SIGVOL  ;SID register lower nibble is volume, upper nibble is filter type
  rts
 ;
+cmd
+ beq cmdlst
+ jmp CMD
+cmdlst dec $01
+ jsr cmdlist
+ inc $01
+ rts
+printstr2 inc $01
+ jsr printstr
+ dec $01
+ tax
+ rts
+;
 ;*******************
 ; SYS address [,a] [,x] [,y] [,p]
 sys
@@ -2216,12 +2229,13 @@ erroff
 errclr jsr clearerr
  jmp CHRGET
 raiseerr
- jsr skip73_  ;valid error number is 1-127
+ jsr skip73z  ;valid error number is 1-127
  bmi baderr2  ;128 and over is invalid
  tax
  jmp (IERROR)
 baderr2 jmp FCERR ;illegal qty err
 ;
+;*******************
 ; SWAP A, B    SWAP A%, B%    SWAP A$, B$
 swap
  beq mop4
@@ -2405,10 +2419,10 @@ trap lda $9d   ;MSGFLG Flag Kernal Message Control
  bmi olerr     ;bit 7 on means no error
  stx errnum    ;set current error number
  jsr detrap    ;disable error trapping
- lda #3        ;3 plus the 2 for this next call = 5 bytes
- jsr GETSTK    ;check for space on stack
+ lda #3        ;3 plus the 2 for this jsr is 5 bytes
+ jsr GETSTK    ;ensure space on stack, out of mem err if not
  lda $3e       ;save the BASIC text ptr
- pha           ;of the beginning of the stmt 
+ pha           ;of the beginning of the stmt
  lda $3d       ;that caused the error
  pha           ;and save the BASIC
  lda $3a       ;line# for resume
@@ -3024,7 +3038,7 @@ bitmap
  jsr types
  dec $01
  jsr bitfil ;perform FILL on rect; put code under ROM
-f inc $01
+ inc $01
  rts
 bmon jsr bitmapon
  bne bmclr+3        ;always branches
@@ -3119,7 +3133,7 @@ getc2
  jsr getval15_   ;c2 (0-15) changes the background of the 8 x 8 square
  ora $02
  sta mapcolc1c2  ;update global variable for colors
- rts 
+ rts
 ;
 ;*******************
 ; PULSE voc#(1-3), width%(0-100)
@@ -3257,16 +3271,16 @@ memfac jsr MOVFM ;copy mem to FAC1 pointed by a & y
 ;
 ;*******************
 ; DRAW S$
-;P	Change plot type (0-3) 0=erase,1=plot,2=flip,3=none
-;C	Change plot color (0-15 in hires, 1-3 in mc mode)
-;U	UP
-;D	DOWN
-;L	LEFT
-;R	RIGHT
-;E	UP & LEFT
-;F	UP & RIGHT
-;G	DOWN & LEFT
-;H	DOWN & RIGHT
+;P plot type (0-3) 0=erase,1=plot,2=flip,3=none
+;C plot color (0-15 in hires, 1-3 in mc mode)
+;U up
+;D down
+;L left
+;R right
+;E up & left
+;F up & right
+;G down & left
+;H down & right
 ;
 draw
  jsr getstr0
@@ -4328,7 +4342,7 @@ inf
  dec $01
  jsr inff
  inc $01
- jmp GIVAYF
+ jmp $b8d7   ;convert unsigned 4-byte int in FAC1 to a 5-byte float in FAC1
 ;
 ;********************
 ;* new reset vector *
@@ -4706,7 +4720,7 @@ illqty4 jmp FCERR  ;illegal quanity error
 ;*******************
 ;get a single byte int (0-255) throw error if bad data type or range
 getval jsr CHRGET
-skip73_ beq missop
+skip73z beq missop
 skip73 jsr FRMNUM  ;eval numeric expr & type, store result in FAC1
 fac2int jsr GETADR ;convert FAC1 to unsigned 2 byte int in $14,$15
  lda $15           ;if hi byte is not zero then
@@ -4757,7 +4771,7 @@ mcplot
  rts
 ;*****************
 sprnum
- jsr skip73_
+ jsr skip73z
  cmp #8          ;valid sprite numbers 0-7
  bcc less8
  ldx #33         ;illegal sprite number
@@ -4769,7 +4783,7 @@ less8 sta $be
  rts
 ;*******************
 getvoc
- jsr skip73_
+ jsr skip73z
  beq iverr
  cmp #4
  bcc getvoc-1
@@ -4804,26 +4818,23 @@ doround
  jsr FADDH       ;add .5 to value in FAC1
  jmp INT         ;perform INT
 ;
-printqt lda #"""
-.byte $2c
-printcr lda #$0d
- jmp CHROUT
-;
-;print string ending with a chr having bit 7 = 1
+;print string that ends with either a zero-byte or an ascii > 127
 printstr
  sta $22
  sty $23
  ldy #0          ;loop print all chars in err msg
 printer lda ($22),y
- php
- and #$7f
+ beq prtdone
+ bmi prtchr
  jsr CHROUT
  iny
- plp
- beq prtdone
- bpl printer
-prtdone
- rts
+ bne printer
+prtdone rts
+printqt lda #"""
+.byte $2c
+printcr lda #$0d
+prtchr and #$7f
+ jmp CHROUT
 ;
 ;********************************************************************
 ;* Global Constant Storage
@@ -6754,11 +6765,9 @@ type lda $fb  ;skip over 2 byte name
  cmp #2      ;fn
  beq nxtvar+5 ;skip fn types
  lda $45     ;get first char of name
- and #$7f    ;remove bit 7
- jsr CHROUT  ;output first char of name
+ jsr prtchr  ;output first char of name
  lda $46     ;get second char of name
- and #$7f    ;remove bit 7
- jsr CHROUT  ;output second char of name
+ jsr prtchr  ;output second char of name
  lda $0d     ;var type?
  beq float   ;type 0 is float
  cmp #1      ;type 1 is string
@@ -6902,9 +6911,9 @@ dumpbitmap2
  sta $fb
  lda #$fe
  sta $fc
-; lda SCROLY
-; and #%11101111 ;turn off screen
-; sta SCROLY
+; lda SCROLY     ;turn off the screen
+; and #%11101111 ;for exclusive use of
+; sta SCROLY     ;the data bus (faster)
  lda #$28
  sta $fe
  lda #15
@@ -8432,7 +8441,8 @@ inff
  bcc useinfbytes
  beq csraddr
  cmp #16
- bcs goinf
+ beq membank
+ bcs basline
  sec
  sbc #11
  asl
@@ -8442,9 +8452,9 @@ inff
  lda infwords,x
  jmp goodinf1
 csraddr         ;get text address of current line
- lda $d2        ;hibyte
- ldy $d1        ;lobyte
- rts
+ ldy $d2        ;hibyte
+ lda $d1        ;lobyte
+ jmp int4
 phycol
 ;physical line = (logicalCol > maxCols) ? logicalCol-maxCols : logicalCol
  lda $d3        ;logical column
@@ -8460,8 +8470,80 @@ goodinf1 sta $14
  sty $15
  ldy #0
  lda ($14),y
-goinf tay       ;y=lobyte
+goinf
+ ldy #0
+int4
+ sta $65   ;lobyte
+ sty $64   ;hibyte
  lda #0
+ sta $70
+ sta $63
+ sta $62
+ lda #$a0
+ sta $61
+ rts
+membank
+ lda CI2PRA
+ and #%00000011
+ eor #%00000011
+ jmp goinf
+basline
+ cmp #17
+ bne dtaline
+ ldy $3a
+ lda $39
+ jmp int4
+dtaline
+ ldy $40
+ lda $3f
+ jmp int4
+;
+cmdlist
+;CBM BASIC keywords
+ lda #<RESLST
+ ldy #>RESLST
+ jsr prtcmd
+ jsr STOP    ;if stop key press then  stop
+ beq prtcmd0
+;remove GO keyword
+ ldy #10
+ lda #20
+bkspc jsr CHROUT
+ dey
+ bne bkspc
+;MDBASIC keywords
+ lda #<newcmd
+ ldy #>newcmd
+prtcmd
+ jsr printstr2
+ beq prtcmd0
+ iny
+ tya
+ clc
+ adc $22
+ pha
+ lda $23
+ adc #0
+ pha
+ tya
+ sec
+ sbc #9
+ eor #$ff
+ tay
+ iny
+ lda #32
+spacer
+ jsr CHROUT
+ dey
+ bpl spacer
+;pause if any shift/ctrl/logo key pressed
+pauseit lda SHFLAG
+ bne pauseit
+ pla
+ tay
+ pla
+ jmp prtcmd
+prtcmd0
  rts
 ;
 .end
