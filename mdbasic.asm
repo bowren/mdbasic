@@ -2,6 +2,11 @@
 ; by Mark D Bowren
 ; (c)1985-2023 Bowren Consulting, Inc. (www.bowren.com)
 ;
+;zero-page registers
+R6510  = $01   ;LORAM/HIRAM/CHAREN RAM/ROM selection and cassette control register
+NDX    = $C6   ;num keys in keyboard buffer
+
+;BASIC and Kernal work registers
 BUF    = $0200 ;BASIC Line Editor Input Buffer
 COLOR  = $0286 ;Current Foreground Color for Text
 GDCOL  = $0287 ;Color of Character under Cursor
@@ -136,6 +141,9 @@ KEYD   = $0277 ;Keyboard Buffer (Queue)
 IERROR = $0300 ;Vector to the Print BASIC Error Message Routine
 IMAIN  = $0302 ;Vector to the Main BASIC Program Loop
 IGONE  = $0308 ;Vector to the Routine That Executes the Next BASIC Program Token
+
+;IRQ Control
+MDBIRQ = $0313 ;MDBASIC IRQ Control Register bit0=play,bit1=flash,bit2=key
 CINV   = $0314 ;Vector to IRQ Interrupt Routine
 
 ;CBM BASIC functions
@@ -302,7 +310,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.02.26"
+.text "mdbasic 23.05.05"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -668,7 +676,7 @@ xcmd jsr tstcmd
  beq nocmd     ;key trapping is off
  dey
  bne nocmd     ;key trapping is paused
- lda $c6       ;num chars in keyboard buffer
+ lda NDX       ;num chars in keyboard buffer
  beq nocmd
  jsr LP2       ;$E5B4 get char in keyboard buffer
  sta keyentry  ;use K=KEY(0) to get value
@@ -1611,7 +1619,7 @@ getnum lda $00ff,y ;Work Area for Floating Point to String Conversions
  bne getnum
 endnum lda #32  ;space char
  sta KEYD-1,y
- sty $c6
+ sty NDX        ;num chars in keyboard buffer
 eauto jmp $a49f ;main loop for direct mode
 ;
 ;*******************
@@ -1870,47 +1878,14 @@ findlnr
 ; DELETE line  (delete one line)
 ; DELETE start-end  (delete all lines from start to end)
 delete jsr opget2
-linadd lda $5f
+ lda $5f
  sta $24
  lda $60
  sta $25
  jsr FINDLN
- lda $5f
- ldx $60
- bcc noline
- ldy #$01
- lda ($5f),y
- beq noline
- tax
- dey
- lda ($5f),y
-noline sta $7a
- stx $7b
- lda $24
- sec
- sbc $7a
- tax
- lda $25
- sbc $7b
- tay
- bcs relink
- txa
- clc
- adc $2d
- sta $2d
- tya
- adc $2e
- sta $2e
- ldy #$00
-copy lda ($7a),y
- sta ($24),y
- iny
- bne copy
- inc $7b
- inc $25
- lda $2e
- cmp $25
- bcs copy
+ dec $01
+ jsr deletee
+ inc $01
 relink jsr LINKPRG
  lda $22
  ldx $23
@@ -1922,6 +1897,7 @@ relink jsr LINKPRG
 savex stx $2e
  jsr $a659  ;reset txt ptr to beginning of prg then perform CLR
  jmp endprg
+;
 erenum jsr LINKPRG
  lda #$02
  sta $7b
@@ -2717,7 +2693,7 @@ xpoff
  jmp CHRGET
 ;
 ;*******************
-; EXPAND ON | OFF
+; EXPAND ON | OFF          ;expand all sprites either ON or OFF
 ; EXPAND sprite#           :expand both x and y axis of sprite#
 ; EXPAND sprite#, [x], [y] :where x and y are 0=expand off, 1=expand on
 expand
@@ -2795,40 +2771,42 @@ blinkcol2 tay
 ;check if there are any other colors needing the blink irq
  ldy #15
 chkblink lda blinkcol,y
- bne ecolor     ;at least one flag still set so leave irq set
+ bne color-1     ;at least one flag still set so leave irq set
  dey
  bpl chkblink
 irqea31
- ldx $fd9f      ;re-apply original irq vector of $EA31
- ldy $fda0
- bne setirqvec  ;always branches
+ jmp flashirqoff
+; ldx $fd9f      ;re-apply original irq vector of $EA31
+; ldy $fda0
+; bne setirqvec  ;always branches
 setfsh
  lda #20        ;blink delay - irq executes 20 times before blink code executes
  sta blinkdly   ;global variable for char blink delay
- ldx #<flash    ;change irq vector to char flashing subroutine
- ldy #>flash
-setirqvec       ;change IRQ vector
- sei            ;disable irq
- stx CINV
- sty CINV+1
- cli            ;enable irq
-ecolor rts
+ jmp flashirqon
+; ldx #<flash    ;change irq vector to char flashing subroutine
+; ldy #>flash
+;setirqvec       ;change IRQ vector
+; sei            ;disable irq
+; stx CINV
+; sty CINV+1
+; cli            ;enable irq
+;ecolor rts
 ;
 mop5 jmp missop  ;missing operand error
 ;
 ;*******************
+;MULTI [TEXT] [cc1], [cc2]        - multicolor text mode
 ;MULTI COLOR [eb1], [eb2], [eb3]  - extended background color mode
-;MULTI TEXT [cc1], [cc2]          - multicolor text mode
 ;MULTI SPRITE [sc1], [sc2]        - multicolor sprite mode color bit patterns 01,11
 ;
 multi
- beq mop5
+ beq chrmap
  cmp #TOKEN_TEXT   ;text token
  beq chrmap
  cmp #TOKEN_SPRITE ;sprite token
  beq mcspri
  cmp #TOKEN_COLOR  ;color token
- beq mulclr 
+ beq mulclr
  jmp SNERR         ;syntax error
 ;MULTI COLOR [eb1], [eb2], [eb3]
 mulclr lda SCROLY ;horiz fine scrolling and control reg
@@ -2940,11 +2918,11 @@ design
  sta $be
  lda #$d0    ;source location 4K CHAREN at $D000-$DFFF
  sta $bf
- lda $01
+ lda R6510
  pha
  and #%11111011 ;bit2=0 switch out I/O and bring in CHAREN ROM into bank $d000-$dfff
  sei
- sta $01
+ sta R6510
 nex256 ldy #0
 nexbyt lda ($be),y
  sta ($bb),y
@@ -2954,7 +2932,7 @@ nexbyt lda ($be),y
  inc $bc
  bne nex256
  pla
- sta $01       ;back to normal
+ sta R6510     ;back to normal
  cli
  jmp CHRGET
 dodesign
@@ -3118,7 +3096,7 @@ getc1
  and #%00001111  ;erase hi nibble
  sta $02         ;tmp storage
  plp
- jsr getval15_0  ;c1 (0-15) changes the color of the plotting dots 
+ jsr getval15_0  ;c1 (0-15) changes the color of the plotting dots
  asl             ;move low nibble to high nibble
  asl
  asl
@@ -3560,9 +3538,9 @@ norm
  sta SCROLX      ;40 columns, 0 horizontal scroll scan lines
  lda #%00011011  ;extended color text mode off, bitmap mode off
  sta SCROLY      ;display on, 25 rows, 3 vertical scroll scan lines
- lda $01
+ lda R6510
  ora #%00000111  ;switch mem banks to normal
- sta $01         ;mem mapped I/O RAM ($d000-$dfff)
+ sta R6510       ;mem mapped I/O RAM ($d000-$dfff)
  rts             ;HIROM ($e000-$ffff), LOROM ($a000-$bfff)
 ;
 illqty8 jmp FCERR     ;illegal quantity error
@@ -3693,8 +3671,14 @@ cpystr2
  bne cpystr2    ;no, keep copying
  lda #0
  sta paintbuf3,y
+ sta keyidx
  inc keystrflg  ;flag for manual key string
- jmp pumpon
+;
+ jmp keyirqon
+; sei
+; jsr pumpon
+; cli
+; rts
 illqty3 jmp FCERR
 keynum
  jsr GETBYTC+6    ;convert FAC1 to an unsigned byte value 0-255 into X reg
@@ -3713,7 +3697,7 @@ onkeyoff lda #0
  sta keyentry
  jmp CHRGET
 keywait
- lda $c6
+ lda NDX
  beq keywait
  jsr CHRGET
  bne doget
@@ -3722,7 +3706,7 @@ doget
  jmp GET          ;peform GET
 keyclr
  lda #0
- sta $c6
+ sta NDX
  jmp CHRGET
 keylist dec $01
  jmp keylistt
@@ -4012,29 +3996,30 @@ cpystr lda ($50),y
  lda #1
  sta playtime   ;initial wait
 
- ldx #<playit
- ldy #>playit
- jmp setirqvec
+ jmp playirqon
+; ldx #<playit
+; ldy #>playit
+; jmp setirqvec
 ;
 ; IRQ routine to play next note
 playit
  dec playtime
  bne jea31
- lda $01
+ lda R6510
  pha
  and #%11111110
- sta $01
+ sta R6510
  jsr notegot
  beq stoplay
  jsr nextn
  pla
- sta $01
-jea31 jmp ($fd9f) ;original IRQ vector $EA31
+ sta R6510
+jea31 rts ;jmp ($fd9f) ;original IRQ vector $EA31
 stoplay
  jsr endplay
  pla
- sta $01
- jmp alldone
+ sta R6510
+ jmp playirqoff ;jmp alldone
 
 endplay
  ldx playvoice  ;SID reg offset
@@ -4360,12 +4345,12 @@ resvec
  cli
  jsr $e453   ;copy BASIC vectors to RAM
  jsr INIT    ;initialize BASIC
- lda $01
+ lda R6510
  and #%11111110
- sta $01     ;switch LOROM to LORAM
+ sta R6510   ;switch LOROM to LORAM
  jsr newvec  ;set new vectors to MDBASIC routines
  jsr initclk ;init TOD clock #2
- inc $01     ;switch LORAM to LOROM
+ inc R6510   ;switch LORAM to LOROM
  lda #<mesge
  ldy #>mesge
  jsr STROUT  ;display MDBASIC banner
@@ -4391,11 +4376,11 @@ brkirq jsr IOINIT
  lda #$04        ;initialize to 1024 ($0400)
  sta HIBASE      ;text page hi byte pointer
  jsr $e518       ;initialize screen and keyboard
- lda $01
+ lda R6510
  and #%11111110
- sta $01         ;switch LOROM to LORAM
+ sta R6510         ;switch LOROM to LORAM
  jsr newvec      ;init vectors
- inc $01         ;switch LORAM to LOROM
+ inc R6510       ;switch LORAM to LOROM
  jsr CLALL
  lda #0
  sta CI2ICR      ;disable IRQ
@@ -4481,8 +4466,8 @@ keychk
  beq nokey      ;no, use original routine
  lda $d4        ;editor in quote mode?
  bne nokey      ;yes, use original routine
- lda CINV+1     ;is IRQ vector currently overriden?
- cmp $fda0      ;$EA31 is normal IRQ vector
+ lda #%00000100 ;keypump irq flag
+ bit MDBIRQ     ;is keypump irq already enabled?
  bne nokey      ;yes, use normal decode routine
  lda #$81       ;standard keyboard matrix decode table $eb81
  ldy SHFLAG     ;0=none, 1=shift key, 2=logo key, 4=ctrl key
@@ -4511,47 +4496,40 @@ fkey
  asl
  asl
  asl
- jsr pumpon
- ldx #$ff
- jmp $eae9      ;continue regular key decode func
-;
-pumpon
  sta keyidx
- ldx #<keypump
- ldy #>keypump
- stx CINV
- sty CINV+1
- rts
+ lda #%00000100
+ ora MDBIRQ
+ sta MDBIRQ
+ jsr mdbirqon
+ ldx #$ff
+ jmp $eae9      ;continue regular key decode func;
 ;
 ; IRQ driven key pump into keyboard buffer
 keypump
- ldx $c6        ;if keyboard buffer is empty
+ ldx NDX        ;if keyboard buffer is empty
  bne irqdone2   ;then forward to original IRQ vector
- lda $01
+ lda R6510
  and #%11111110
- sta $01        ;switch LOROM to LORAM
+ sta R6510      ;switch LOROM to LORAM
  ldx keyidx     ;offset to next char to process
  lda keybuf,x   ;get next char
  ldy keystrflg  ;manual key string flag?
  beq nostrflg
  lda paintbuf3,x
 nostrflg
- inc $01        ;switch LORAM to LOROM
+ inc R6510      ;switch LORAM to LOROM
  tax
  beq alldone    ;zero-terminated string
  sta KEYD       ;place char in keyboard buffer
- inc $c6        ;indicate 1 char waiting in buffer
+ inc NDX        ;indicate 1 char waiting in buffer
  inc keyidx     ;advance index to next char
  bne irqdone2   ;continue original IRQ vector
 alldone
  lda #0
  sta keystrflg
- ldx $fd9f      ;restore IRQ vector
- ldy $fda0      ;back to original $EA31
- stx CINV
- sty CINV+1
+ jmp keyirqoff
 irqdone2
- jmp ($fd9f)
+ rts
 
 ;*******************
 ;* color flash irq *
@@ -4592,7 +4570,65 @@ nxtblk dey
  bne irqdone
  ldy #255-24
  bne mem1         ;always branches
-irqdone jmp ($fd9f) ;orgininal irq vector $EA31
+irqdone rts ;jmp ($fd9f) ;orgininal irq vector $EA31
+;
+;------------------------
+;MDBASIC IRQ Handler
+mdbirqhdl
+ lda MDBIRQ
+ beq mdbirqoff
+ bit bitweights
+ beq irq1
+ jsr playit
+irq1 lda MDBIRQ
+ bit bitweights+1
+ beq irq2
+ jsr flash
+irq2 lda MDBIRQ
+ bit bitweights+2
+ beq irqnorm
+ jsr keypump
+irqnorm jmp ($fd9f)   ;orgininal irq vector $EA31
+mdbirqoff
+ ldx $fd9f      ;restore IRQ vector
+ ldy $fda0      ;back to original $EA31
+ stx CINV
+ sty CINV+1
+ jmp ($fd9f)   ;orgininal irq vector $EA31
+;
+;Routines to turn off MDB IRQ routines
+playirqoff
+ lda #%11111110
+.byte $2c
+flashirqoff
+ lda #%11111101
+.byte $2c
+keyirqoff
+ lda #%11111011
+ and MDBIRQ
+ sta MDBIRQ
+ rts
+;
+playirqon
+ lda #%00000001
+.byte $2c
+flashirqon
+ lda #%00000010
+.byte $2c
+keyirqon
+ lda #%00000100
+ ora MDBIRQ
+ sta MDBIRQ
+ sei
+ jsr mdbirqon
+ cli
+ rts
+mdbirqon
+ ldx #<mdbirqhdl
+ ldy #>mdbirqhdl
+ stx CINV
+ sty CINV+1
+ rts
 ;
 ;*******************************
 ;* general purpose subroutines *
@@ -5384,11 +5420,11 @@ mowait dex
 linedon rts
 ;
 setdot jsr ydiv8
- lda $01
+ lda R6510
  pha
  and #%11111101 ;bit1 0=HIRAM
  sei            ;disable IRQ since kernal HIROM is switching to HIRAM
- sta $01
+ sta R6510
  lda lastplott  ;plot type 00=off, 01=on, 10=flip, 11=none
  beq dotoff
  lsr
@@ -5396,7 +5432,7 @@ setdot jsr ydiv8
  bcc flipit
 ;no dot plot (locate pencil)
  pla
- sta $01
+ sta R6510
  cli
  rts
 flipit lda ptab3,x
@@ -5414,7 +5450,7 @@ doton lda ($c3),y
  ora ptab2,x
 colorb sta ($c3),y ;write byte with bit pattern targeting the one bit in hires or 2 bits in mc mode
  pla
- sta $01    ;restore Kernal HIROM ($e000-$ffff)
+ sta R6510   ;restore Kernal HIROM ($e000-$ffff)
  cli
 ;apply color using video matrix and color RAM
  lda $fd     ;y coordinate
@@ -5641,13 +5677,13 @@ doloop2 lda #128
 doloop1 lda $57
  sta $5b        ;temp var for x size multiplication by decrement loop
 doloop ldy $59
- lda $01
+ lda R6510
  tax
  and #%11111011 ;bit2=0 switch in CHAREN ROM into bank $d000-$dfff
  sei
- sta $01        ;use CHAREN (rom char images)
+ sta R6510      ;use CHAREN (rom char images)
  lda ($be),y    ;read CHAREN byte data for character (8 bytes, y=byte#) 
- stx $01
+ stx R6510
  cli
  and $5c
  beq nodot
@@ -5839,17 +5875,17 @@ fillit
  jmp beginp
 readb jsr ydiv8
  stx $aa
- lda $01
+ lda R6510
  and #%11111101 ;bit1 0=HIRAM
  sei            ;disable IRQ since kernal HIROM is switching to HIRAM
- sta $01
+ sta R6510
  lda ptab3,x
  eor #$ff
  and ($c3),y    ;bitmap in HIRAM
  pha
- lda $01
+ lda R6510
  ora #%00000010 ;bit1 1=HIROM
- sta $01
+ sta R6510
  cli
  lda $aa
  and #%00000111
@@ -6937,16 +6973,16 @@ nxtbit lda $02
  sta $61  ;temp var
 pekbyt
 ;select HIRAM and disable IRQ
- lda $01        ;bit0 0=LORAM 1=LOROM ($a000-$bfff), bit1 0=HIRAM 1=HIROM ($e000-$ffff)
+ lda R6510      ;bit0 0=LORAM 1=LOROM ($a000-$bfff), bit1 0=HIRAM 1=HIROM ($e000-$ffff)
  pha            ;save current mem bank setting
  and #%11111101 ;turn bit 1 off for HIRAM
  sei            ;****disable irqs while HIROM is not available
- sta $01        ;apply mem bank new selection
+ sta R6510      ;apply mem bank new selection
 ;read byte from bitmap image in HIRAM
  lda ($fb),y
  tax            ;save in x
  pla
- sta $01        ;restore mem bank original selection
+ sta R6510      ;restore mem bank original selection
  cli            ;****enable irqs
  txa            ;get saved value
  and $02
@@ -8545,5 +8581,44 @@ pauseit lda SHFLAG
  jmp prtcmd
 prtcmd0
  rts
+;
+deletee
+ lda $5f
+ ldx $60
+ bcc noline
+ ldy #$01
+ lda ($5f),y
+ beq noline
+ tax
+ dey
+ lda ($5f),y
+noline sta $7a
+ stx $7b
+ lda $24
+ sec
+ sbc $7a
+ tax
+ lda $25
+ sbc $7b
+ tay
+ bcs deldone
+ txa
+ clc
+ adc $2d
+ sta $2d
+ tya
+ adc $2e
+ sta $2e
+ ldy #$00
+copy lda ($7a),y
+ sta ($24),y
+ iny
+ bne copy
+ inc $7b
+ inc $25
+ lda $2e
+ cmp $25
+ bcs copy
+deldone rts
 ;
 .end
