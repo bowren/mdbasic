@@ -310,7 +310,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.05.05"
+.text "mdbasic 23.05.08"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -410,7 +410,7 @@ cmdtab
 .rta CONT   ;$9a
 .rta LIST   ;$9b
 .rta CLEAR  ;$9c CLR
-.rta cmd    ;$9d CMD augmented
+.rta CMD    ;$9d CMD
 .rta sys    ;$9e SYS augmented
 .rta $e1be  ;$9f OPEN
 .rta close  ;$a0 CLOSE augmented
@@ -1481,19 +1481,6 @@ vol
  sta SIGVOL  ;SID register lower nibble is volume, upper nibble is filter type
  rts
 ;
-cmd
- beq cmdlst
- jmp CMD
-cmdlst dec $01
- jsr cmdlist
- inc $01
- rts
-printstr2 inc $01
- jsr printstr
- dec $01
- tax
- rts
-;
 ;*******************
 ; SYS address [,a] [,x] [,y] [,p]
 sys
@@ -1883,6 +1870,18 @@ delete jsr opget2
  lda $60
  sta $25
  jsr FINDLN
+ lda $5f
+ ldx $60
+ bcc noline
+ ldy #$01
+ lda ($5f),y
+ beq noline
+ tax
+ dey
+ lda ($5f),y
+noline
+ sta $7a
+ stx $7b
  dec $01
  jsr deletee
  inc $01
@@ -2629,9 +2628,7 @@ onoff sta SPENA
 scr jsr comchkget ;get next basic text chr
  beq smcr
  jsr skip73
- lda $be        ;sprite# 0-7
- tay
- lda $14
+ ldy $be        ;sprite# 0-7
  sta SP0COL,y   ;sprite y's color
  jsr chkcomm
 smcr jsr comchkget ;get next basic text chr
@@ -5519,7 +5516,7 @@ txtsetcol
  rts
 txtblk
  lda #%00000000
- beq txtsetcol 
+ beq txtsetcol
 txtwhi
  lda #%00010000
  bne txtsetcol
@@ -8534,66 +8531,7 @@ dtaline
  lda $3f
  jmp int4
 ;
-cmdlist
-;CBM BASIC keywords
- lda #<RESLST
- ldy #>RESLST
- jsr prtcmd
- jsr STOP    ;if stop key press then  stop
- beq prtcmd0
-;remove GO keyword
- ldy #10
- lda #20
-bkspc jsr CHROUT
- dey
- bne bkspc
-;MDBASIC keywords
- lda #<newcmd
- ldy #>newcmd
-prtcmd
- jsr printstr2
- beq prtcmd0
- iny
- tya
- clc
- adc $22
- pha
- lda $23
- adc #0
- pha
- tya
- sec
- sbc #9
- eor #$ff
- tay
- iny
- lda #32
-spacer
- jsr CHROUT
- dey
- bpl spacer
-;pause if any shift/ctrl/logo key pressed
-pauseit lda SHFLAG
- bne pauseit
- pla
- tay
- pla
- jmp prtcmd
-prtcmd0
- rts
-;
 deletee
- lda $5f
- ldx $60
- bcc noline
- ldy #$01
- lda ($5f),y
- beq noline
- tax
- dey
- lda ($5f),y
-noline sta $7a
- stx $7b
  lda $24
  sec
  sbc $7a
