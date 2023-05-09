@@ -1,6 +1,6 @@
 # MDBASIC
 MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
-MDBASIC version 23.02.26<br>
+MDBASIC version 23.05.08<br>
 <br>
 Download the documentation file <b>mdbasic.pdf</b> for details.<br>
 <br>
@@ -35,7 +35,6 @@ READY.
 * Binary, Hexadecimal and Octal values in expressions
 * 8 assignable function keys each with up to 31 characters
 * Freeze LISTing by holding down the shift key
-* Display all CBM BASIC & MDBASIC keywords by entering CMD with no parameters
 </pre>
 <u><b>Various Examples of statements (not complete list; commands have many optional parameters):</b></u><br>
 <br>
