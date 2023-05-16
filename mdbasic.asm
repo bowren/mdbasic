@@ -310,7 +310,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.05.08"
+.text "mdbasic 23.05.15"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -1164,7 +1164,6 @@ clse7e
  jsr CLOSE
 clse7f
  lda #$7f
-clsclr
  jsr CLOSE
  jmp CLRCHN     ;restore default devices as current I/O channels
 ;
@@ -1741,7 +1740,9 @@ newlod
  dec $01        ;rom to ram (a000-bfff)
  jmp loadd      ;continue under rom with the rest of the new load routine
 romin inc $01
- jmp clse7f
+ jsr CLRCHN
+ lda $b8
+ jmp CLOSE
 ;
 newload
  sta $93     ;flag for load routine 0=Load, 1=Verify
@@ -2628,10 +2629,25 @@ onoff sta SPENA
 scr jsr comchkget ;get next basic text chr
  beq smcr
  jsr skip73
+ cmp #16
+ bcc color15
+ bne badspcol
+ jsr sprirqon
+ lda $bf
+ ora sprcolopt
+ jmp setspropt
+badspcol jmp FCERR
+color15
  ldy $be        ;sprite# 0-7
  sta SP0COL,y   ;sprite y's color
- jsr chkcomm
-smcr jsr comchkget ;get next basic text chr
+ lda $bf        ;ensure irq flag for sprite is off
+ eor #$ff
+ and sprcolopt
+setspropt
+ sta sprcolopt
+ jsr chkcomm    ;stop now if no more params
+smcr
+ jsr comchkget  ;get next basic text chr
  beq spntr
  jsr getbool2   ;get multicolor flag 0 or 1
  bne setm
@@ -2738,60 +2754,6 @@ setmagy sta YXPAND
  rts
 ;
 ;*******************
-; COLOR [foregndColor (0-31)], [backgndColor (0-15)], [borderColor (0-15)]
-; when foregndColor is > 15 flashing mode for color nibble is toggled
-color
- beq mop5
- cmp #","
- beq nochar
- jsr skip73
- sta COLOR      ;current cursor foreground color
- cmp #16
- bcc nochar-3   ;if char color > 15 then setup irq to blink that color
- jsr blinker    ;toggle blink flag for this color
- jsr chkcomm    ;if no more params then stop now
-nochar jsr comchkget
- beq noback
- jsr getval15
- sta BGCOL0     ;background color
- jsr chkcomm
-noback jsr getval15_
- sta EXTCOL     ;border color
- rts
-blinker
- and #%00001111 ;only lo nibble is the char color
-blinkcol2 tay
- lda blinkcol,y
- eor #1
- sta blinkcol,y ;apply new blink flag
- bne setfsh     ;not currently flashing so enable it
-;check if there are any other colors needing the blink irq
- ldy #15
-chkblink lda blinkcol,y
- bne color-1     ;at least one flag still set so leave irq set
- dey
- bpl chkblink
-irqea31
- jmp flashirqoff
-; ldx $fd9f      ;re-apply original irq vector of $EA31
-; ldy $fda0
-; bne setirqvec  ;always branches
-setfsh
- lda #20        ;blink delay - irq executes 20 times before blink code executes
- sta blinkdly   ;global variable for char blink delay
- jmp flashirqon
-; ldx #<flash    ;change irq vector to char flashing subroutine
-; ldy #>flash
-;setirqvec       ;change IRQ vector
-; sei            ;disable irq
-; stx CINV
-; sty CINV+1
-; cli            ;enable irq
-;ecolor rts
-;
-mop5 jmp missop  ;missing operand error
-;
-;*******************
 ;MULTI [TEXT] [cc1], [cc2]        - multicolor text mode
 ;MULTI COLOR [eb1], [eb2], [eb3]  - extended background color mode
 ;MULTI SPRITE [sc1], [sc2]        - multicolor sprite mode color bit patterns 01,11
@@ -2876,6 +2838,25 @@ column
 ;*****************
 badloc jmp hellno  ;illegal coordinate error
 mop6 jmp missop    ;missing operand error
+;
+;*******************
+; COLOR [foregndColor (0-31)], [backgndColor (0-15)], [borderColor (0-15)]
+color
+ beq mop6
+ cmp #","
+ beq nochar
+ jsr skip73
+ sta COLOR      ;current cursor foreground color
+ jsr chkcomm    ;if no more params then stop now
+nochar jsr comchkget
+ beq noback
+ jsr getval15
+ sta BGCOL0     ;background color
+ jsr chkcomm
+noback jsr getval15_
+ sta EXTCOL     ;border color
+ rts
+;
 ;*******************
 designon
  lda CI2PRA     ;bits 0-1 mem bank, 00=bank3, 01=bank2, 10=bank1, 11=bank0
@@ -3583,6 +3564,17 @@ ne dec $01
 memnorm inc $01
  rts
 ;
+screenoff
+ lda SCROLY
+ and #%11101111  ;bit4 = 1 screen off
+ jmp setscrly
+screenon
+ lda SCROLY
+ ora #%00010000  ;bit4 = 0 screen on
+setscrly
+ sta SCROLY
+ rts
+;
 ;*******************
 ; SCREEN CLR
 ; SCREEN ON|OFF
@@ -3590,26 +3582,23 @@ memnorm inc $01
 screen
  beq mop
  cmp #TOKEN_ON
- bcc setscr
+ bcc setscr      ;param should be var or const
  bne scnoff
- lda SCROLY
- ora #%00010000  ;bit4 = 0 screen on
- bne setscrly    ;always branches
-scnoff cmp #TOKEN_OFF ;off token?
+ jsr screenon
+ jmp CHRGET
+scnoff cmp #TOKEN_OFF
  bne clrscrn
- lda SCROLY
- and #%11101111  ;bit4 = 1 screen off
-setscrly sta SCROLY
+ jsr screenoff
  jmp CHRGET
 clrscrn cmp #TOKEN_CLR
  bne setscr
  lda #147        ;clear screen
  jsr CHROUT
  jmp CHRGET
-setscr jsr comchk
+setscr cmp ","
  beq cklast+3
- jsr skip73
- cmp #40
+ jsr skip73      ;get num cols
+ cmp #40         ;38 or 40 only
  bne chk38
  lda SCROLX
  ora #%00001000  ;bit 3 on 40 columns
@@ -3621,8 +3610,8 @@ chk38 cmp #38
  and #%11110111  ;bit 3 off 38 columns
  sta SCROLX
 cklast jsr chkcomm
- jsr getval
- cmp #25
+ jsr getval      ;get num rows
+ cmp #25         ;24 or 25 only
  bne chk24
  lda SCROLY
  ora #%00001000  ;bit 3 on 25 rows
@@ -3635,7 +3624,6 @@ chk24 cmp #24
  sta SCROLY
  rts
 ;
-
 mop jmp missop
 ;
 ;*******************
@@ -3670,13 +3658,10 @@ cpystr2
  sta paintbuf3,y
  sta keyidx
  inc keystrflg  ;flag for manual key string
-;
  jmp keyirqon
-; sei
-; jsr pumpon
-; cli
-; rts
+;
 illqty3 jmp FCERR
+;
 keynum
  jsr GETBYTC+6    ;convert FAC1 to an unsigned byte value 0-255 into X reg
  txa
@@ -3972,7 +3957,7 @@ play
  beq mop2
  cmp #TOKEN_STOP
  bne playy
- jsr irqea31    ;restore original IRQ vector $EA31
+ jsr playirqoff
  jsr endplay
  jmp CHRGET
 playy
@@ -3994,9 +3979,6 @@ cpystr lda ($50),y
  sta playtime   ;initial wait
 
  jmp playirqon
-; ldx #<playit
-; ldy #>playit
-; jmp setirqvec
 ;
 ; IRQ routine to play next note
 playit
@@ -4011,7 +3993,7 @@ playit
  jsr nextn
  pla
  sta R6510
-jea31 rts ;jmp ($fd9f) ;original IRQ vector $EA31
+jea31 rts
 stoplay
  jsr endplay
  pla
@@ -4375,15 +4357,18 @@ brkirq jsr IOINIT
  jsr $e518       ;initialize screen and keyboard
  lda R6510
  and #%11111110
- sta R6510         ;switch LOROM to LORAM
+ sta R6510       ;switch LOROM to LORAM
  jsr newvec      ;init vectors
  inc R6510       ;switch LORAM to LOROM
  jsr CLALL
- lda #0
- sta CI2ICR      ;disable IRQ
- jsr irqea31     ;restore IRQ vector to $EA31
- lda #$7f
- sta CI2ICR      ;enable IRQ
+ ldx $fd9f       ;original CBM IRQ vector ($ea31) for CIA #1
+ ldy $fda0       ;driven by CIA #1 Timer B
+ lda #0          ;disable all 5 NMI events
+ sta CI2ICR      ;CIA #2 NMI control register
+ stx CINV        ;restore orignal CBM IRQ vector
+ sty CINV+1
+ lda #%01111111  ;with bit7=0 irq event flags (bits0-6) will be cleared
+ sta CI2ICR      ;clear NMI event flags and enable NMI events
  jmp ($a002)     ;warm start vector
 nothin jmp $fe72 ;NMI RS-232 Handler
 ;*********************
@@ -4499,7 +4484,7 @@ fkey
  sta MDBIRQ
  jsr mdbirqon
  ldx #$ff
- jmp $eae9      ;continue regular key decode func;
+ jmp $eae9      ;continue regular key decode func
 ;
 ; IRQ driven key pump into keyboard buffer
 keypump
@@ -4527,77 +4512,34 @@ alldone
  jmp keyirqoff
 irqdone2
  rts
-
-;*******************
-;* color flash irq *
-;*******************
-flash
- dec blinkdly     ;blink delay
- bne irqdone      ;did we count down to zero? if so execute flashing code
- lda #20          ;reset flash delay
- sta blinkdly     ;global variable for flash delay
- lda blinktyp     ;get current flash type
- eor #%10000000   ;alternate bit 7 on every flash 
- sta blinktyp     ;new value to OR into screen RAM
-;init mem pointers
- lda #$d8
- sta mem1+2
- lda HIBASE
- sta mem2+2
- sta mem3+2
-;process 4 blocks of 256 bytes of screen text & color fast as possible
- ldy #0
-mem1 lda $d800,y  ;get color of text
- and #%00001111   ;text color is in lo nibble, hi nibble may be random value so remove it
- tax
- lda blinkcol,x   ;color marked for blinking?
- beq nxtblk       ;no so skip it
-mem2 lda $0400,y  ;get text char to flash
- and #%01111111   ;ensure bit 7 is off
- ora blinktyp     ;apply alternating value for bit 7
-mem3 sta $0400,y  ;apply new text char in screen RAM
-nxtblk dey
- bne mem1         ;last text mem to stop is $07E7
- inc mem1+2
- inc mem2+2
- inc mem3+2
- lda mem1+2
- cmp #$db         ;last color mem hibyte
- bcc mem1
- bne irqdone
- ldy #255-24
- bne mem1         ;always branches
-irqdone rts ;jmp ($fd9f) ;orgininal irq vector $EA31
 ;
 ;------------------------
 ;MDBASIC IRQ Handler
 mdbirqhdl
  lda MDBIRQ
- beq mdbirqoff
+ beq mdbirqoff2
  bit bitweights
  beq irq1
  jsr playit
 irq1 lda MDBIRQ
  bit bitweights+1
  beq irq2
- jsr flash
+ jsr sprcolchg
 irq2 lda MDBIRQ
  bit bitweights+2
  beq irqnorm
  jsr keypump
-irqnorm jmp ($fd9f)   ;orgininal irq vector $EA31
-mdbirqoff
- ldx $fd9f      ;restore IRQ vector
- ldy $fda0      ;back to original $EA31
- stx CINV
- sty CINV+1
- jmp ($fd9f)   ;orgininal irq vector $EA31
+irqnorm
+ jmp (irqtmp)   ;orgininal irq vector
+mdbirqoff2
+ jsr mdbirqoff
+ jmp (irqtmp)   ;orgininal irq vector
 ;
-;Routines to turn off MDB IRQ routines
+;MDBASIC IRQ control routines
 playirqoff
  lda #%11111110
 .byte $2c
-flashirqoff
+sprirqoff
  lda #%11111101
 .byte $2c
 keyirqoff
@@ -4609,7 +4551,7 @@ keyirqoff
 playirqon
  lda #%00000001
 .byte $2c
-flashirqon
+sprirqon
  lda #%00000010
 .byte $2c
 keyirqon
@@ -4621,11 +4563,39 @@ keyirqon
  cli
  rts
 mdbirqon
+ ldy CINV+1
+ cpy #>mdbirqhdl
+ beq mdbirqon-1
+ ldx CINV
+ stx irqtmp
+ sty irqtmp+1
  ldx #<mdbirqhdl
  ldy #>mdbirqhdl
+setirq
  stx CINV
  sty CINV+1
  rts
+mdbirqoff
+ ldx irqtmp   ;restore IRQ vector
+ ldy irqtmp+1 ;back to original $EA31
+ jmp setirq
+;
+;Sprite color 16 IRQ routine
+sprcolchg
+ dec sprcoldly
+ bne sprcolx
+ lda #4         ;change sprite color wait time
+ sta sprcoldly
+ lda sprcolopt
+ beq sprirqoff  ;all flags of so turn off irq
+ ldx #7         ;prepare to process all 7 bits
+chkspr asl      ;bit7 to carry
+ bcc nxtspr     ;not set then next bit
+ inc SP0COL,x
+nxtspr
+ dex
+ bpl chkspr
+sprcolx rts
 ;
 ;*******************************
 ;* general purpose subroutines *
@@ -4941,10 +4911,10 @@ tim2sec
 md417      .byte 0   ;holds current filter control and resonance
 md418      .byte 0   ;holds current volume (lo nibble) and filter type (hi nibble)
 
-;blink flag for each color (when bit 7 is 1 then blink is off)
-blinkcol   .repeat 16,0 ;16 bytes indicates which of the 16 colors (0-15) flash 0=flash, non-zero=no flash
-blinkdly   .byte 20  ;color blink delay countdown temp var
-blinktyp   .byte 0   ;bits to OR into screen ram to blink text; bit 7 flips on/off every flash
+irqtmp     .word 0   ;temp IRQ vector storage
+sprcolopt  .byte 0   ;bit flags for which sprites to change color
+sprcoldly  .byte 4   ;jiffies till next sprite color change
+
 ;GENERAL GRAPHICS COMMANDS (Shared):
 lastplotx  .word 0   ;last plotted dot's x coord
 lastploty  .byte 0   ;last plotted dot's y coord
@@ -4958,9 +4928,9 @@ moveflag   .byte 0   ;flag for LINE function for which cmd is executing; 0=LINE,
 autonum    .word 10  ;hold 2-byte value of auto line numbering setting
 
 ;PLAY command use only - used during IRQ
-playtime   .byte 0  ;,0,0  ;current jiffies till next note for each voice
-playvoice  .byte 0  ;,2,4  ;SID register offset for each voice
-playwave   .byte 0  ;,0,0  ;waveform for each voice
+playtime   .byte 0   ;current jiffies till next note for each voice
+playvoice  .byte 0   ;SID register offset for each voice
+playwave   .byte 0   ;waveform for each voice
 
 ;********************************************************************
 ;* Temp variables during subroutine execution only (local vars)     *
@@ -6653,6 +6623,7 @@ savee
  lda $02     ;fake secondary address (2,3,4)
  cmp #2      ;2=screen
  bne sdvn2
+;save screen
 savscr jsr param
  lda $c4
  clc
@@ -6688,6 +6659,7 @@ srnend lda $c4
  cmp #232
  bne saves
  jmp romin
+;save redefined charset
 sdvn2 cmp #3    ;3=CHAREN
  bne savbm
  jsr param2     ;prepare pointer for dot data base addr
@@ -6746,12 +6718,12 @@ param ldy #0  ;($c3) = ptr to text memory
  lda #$d8     ;$D800 = color memory location
  sta $fc
  rts
-param2 ldy #0
+param2 ldy #0 ;ptr to CHAREN
  sty $c3
  lda #$f0
  sta $c4
  rts
-param3 ldy #0
+param3 ldy #0 ;ptr to BITMAP
  sty $c3
  lda #$e0
  sta $c4
@@ -6944,9 +6916,7 @@ dumpbitmap2
  sta $fb
  lda #$fe
  sta $fc
-; lda SCROLY     ;turn off the screen
-; and #%11101111 ;for exclusive use of
-; sta SCROLY     ;the data bus (faster)
+ jsr screenon   ;turn screen off for exclusive use of data bus (faster)
  lda #$28
  sta $fe
  lda #15
@@ -7034,9 +7004,7 @@ tcic dec $fe
  beq aldone
  jmp nxtbit
 aldone
-; lda SCROLY
-; ora #%00010000   ;turn screen back on
-; sta SCROLY
+ jsr screenoff    ;turn screen back on
  lda #27
  jsr CHROUT
  lda #50
@@ -8292,10 +8260,6 @@ newvec
  sta BGCOL0     ;background color black
  sta traceflag  ;trace flag off
  sta keyflag    ;key trapping off
- ldy #15
-noblink sta blinkcol,y   ;all colors turn off flash flag
- dey
- bpl noblink
  jsr sidclr
  lda #$80       ;all keys to repeat
  sta RPTFLAG
