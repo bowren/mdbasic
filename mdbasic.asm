@@ -3,8 +3,16 @@
 ; (c)1985-2023 Bowren Consulting, Inc. (www.bowren.com)
 ;
 ;zero-page registers
-R6510  = $01   ;LORAM/HIRAM/CHAREN RAM/ROM selection and cassette control register
-NDX    = $C6   ;num keys in keyboard buffer
+R6510  = $01 ;LORAM/HIRAM/CHAREN RAM/ROM selection and cassette control register
+LDTND  = $98 ;Number of Open I/O Files/Index to the End of File Tables
+NDX    = $c6 ;number of keys in keyboard buffer
+BLNSW  = $cc ;Cursor Blink Enable: 0=Flash Cursor
+GDBLN  = $ce ;ASCII value of char under csr (when blinking)
+PNTR   = $d3 ;Logical Cursor Column on Current Line
+LNMX   = $d5 ;Maximum Length of Physical Screen Line (39 or 79)
+TBLX   = $d6 ;Current Cursor Physical Line Number
+TMPASC = $d7 ;ASCII value of last character printed to screen
+INSRT  = $d8 ;Editor Current Insert Character Count
 
 ;BASIC and Kernal work registers
 BUF    = $0200 ;BASIC Line Editor Input Buffer
@@ -310,7 +318,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.05.15"
+.text "mdbasic 23.05.16"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -725,8 +733,6 @@ tstcmd
  cmp #FIRST_CMD_TOK+1-$80 ;token $cc is first executable
  bcc badtok
  sbc #FIRST_CMD_TOK-$80-$22 ;index of first executable token $cc is 35
- cmp #79        ;79 total tokens (0-78)
- bcs badtok     ;MDBASIC function or PI token is not a stmt
 oldcmd
  asl            ;index * 2 for word pointer indexing
  tax
@@ -854,9 +860,9 @@ settime
  cmp #$b2         ;equal sign token
  bne badtime
  jsr getstr
- dec $01
+ dec R6510
  jsr settimee
- inc $01
+ inc R6510
  bcs badtime2
  rts
 ;reset clock to 12AM
@@ -875,12 +881,12 @@ clrtime
 ; T  = TIME   get current time as float number of seconds since start
 fntime
  jsr chrget   ;advance txtptr 1 position and get the char
- dec $01
+ dec R6510
  cmp #"$"
  bne time2
 ;get time as a string
  jsr getimstr
- inc $01
+ inc R6510
  ldy #1
  lda #$00
  jsr STRLIT
@@ -888,7 +894,7 @@ fntime
 ;get time in seconds since midnight
 time2
  jsr dotime
- inc $01
+ inc R6510
  lda $7a
  pha
  lda $7b
@@ -979,7 +985,7 @@ istrue
 goto jmp GOTO    ;preform goto
 nxtline jmp REM  ;perform REM to advance txtptr to next line
 ;
-vars dec $01
+vars dec R6510
  jmp varss
 ;
 ;*******************
@@ -1004,16 +1010,16 @@ disk
  bcs err126
  lda $9d         ;display message if not in prg mode
  bpl closeit     ;don't display disk status
- dec $01
+ dec R6510
  jsr bufio
- inc $01
+ inc R6510
  bcs err126
  jsr CLRCHN      ;restore default devices
 closeit
  jmp clse7e
 ;
 err7ee
- inc $01
+ inc R6510
 err126
  pha
  jsr clse7e
@@ -1062,9 +1068,9 @@ copystr
  jsr SETLFS
  jsr OPEN       ;perform OPEN 126,8,0,S$
  bcs err126     ;handle error
- dec $01
+ dec R6510
  jsr filess
- inc $01
+ inc R6510
  rts
 ;get and validate the disk device number 8-11, default 8
 getdskdev
@@ -1083,9 +1089,9 @@ illdev
 ;
 ;calls from LORAM need LOROM
 pblocks
- inc $01        ;LOROM
+ inc R6510        ;LOROM
  jsr LINPRT+4   ;$bdd1 output 2-byte binary number in FAC1 to screen
- dec $01        ;LORAM
+ dec R6510        ;LORAM
  rts
 ;
 ;Open MDBASIC file handle for printer
@@ -1143,12 +1149,12 @@ dumplist jsr opnprt0
  jsr $a6c9   ;perform list
  jsr printcr ;print carriage return
  jmp clse7f
-dumpscreen dec $01 ;switch to LORAM ($a000-$bfff)
+dumpscreen dec R6510 ;switch to LORAM ($a000-$bfff)
  jsr dumpscreen2
-closer inc $01     ;switch to LOROM ($a000-$bfff)
+closer inc R6510     ;switch to LOROM ($a000-$bfff)
  jsr clse7f
  jmp CHRGET
-dumpbitmap dec $01 ;switch LOROM to LORAM
+dumpbitmap dec R6510 ;switch LOROM to LORAM
  jsr dumpbitmap2
  jmp closer
 dumpfiles jsr opnprt0
@@ -1215,9 +1221,9 @@ nextp lda $bb
  rts
 ;
 tokopn
- dec $01
+ dec R6510
  jsr openrs232
- inc $01
+ inc R6510
  bcc tokopn-1 ;clear carry indicates success
  jmp (IERROR) ;otherwise x reg has error number
 ;
@@ -1650,9 +1656,9 @@ copyln lda $39 ;copy line#
 clrtop sta $0400,y
  dey
  bpl clrtop
- lda $d3    ;remember current cursor position
+ lda PNTR   ;remember current cursor position
  pha
- lda $d6
+ lda TBLX
  pha
  jsr weglst ;find and display line number in $14,$15
  pla        ;restore original cursor position
@@ -1737,9 +1743,9 @@ ioerr jmp $e0f9 ;handle i/o error
 newlod
  cpx #5
  bcs oldload
- dec $01        ;rom to ram (a000-bfff)
+ dec R6510        ;rom to ram (a000-bfff)
  jmp loadd      ;continue under rom with the rest of the new load routine
-romin inc $01
+romin inc R6510
  jsr CLRCHN
  lda $b8
  jmp CLOSE
@@ -1843,23 +1849,23 @@ newsave
 oldsav
  jmp $f5ed    ;perform normal save
 newsav
- dec $01
+ dec R6510
  jmp savee
 ;
 ;*******************
 ; FIND cmd - tokenized search, ie: FIND FOR
 ; FIND"chars - text search, ie: FIND"FOR
 find
- dec $01
+ dec R6510
  jsr findd
- inc $01
+ inc R6510
  jsr printcr
  jmp endprg
 findlnr
- inc $01
+ inc R6510
  jsr FINDLN   ;search for line#
  jsr $a6c9    ;perform list (print line on screen)
- dec $01
+ dec R6510
  rts
 ;
 ;*******************
@@ -1883,9 +1889,9 @@ delete jsr opget2
 noline
  sta $7a
  stx $7b
- dec $01
+ dec R6510
  jsr deletee
- inc $01
+ inc R6510
 relink jsr LINKPRG
  lda $22
  ldx $23
@@ -2165,7 +2171,7 @@ newpoke
  bcc gopoke
  jmp FCERR
 gopoke
- dec $01
+ dec R6510
  jmp pokee
 ;
 ;*******************
@@ -2992,9 +2998,9 @@ bitmap
  jsr getpnt
  jsr point2
  jsr types
- dec $01
+ dec R6510
  jsr bitfil ;perform FILL on rect; put code under ROM
- inc $01
+ inc R6510
  rts
 bmon jsr bitmapon
  bne bmclr+3        ;always branches
@@ -3270,9 +3276,9 @@ godraw
  jsr dbyval
  pla
 ;
- dec $01
+ dec R6510
  jsr godraww
- inc $01
+ inc R6510
  bcs nxtmov    ;draw cmd was valid
 baddraw jmp FCERR  ;syntax error in draw string
 nxtmov
@@ -3291,9 +3297,9 @@ drawloop2
 ; PLOT x,y, type, color
 plot jsr getpnt
  jsr types
-plotit dec $01
+plotit dec R6510
  jsr setdot
- inc $01
+ inc R6510
  rts
 ;
 ;*******************
@@ -3365,9 +3371,9 @@ liner jsr getpnt
  jsr types
 ;entry point for MOVE sprite command
 strtln
- dec $01
+ dec R6510
  jsr linedraw
- inc $01
+ inc R6510
 ;fall through savepoint subroutine
 savepoint
  ldx #2
@@ -3452,7 +3458,7 @@ hellno ldx #34 ;illegal coordinate error
 ; PAINT x,y, [plotType], [color]
 paint jsr getpnt
  jsr types
- dec $01
+ dec R6510
  jmp painter
 ;
 ;*******************
@@ -3494,10 +3500,10 @@ docircle
  bcs okcirc     ;plot the circle
  jmp plotit     ;just plot a dot
 okcirc
- dec $01        ;switch LOROM to LORAM
+ dec R6510        ;switch LOROM to LORAM
  jsr circel
  jsr ciropts
- inc $01
+ inc R6510
 endcir rts
 ;
 ;*******************
@@ -3559,9 +3565,9 @@ text
  jsr comchk
  bne ne
  jsr types
-ne dec $01
+ne dec R6510
  jsr texter
-memnorm inc $01
+memnorm inc R6510
  rts
 ;
 screenoff
@@ -3672,7 +3678,7 @@ keynum
 okkey sta $02     ;save key#
  jsr ckcom2       ;throw misop if current char is not comma
  jsr getstr
- dec $01
+ dec R6510
  jmp keyy
 onkeyoff lda #0
  sta keyflag
@@ -3690,7 +3696,7 @@ keyclr
  lda #0
  sta NDX
  jmp CHRGET
-keylist dec $01
+keylist dec R6510
  jmp keylistt
 ;
 ;*******************
@@ -3714,7 +3720,7 @@ okscroll
  lda $ff         ;direction temp var
  asl             ;convert to 2 byte offset
  tay
- dec $01         ;enable LORAM
+ dec R6510         ;enable LORAM
  lda scrolls+1,y ;scroll direction vector hibyte
  pha
  lda scrolls,y   ;scroll direction vector lobyte
@@ -3735,9 +3741,9 @@ getcoords
  cpx #25         ;max rows
  bcs badscroll
  stx $bf
- dec $01
+ dec R6510
  jsr calcptr
- inc $01
+ inc R6510
  lda #TOKEN_TO   ;token to skip over
  jsr CHKCOM+2    ;check for and skip over TO token, syntax error if not found
  jsr skp73_      ;x2
@@ -4294,18 +4300,18 @@ hex
  jsr PARCHK  ;get term inside parentheses
  jsr TESTNUM ;ensure expression was numeric, error if not
  jsr QINT    ;convert FAC1 into a signed 32-bit int in FAC1
- dec $01
+ dec R6510
  jsr hexx
- inc $01
+ inc R6510
  jmp STRLIT
 ;*******************
 ;
 ; V = INF(n) where n = 0 to 15 to select info
 inf
  jsr getfnparam
- dec $01
+ dec R6510
  jsr inff
- inc $01
+ inc R6510
  jmp $b8d7   ;convert unsigned 4-byte int in FAC1 to a 5-byte float in FAC1
 ;
 ;********************
@@ -4799,20 +4805,20 @@ getpnt
  jmp savepoint
 ;*******************
 ;these routines are used by command under ROM
-rom1 inc $01     ;switch to rom (a000-bfff)
+rom1 inc R6510     ;switch to rom (a000-bfff)
  jsr GIVAYF      ;convert 16-bit signed int to float (a=hibyte y=lobyte)
  jmp prtnum
-rom2 inc $01     ;switch to LOROM (a000-bfff)
+rom2 inc R6510     ;switch to LOROM (a000-bfff)
  jsr MOVFM       ;move a float from memory to fac1
 prtnum jsr FOUT  ;convert fac1 to ascii with str ptr in a,y registers
  jsr STROUT      ;print string ptr (a=lobyte y=hibyte)
- dec $01         ;switch to LORAM (a000-bfff)
+ dec R6510         ;switch to LORAM (a000-bfff)
  rts
-rom3 inc $01
+rom3 inc R6510
  jsr skp73
  php             ;save zero flag indicating hibyte non-zero
  txa             ;lobyte also in A reg for convenience
- dec $01
+ dec R6510
  plp
  rts
 ;
@@ -5089,21 +5095,21 @@ bmdt
 ;
 ;INF() memory locations
 infbytes
-.byte $d3 ;csr logical column
-.byte $d6 ;csr physical line
-.byte $cc ;csr blink enabled
-.byte $d5 ;csr max columns on current line (39 or 79)
-.byte $ce ;ASCII value of char under csr (when blinking)
-.byte $d7 ;ASCII value of last character printed to screen
-.byte $d8 ;insert char count
-.byte $98 ;num open files
-.byte $c6 ;num chars in keyboard buffer
+.byte PNTR   ;csr logical column
+.byte TBLX   ;csr physical line
+.byte BLNSW  ;csr blink enabled
+.byte LNMX   ;csr max columns on current line (39 or 79)
+.byte GDBLN  ;ASCII value of char under csr (when blinking)
+.byte TMPASC ;ASCII value of last character printed to screen
+.byte INSRT  ;insert char count
+.byte LDTND  ;num open files
+.byte NDX    ;num chars in keyboard buffer
 infwords
 .word SHFLAG
-.word $0286 ;current foreground color for text
-.word $0287 ;color under cursor
-.word $02A6 ;PAL or NTSC
-.word $FF80 ;Kernal version/system id
+.word COLOR  ;current foreground color for text
+.word GDCOL  ;color under cursor
+.word $02A6  ;PAL or NTSC
+.word $FF80  ;Kernal version/system id
 ;
 ;KEY LIST continued while LOROM is switched to LORAM
 keyy
@@ -6664,9 +6670,9 @@ sdvn2 cmp #3    ;3=CHAREN
  bne savbm
  jsr param2     ;prepare pointer for dot data base addr
 savchr sei
- dec $01
+ dec R6510
  lda ($c3),y
- inc $01
+ inc R6510
  cli
  jsr CHROUT
  jsr status     ;check for stop key or EOF and do not return here if so
@@ -6678,9 +6684,9 @@ savchr sei
 ;save a bitmap image with colors
 savbm jsr param3 ;4=BITMAP, prepare pointers for bitmap and color mem
 savbtm sei
- dec $01        ;read byte from bitmap under ROM
+ dec R6510        ;read byte from bitmap under ROM
  lda ($c3),y
- inc $01
+ inc R6510
  cli
  jsr CHROUT
  jsr status     ;check for stop key or EOF and do not return here if so
@@ -7644,14 +7650,14 @@ openrs232
  tax             ;error code 2
  sec
  rts
-xf359 ldx $98    ;number of open i/o files/index to the end of file tables
+xf359 ldx LDTND  ;number of open i/o files/index to the end of file tables
  cpx #10         ;limit 10
  bcc xf362
  jsr $f6fb       ;handle TOO MANY FILES error
  tax             ;error code 1
  sec
  rts
-xf362 inc $98    ;inc total file handle count
+xf362 inc LDTND  ;inc total file handle count
  lda $b8         ;current logical file number
  sta LAT,x       ;store file descriptors into master table
  lda $b9         ;current secondary address
@@ -8454,7 +8460,7 @@ csraddr         ;get text address of current line
  jmp int4
 phycol
 ;physical line = (logicalCol > maxCols) ? logicalCol-maxCols : logicalCol
- lda $d3        ;logical column
+ lda PNTR       ;logical column
  sec
  sbc #40        ;max column number for a physical line
  bpl goinf      ;logicalCol was larger than maxCols
