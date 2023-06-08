@@ -318,7 +318,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.05.16"
+.text "mdbasic 23.05.31"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -1069,30 +1069,22 @@ copystr
  jsr OPEN       ;perform OPEN 126,8,0,S$
  bcs err126     ;handle error
  dec R6510
- jsr filess
- inc R6510
- rts
+ jmp filess
 ;get and validate the disk device number 8-11, default 8
 getdskdev
  ldx #8         ;default device 8
  jsr comchk
- bne getdskdev-1
+ bne illdev-1
  jsr getval     ;get single byte value in x reg
  cmp #8
  bcc illdev
  tax
  cmp #12
- bcc getdskdev-1
+ bcs illdev
+ rts
 illdev
  ldx #9         ;illegal device number error
  jmp (IERROR)
-;
-;calls from LORAM need LOROM
-pblocks
- inc R6510        ;LOROM
- jsr LINPRT+4   ;$bdd1 output 2-byte binary number in FAC1 to screen
- dec R6510        ;LORAM
- rts
 ;
 ;Open MDBASIC file handle for printer
 opnprt0
@@ -1871,24 +1863,13 @@ findlnr
 ;*******************
 ; DELETE line  (delete one line)
 ; DELETE start-end  (delete all lines from start to end)
-delete jsr opget2
+delete
+ jsr opget2
  lda $5f
  sta $24
  lda $60
  sta $25
  jsr FINDLN
- lda $5f
- ldx $60
- bcc noline
- ldy #$01
- lda ($5f),y
- beq noline
- tax
- dey
- lda ($5f),y
-noline
- sta $7a
- stx $7b
  dec R6510
  jsr deletee
  inc R6510
@@ -2050,7 +2031,9 @@ inc2d jsr clrflg
 gbwyc rts
 dec2d jsr clrflg
  dec $97
+ dec R6510
  jsr work
+ inc R6510
  lda $2d
  bne ne2d
  dec $2e
@@ -2089,37 +2072,6 @@ chrget ldy #$00
  inc $7b
 ne7a lda ($7a),y
  rts
-work ldy $0b
- iny  
- lda ($22),y
- ldy $97
- iny
- sta ($22),y
- jsr pntreq
- bne pne
- rts
-pne inc $22
- bne work
- inc $23
- bne work
-bufer ldy $0b
- lda ($24),y
- ldy $97
- sta ($24),y
- jsr pntreq
- bne pne2
- rts
-pne2 lda $24
- bne ne24
- dec $25
-ne24 dec $24
-jmp bufer
-pntreq lda $22
- cmp $24
- bne gbhah
- lda $23
- cmp $25
-gbhah rts
 ;
 ;******************
 ; RESTORE       - set first data line as next DATA READ
@@ -2607,7 +2559,7 @@ spriteoff
 ;
 ;*******************
 ;SPRITE ON | OFF  - turns on or off all 8 sprites
-;SPRITE [sprite# 0-7], [0=on,1=off], [color 0-15], [0=normal,1=multicolor],
+;SPRITE [sprite# 0-7], [0=on,1=off], [color 0-16], [0=normal,1=multicolor],
 ;       [data pointer 0-255], [foreground priority 0=over,1=under]
 sprite
  php
@@ -2634,23 +2586,9 @@ onoff sta SPENA
  jsr chkcomm
 scr jsr comchkget ;get next basic text chr
  beq smcr
- jsr skip73
- cmp #16
- bcc color15
- bne badspcol
- jsr sprirqon
- lda $bf
- ora sprcolopt
- jmp setspropt
-badspcol jmp FCERR
-color15
+ jsr getval15   ;color 0-15
  ldy $be        ;sprite# 0-7
  sta SP0COL,y   ;sprite y's color
- lda $bf        ;ensure irq flag for sprite is off
- eor #$ff
- and sprcolopt
-setspropt
- sta sprcolopt
  jsr chkcomm    ;stop now if no more params
 smcr
  jsr comchkget  ;get next basic text chr
@@ -2668,28 +2606,18 @@ skipmc sta SPMC
 spntr jsr comchkget
  beq prorty
  jsr skip73     ;get sprite data ptr 0-255 (ptr*64)=start address
+
 ;determine VIC-II base addr
- lda CI2PRA     ;which VIC2 16K memory bank?
- and #%00000011 ;00=bank3, 01=bank2, 10=bank1, 11=bank0
- eor #%00000011 ;11=bank3, 10=bank2, 01=bank1, 00=bank0
- lsr            ;move bits 0-1 to position 6-7 via carry
- ror
- ror
- sta $62        ;VIC-II Base Address hibyte 0=$00, 1=$40, 2=$80 ,3=$C0
-;determine location of sprite data pointers
- lda VMCSB      ;calc screen RAM page offset (n*1K) 1=$0400, 2=$0800, 3=$0C00, etc.
- and #%11110000 ;upper nibble holds the number of 1K chunks
- lsr            ;convert to offset for hibyte, 1K=(4*256), 1=4, 2=8, 3=12, etc.
- lsr
-;clc not needed here since zero was shifted into carry by lsr
- adc $62        ;base+offset
- adc #3         ;the end of screen RAM is 1K more
+ jsr ptrhi      ;get hibyte of sprite ptr start address
  sta $62        ;sprite pointers are in the last 8 bytes of 1K screen RAM
  lda #$f8       ;lobyte of offset to first byte of sprite data ptrs
- sta $61        ;pointer to first byte of sprite data ptr, ie bank 0 with 1K offset is $04F8
- lda $14
+ sta $61        ;ptr to first sprite data ptr, ie bank 0 with 1K offset is $07F8
+
+;apply ptr param
+ lda $14        ;sprite ptr from cmd param
  ldy $be        ;sprite# 0-7
  sta ($61),y    ;sprite y's data ptr
+
 prorty
  jsr chkcomm    ;check for comma, if end of statement then do not return here
  jsr getbool    ;get sprite to foreground graphics/text priority: 0=over, 1=under
@@ -2999,9 +2927,7 @@ bitmap
  jsr point2
  jsr types
  dec R6510
- jsr bitfil ;perform FILL on rect; put code under ROM
- inc R6510
- rts
+ jmp bitfil         ;perform FILL on rect; put code under ROM
 bmon jsr bitmapon
  bne bmclr+3        ;always branches
 bmoff jsr norm
@@ -3299,6 +3225,7 @@ plot jsr getpnt
  jsr types
 plotit dec R6510
  jsr setdot
+memnorm
  inc R6510
  rts
 ;
@@ -3566,9 +3493,7 @@ text
  bne ne
  jsr types
 ne dec R6510
- jsr texter
-memnorm inc R6510
- rts
+ jmp texter
 ;
 screenoff
  lda SCROLY
@@ -3959,6 +3884,8 @@ settype
 ;*******************
 ; PLAY S$
 ; PLAY STOP
+; PLAY SPRITE sprite#, startPtr, endPtr, speed
+; PLAY SPRITE [sprite#] OFF
 play
  beq mop2
  cmp #TOKEN_STOP
@@ -3967,6 +3894,53 @@ play
  jsr endplay
  jmp CHRGET
 playy
+ cmp #TOKEN_SPRITE
+ bne playyy
+
+;PLAY SPRITE sprite#, startPtr, endPtr, speed
+;PLAY SPRITE [sprite#] OFF
+plyspr
+ jsr CHRGET
+ cmp #TOKEN_OFF
+ bne getani
+ lda #0         ;all sprites off
+ sta aniopt
+plysprx
+ jmp CHRGET
+getani
+ jsr sprnum     ;$be=sprite index, A reg and $bf=2^sprite#
+;turn off animation for sprite specified
+ eor #$ff
+ and aniopt
+ sta aniopt
+;
+ jsr CHRGOT
+ cmp #TOKEN_OFF
+ beq plysprx
+ jsr getval     ;startPtr
+ ldx $be        ;sprite index 0-7
+ sta ptrbegin,x
+ tay
+ jsr ptrhi
+ sta ptr3ref+2
+ sta ptr2ref+2
+ sta ptr1ref+2
+ tya
+ptr3ref sta $07f8,x
+ jsr getval     ;endPtr
+ ldx $be
+ sta ptrend,x
+ jsr getval     ;jiffies between images
+ ldx $be
+ sta aniwait,x
+ sta anidly,x
+;turn sprite animation on for sprite specified
+ lda $bf        ;sprite bit weight
+ ora aniopt
+ sta aniopt
+ jmp anion      ;turn on sprite animation and ensure MDB IRQ is on
+;
+playyy
  jsr getstr0
  beq play-1     ;quit now if string is empty
  ldy #0
@@ -3978,12 +3952,9 @@ cpystr lda ($50),y
  lda #0         ;default voice 1 (index 0)
  sta playbuf1,y ;zero-byte terminator
  sta playindex  ;start index of string
-
  jsr initvoice
-
  lda #1
  sta playtime   ;initial wait
-
  jmp playirqon
 ;
 ; IRQ routine to play next note
@@ -4004,7 +3975,7 @@ stoplay
  jsr endplay
  pla
  sta R6510
- jmp playirqoff ;jmp alldone
+ jmp playirqoff
 
 endplay
  ldx playvoice  ;SID reg offset
@@ -4479,8 +4450,7 @@ norep sec
  bcc fkey
 nokey jmp $eb48 ;setup proper keyboard decode table
 fkey
- asl
- asl            ;key index*32  (32 chars per function key)
+ asl            ;key index*16  (16 chars per function key)
  asl
  asl
  asl
@@ -4527,11 +4497,13 @@ mdbirqhdl
  bit bitweights
  beq irq1
  jsr playit
-irq1 lda MDBIRQ
+ lda MDBIRQ
+irq1
  bit bitweights+1
  beq irq2
- jsr sprcolchg
-irq2 lda MDBIRQ
+ jsr sprani
+ lda MDBIRQ
+irq2
  bit bitweights+2
  beq irqnorm
  jsr keypump
@@ -4541,11 +4513,36 @@ mdbirqoff2
  jsr mdbirqoff
  jmp (irqtmp)   ;orgininal irq vector
 ;
+;Sprite animation IRQ routine
+sprani
+ lda aniopt
+ beq anioff     ;all flags off so turn off irq
+ ldx #7         ;prepare to process all 7 bits
+chkani asl      ;bit7 to carry
+ bcc nxtani     ;not set then next bit
+ dec anidly,x   ;sprite x wait timeout
+ bne nxtani
+ tay            ;preserve bit pattern
+ lda aniwait,x  ;reset ani wait time for sprite x
+ sta anidly,x
+ptr1ref lda $07f8,x
+ cmp ptrend,x
+ bcc setptr
+ lda ptrbegin,x ;reset ani img to first
+.byte $2c       ;prevent adc #1
+setptr adc #1
+ptr2ref sta $07f8,x
+ tya            ;restore bit pattern
+nxtani
+ dex
+ bpl chkani
+anidone rts
+;
 ;MDBASIC IRQ control routines
 playirqoff
  lda #%11111110
 .byte $2c
-sprirqoff
+anioff
  lda #%11111101
 .byte $2c
 keyirqoff
@@ -4557,7 +4554,7 @@ keyirqoff
 playirqon
  lda #%00000001
 .byte $2c
-sprirqon
+anion
  lda #%00000010
 .byte $2c
 keyirqon
@@ -4585,23 +4582,6 @@ mdbirqoff
  ldx irqtmp   ;restore IRQ vector
  ldy irqtmp+1 ;back to original $EA31
  jmp setirq
-;
-;Sprite color 16 IRQ routine
-sprcolchg
- dec sprcoldly
- bne sprcolx
- lda #4         ;change sprite color wait time
- sta sprcoldly
- lda sprcolopt
- beq sprirqoff  ;all flags of so turn off irq
- ldx #7         ;prepare to process all 7 bits
-chkspr asl      ;bit7 to carry
- bcc nxtspr     ;not set then next bit
- inc SP0COL,x
-nxtspr
- dex
- bpl chkspr
-sprcolx rts
 ;
 ;*******************************
 ;* general purpose subroutines *
@@ -4791,6 +4771,23 @@ less8 sta $be
  sta $bf         ;2^sprite#
  rts
 ;*******************
+ptrhi           ;determine hibyte for address of sprite pointers
+ lda CI2PRA     ;which VIC2 16K memory bank?
+ and #%00000011 ;00=bank3, 01=bank2, 10=bank1, 11=bank0
+ eor #%00000011 ;11=bank3, 10=bank2, 01=bank1, 00=bank0
+ lsr            ;move bits 0-1 to position 6-7 via carry
+ ror
+ ror
+ sta $62        ;VIC-II Base Address hibyte 0=$00, 1=$40, 2=$80 ,3=$C0
+;determine location of sprite data pointers
+ lda VMCSB      ;calc screen RAM page offset (n*1K) 1=$0400, 2=$0800, 3=$0C00, etc.
+ and #%11110000 ;upper nibble holds the number of 1K chunks
+ lsr            ;convert to offset for hibyte, 1K=(4*256), 1=4, 2=8, 3=12, etc.
+ lsr            ;zero shifted into carry by lsr so it is clear
+ adc $62        ;base+offset
+ adc #3         ;the end of screen RAM is 1K more
+ rts
+;*******************
 getvoc
  jsr skip73z
  beq iverr
@@ -4805,14 +4802,14 @@ getpnt
  jmp savepoint
 ;*******************
 ;these routines are used by command under ROM
-rom1 inc R6510     ;switch to rom (a000-bfff)
+rom1 inc R6510   ;switch to rom (a000-bfff)
  jsr GIVAYF      ;convert 16-bit signed int to float (a=hibyte y=lobyte)
  jmp prtnum
-rom2 inc R6510     ;switch to LOROM (a000-bfff)
+rom2 inc R6510   ;switch to LOROM (a000-bfff)
  jsr MOVFM       ;move a float from memory to fac1
 prtnum jsr FOUT  ;convert fac1 to ascii with str ptr in a,y registers
  jsr STROUT      ;print string ptr (a=lobyte y=hibyte)
- dec R6510         ;switch to LORAM (a000-bfff)
+ dec R6510       ;switch to LORAM (a000-bfff)
  rts
 rom3 inc R6510
  jsr skp73
@@ -4820,6 +4817,11 @@ rom3 inc R6510
  txa             ;lobyte also in A reg for convenience
  dec R6510
  plp
+ rts
+rom4
+ inc R6510
+ jsr LINPRT+4   ;print 2-byte binary number in FAC1
+ dec R6510
  rts
 ;
 ;round FAC1 to the nearest whole number by adding .5 then truncate
@@ -4918,8 +4920,13 @@ md417      .byte 0   ;holds current filter control and resonance
 md418      .byte 0   ;holds current volume (lo nibble) and filter type (hi nibble)
 
 irqtmp     .word 0   ;temp IRQ vector storage
-sprcolopt  .byte 0   ;bit flags for which sprites to change color
-sprcoldly  .byte 4   ;jiffies till next sprite color change
+
+;sprite animation
+aniopt  .byte 0     ;enables animation for 8 sprites with 8 bit flags
+anidly     .repeat 8,0 ;IRQ delay per sprite
+aniwait    .repeat 8,0 ;param
+ptrbegin   .repeat 8,0 ;param
+ptrend     .repeat 8,0 ;param
 
 ;GENERAL GRAPHICS COMMANDS (Shared):
 lastplotx  .word 0   ;last plotted dot's x coord
@@ -4952,6 +4959,52 @@ lastplotx2
 ;********************************************************************
 ;
 *=$a000 ;"MDBASIC RAM under ROM Memory Block"
+playbuf1 .repeat 256,0
+
+;temp storage for PAINT and SCROLL command
+paintbuf1 .repeat 256,0
+paintbuf2 .repeat 256,0
+paintbuf3 .repeat 256,0
+
+;table for converting ascii to screen code
+;zero value indicates ctrl or non-displayable char
+;except for ascii 64 which is screen code 0
+;codes 192-223 same as 96-127
+;codes 224-254 same as 160-190
+;code  255 same as 126
+asc2scr
+.repeat 32,0
+.byte 32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63
+.byte 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,64,65,66
+.byte 67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95
+.repeat 32,0
+.byte 32,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117
+.byte 118,119,120,121,122,123,124,125,126,127,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78
+.byte 79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,32,97,98,99,100,101,102,103,104,105
+.byte 106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,94
+
+ascctrl
+.byte 5,13,14,17,18,19,20,28
+.byte 29,30,31,129,141,142,144,145
+.byte 146,147,149,150,151,152,153,154
+.byte 155,156,157,158,159
+ascctlfn
+.word txtwhi,txtcr,txtlc,txtdwn,txtrvson,txthome,txtbs,txtred
+.word txtright,txtgreen,txtblue,txtorange,txtcr,txtuc,txtblk,txtcsrup
+.word txtrvsoff,txtbitclr,txtbrown,txtlred,txtgray1,txtgray2,txtlgreen,txtlblue
+.word txtgray3,txtpurple,txtleft,txtyellow,txtcyan
+
+;table for printing a bitmap screen
+bmdt
+.byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
+.byte $f2,$1a,$02,$12,$97,$20,$20,$20,$f2,$1a,$03,$20,$20,$20,$f2,$1b
+.byte $04,$20,$f2,$09,$05,$a1,$20,$f2,$17,$05,$20,$20,$20,$20,$20,$20
+.byte $20,$20,$20,$f2,$08,$06,$92,$a2,$a2,$12,$bc,$92,$a2,$bb,$f2,$1b
+.byte $06,$12,$20,$f2,$0a,$07,$92,$a1,$f2,$1b,$07,$12,$20,$f2,$09,$08
+.byte $a1,$bb,$f2,$1a,$08,$20,$20,$20,$f2,$09,$09,$be,$a1,$92,$bb,$f2
+.byte $1a,$09,$12,$20,$92,$20,$12,$20,$f2,$1a,$0a,$20,$92,$20,$12,$20
+.byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
+;
 .byte 0 ;place holder for this spot seems to be messed up on start
 ;
 ;PLAY command temp vars used during IRQ
@@ -5015,84 +5068,8 @@ ptab3
 scrolls .rta scroll0,scroll1,scroll2,scroll3
 
 ;strings for keylist
-addcr .shift "+chr$(13)"
+addchr .shift "+chr$("
 
-;align tables to the nearest page boundary (saves a cycle on read)
-* = (* & $ff00)+$0100
-
-;function key assignments, 8 keys, 32 bytes each
-keybuf
-.text "list"
-.byte 13
-.repeat 32-5,0   ;F1
-.text "load"
-.byte 34
-.repeat 32-5,0   ;F3
-.text "files"
-.byte 13
-.repeat 32-6,0   ;F5
-.text "keylist"
-.byte 13
-.repeat 32-8,0   ;F7
-.text "run"
-.byte 13
-.repeat 32-4,0   ;F2
-.text "save"
-.byte 34
-.repeat 32-5,0   ;F4
-.text "text"
-.byte 13
-.repeat 32-5,0   ;F6
-.text "screenclr"
-.byte 13
-.repeat 32-10,0  ;F8
-
-playbuf1 .repeat 256,0
-
-;temp storage for PAINT and SCROLL command
-paintbuf1 .repeat 256,0
-paintbuf2 .repeat 256,0
-paintbuf3 .repeat 256,0
-
-;table for converting ascii to screen code
-;zero value indicates ctrl or non-displayable char
-;except for ascii 64 which is screen code 0
-;codes 192-223 same as 96-127
-;codes 224-254 same as 160-190
-;code  255 same as 126
-asc2scr
-.repeat 32,0
-.byte 32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63
-.byte 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,64,65,66
-.byte 67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95
-.repeat 32,0
-.byte 32,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117
-.byte 118,119,120,121,122,123,124,125,126,127,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78
-.byte 79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,32,97,98,99,100,101,102,103,104,105
-.byte 106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,94
-
-ascctrl
-.byte 5,13,14,17,18,19,20,28
-.byte 29,30,31,129,141,142,144,145
-.byte 146,147,149,150,151,152,153,154
-.byte 155,156,157,158,159
-ascctlfn
-.word txtwhi,txtcr,txtlc,txtdwn,txtrvson,txthome,txtbs,txtred
-.word txtright,txtgreen,txtblue,txtorange,txtcr,txtuc,txtblk,txtcsrup
-.word txtrvsoff,txtbitclr,txtbrown,txtlred,txtgray1,txtgray2,txtlgreen,txtlblue
-.word txtgray3,txtpurple,txtleft,txtyellow,txtcyan
-
-;table for printing a bitmap screen
-bmdt
-.byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
-.byte $f2,$1a,$02,$12,$97,$20,$20,$20,$f2,$1a,$03,$20,$20,$20,$f2,$1b
-.byte $04,$20,$f2,$09,$05,$a1,$20,$f2,$17,$05,$20,$20,$20,$20,$20,$20
-.byte $20,$20,$20,$f2,$08,$06,$92,$a2,$a2,$12,$bc,$92,$a2,$bb,$f2,$1b
-.byte $06,$12,$20,$f2,$0a,$07,$92,$a1,$f2,$1b,$07,$12,$20,$f2,$09,$08
-.byte $a1,$bb,$f2,$1a,$08,$20,$20,$20,$f2,$09,$09,$be,$a1,$92,$bb,$f2
-.byte $1a,$09,$12,$20,$92,$20,$12,$20,$f2,$1a,$0a,$20,$92,$20,$12,$20
-.byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
-;
 ;INF() memory locations
 infbytes
 .byte PNTR   ;csr logical column
@@ -5111,19 +5088,45 @@ infwords
 .word $02A6  ;PAL or NTSC
 .word $FF80  ;Kernal version/system id
 ;
-;KEY LIST continued while LOROM is switched to LORAM
+;function key assignments, 8 keys, 16 bytes each
+keybuf
+.text "list"
+.byte 13
+.repeat 16-5,0   ;F1
+.text "load"
+.byte 34
+.repeat 16-5,0   ;F3
+.text "files"
+.byte 13
+.repeat 16-6,0   ;F5
+.text "keylist"
+.byte 13
+.repeat 16-8,0   ;F7
+.text "run"
+.byte 13
+.repeat 16-4,0   ;F2
+.text "save"
+.byte 34
+.repeat 16-5,0   ;F4
+.text "text"
+.byte 13
+.repeat 16-5,0   ;F6
+.text "screenclr"
+.byte 13
+.repeat 16-10,0  ;F8
+;
+;KEY (continued)
 keyy
- lda #0
- sta $61
+ ldx #0        ;even/odd key string offset
  lda $02       ;key# 1 to 8
- lsr           ;values from 0 to 4
+ lsr           ;index 0 to 4
  bcs oddkey    ;carry set for odd key nums
  sec
  sbc #1        ;convert 1-4 as index 0-3
- ror $61       ;$61 now has #$80 from carry
+ ldx #64
 oddkey
- asl           ;key index (0 to 3) * 32
- asl
+ stx $61
+ asl           ;key index (0 to 3) * 16
  asl
  asl
  asl
@@ -5132,9 +5135,9 @@ oddkey
  tax
  lda $52
  beq endass   ;assign empty str
- cmp #32      ;check max str len
- bcc okass    ;length is between 1 and 31
- lda #31      ;enforce max length of 31
+ cmp #16      ;check max str len
+ bcc okass    ;length is between 1 and 15
+ lda #15      ;enforce max length of 15
  sta $52
 okass ldy #0
 nextc lda ($50),y
@@ -5147,7 +5150,7 @@ endass lda #0 ;terminate string with zero-byte
  sta keybuf,x
  inx
  iny
- cpy #32      ;fill remaining bytes with 0
+ cpy #16      ;fill remaining bytes with 0
  bcc endass+2
  jmp memnorm  ;switch LORAM back to LOROM
 ;
@@ -5155,22 +5158,25 @@ endass lda #0 ;terminate string with zero-byte
 ;
 keylistt
  jsr printcr
- lda #0
- sta $63      ;string offset in buffer
  lda #"1"
- sta $62      ;current key#
+ sta $02      ;current key#
+ lda #0
+ sta $fb      ;string offset in buffer
 nextke
  jsr kprnt
- inc $62      ;next key#
- lda $63      ;bit7=0 is odd key# else even key#
- eor #%10000000
- sta $63
+ lda $02
+ cmp #"8"
+ beq stpkeylst
+ inc $02
+ lda $fb      ;bit6=0 is odd key# else even key#
+ eor #%01000000 ;bit7 is always 0
+ sta $fb
+ asl          ;sets minus flag if even key#
  bmi nextke
- lda $63
- clc
- adc #32
- sta $63
- bvc nextke
+ lsr          ;restores value and clears carry flag
+ adc #16      ;16 bytes per key
+ bne nextke-2 ;will always branch
+stpkeylst
  jsr CHRGET
  jmp memnorm  ;switch LORAM back to LOROM
 ;--------
@@ -5178,36 +5184,48 @@ kprnt
  lda #<keystr
  ldy #>keystr
  jsr printstr
- lda $62     ;key#
+ lda $02      ;key#
  jsr CHROUT
  lda #","
  jsr CHROUT
- lda $63     ;index offset
- sta $61     ;current index
+ lda $fb      ;index offset
+ sta $fc      ;current index
 pkstr
  jsr printqt
 nextlt
- ldy $61
+ ldy $fc
  lda keybuf,y
  beq stoppr
- cmp #13     ;cr?
- bne nocr
+ sta $63
+ cmp #13      ;carriage return?
+ beq crqt
+ cmp #34      ;quote?
+ bne nocrqt
+crqt
  jsr printqt
- lda #<addcr
- ldy #>addcr
- jsr printstr
- inc $61
- ldy $61
+crqt2
+ lda #<addchr
+ ldy #>addchr
+ jsr printstr ;+CHR$(
+ lda #0       ;hibyte in a reg
+ sta $62
+ jsr rom4     ;switch ROM in and call routines to print int in FAC1
+ lda #")"
+ jsr CHROUT
+ inc $fc      ;index offset
+ ldy $fc
  lda keybuf,y
  beq chrprs
+ cmp #13
+ beq crqt2
+ cmp #34
+ beq crqt2
  lda #"+"
  jsr CHROUT
- inc $61
  jmp pkstr
-nocr cmp #"""
- beq noquot
+nocrqt
  jsr CHROUT
-noquot inc $61
+noquot inc $fc
  jmp nextlt
 stoppr
  jsr printqt
@@ -5694,9 +5712,9 @@ dec5b dec $5b
  rts
 ;**************************
 texter lda $58  ;y size
- beq texter-1
+ beq texted
  lda $57        ;x size
- beq texter-1
+ beq texted
  lda lastplott
  sta $ff        ;save plot type
 nextchar lda #0
@@ -5733,7 +5751,7 @@ noinc51
  bne nextchar
  lda $ff        ;restore original plot type
  sta lastplott
- rts
+texted jmp memnorm ;rts
 ;execute function index by y
 fndctrl2
  tya
@@ -7636,9 +7654,9 @@ filldone
  lda $02
  cmp #0
  bpl linefil
- rts
+ jmp memnorm
 ;
-;***OPEN RS-232 CHANNEL 
+;***OPEN RS-232 CHANNEL***
 openrs232
  lda #126        ;file handle 126
  ldx #2          ;device 2 = RS-232
@@ -8348,11 +8366,12 @@ filecnt
  lda $51
  sta $62
  stx $63
- jsr pblocks    ;print 2-byte binary number in FAC1
+ jsr rom4       ;print 2-byte binary number in FAC1
  lda #<filestr
  ldy #>filestr
  jsr printstr   ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
-endfiles jmp clse7e
+endfiles jsr clse7e
+ jmp memnorm
 ;
 prtlin
  jsr chkin7e
@@ -8368,7 +8387,7 @@ prtlin2
  bne stdout0    ;stop now and switch to output channel if needed
  jsr stdout0    ;set current i/o to output channel
  bcs err7e
- jsr pblocks ;LINPRT+4   ;$bdd1 output 2-byte binary number in FAC1 to screen
+ jsr rom4       ;print 2-byte binary number in FAC1
  lda #" "
  jsr CHROUT
 ;print zero-terminated string in file then print CR
@@ -8502,6 +8521,18 @@ dtaline
  jmp int4
 ;
 deletee
+ lda $5f
+ ldx $60
+ bcc noline
+ ldy #$01
+ lda ($5f),y
+ beq noline
+ tax
+ dey
+ lda ($5f),y
+noline
+ sta $7a
+ stx $7b
  lda $24
  sec
  sbc $7a
@@ -8528,5 +8559,37 @@ copy lda ($7a),y
  cmp $25
  bcs copy
 deldone rts
+;
+work ldy $0b
+ iny  
+ lda ($22),y
+ ldy $97
+ iny
+ sta ($22),y
+ jsr pntreq
+ bne pne
+ rts
+pne inc $22
+ bne work
+ inc $23
+ bne work
+bufer ldy $0b
+ lda ($24),y
+ ldy $97
+ sta ($24),y
+ jsr pntreq
+ bne pne2
+ rts
+pne2 lda $24
+ bne ne24
+ dec $25
+ne24 dec $24
+ jmp bufer
+pntreq lda $22
+ cmp $24
+ bne gbhah
+ lda $23
+ cmp $25
+gbhah rts
 ;
 .end
