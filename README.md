@@ -1,6 +1,6 @@
 # MDBASIC
 MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
-MDBASIC version 23.05.08<br>
+MDBASIC version 23.06.11<br>
 <br>
 Download the documentation file <b>mdbasic.pdf</b> for details.<br>
 <br>
@@ -32,6 +32,7 @@ READY.
 <pre style="font-family:'Courier New'">
 * Displays memory address range after LOADing programs
 * LOAD/SAVE directly to/from the text screen, bitmap or character definition memory
+* SAVE custom address range using existing SAVE command
 * Binary, Hexadecimal and Octal values in expressions
 * 8 assignable function keys each with up to 31 characters
 * Freeze LISTing by holding down the shift key
@@ -40,6 +41,7 @@ READY.
 <br>
 <i>Immediate Mode:</i><br>
 <pre style="font-family:'Courier New'">
+SAVE49152,53247,"HIRAM",8 :REM BINARY SAVE OF 4K HIRAM
 RUN "MYPRG",8             :REM LOAD AND RUN MYPRG FROM DISK
 RENUM 10,10               :REM RENUMBER PRG START AT 10 INC BY 10
 FILES                     :REM LIST ALL FILES TO SCREEN
@@ -67,7 +69,8 @@ TRACE                     :REM RUN PROGRAM WITH TRACE ENABLED
 12 MOVE 0,50,24           :REM LOCATE SPRITE 0 AT COORD 50,24
 13 MOVE1 TO 159,99,50     :REM SLIDE SPRITE 1 TO CENTER SCREEN AT SPEED 50
 14 MOVE0,0,0TO511,255     :REM MOVE SPRITE 0 FROM TOP LEFT TO BOTTOM RIGHT, FAST 
-15 X = $C000: B=%10101010 :REM HEX $, BINARY % AND OCTAL @ IN EXPRESSIONS
+15 PLAYSPRITE0,92,99,5    :REM ANIMATE SPRITE 0 WITH PTRS 92 TO 99 WITH 5 JIFFIES BETWEEN FRAMES
+19 X = $C000: B=%10101010 :REM HEX $, BINARY % AND OCTAL @ IN EXPRESSIONS
 20 BITMAP 1, 0            :REM SHOW BITMAP IN MULTICOLOR MODE WITH BLACK BKGD
 21 MAPCOL 2, 1, 6         :REM SET MULTICOLOR REG 1,2,3
 22 PLOT 16,10,1,1         :REM PLOT A POINT TO START DRAW LOCATION
