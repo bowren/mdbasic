@@ -240,6 +240,7 @@ VERIFY = $e165 ;perform VERIFY
 HALT   = $e386 ;halt program and return to main BASIC loop
 INIT   = $e3bf ;initialize BASIC
 LP2    = $e5b4 ;get a character from the keyboard buffer
+CHKNXT = $e206 ;fetch current character and check for end of line
 
 ;Commodore 64 Kernal API
 CINT   = $ff81 ;initialize screen editor and video chip
@@ -318,7 +319,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.05.31"
+.text "mdbasic 23.06.11"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -409,7 +410,7 @@ cmdtab
 .rta on     ;$91 ON augmented
 .rta wait   ;$92 WAIT augmented
 .rta $e168  ;$93 LOAD
-.rta $e156  ;$94 SAVE
+.rta bsave  ;$94 SAVE $e156
 .rta VERIFY ;$95
 .rta DEF    ;$96
 .rta poke   ;$97 POKE augmented
@@ -1037,31 +1038,29 @@ files
  beq onechar
  jsr getstr1    ;get volume$ (should never be more than 18 chars)
  clc
- adc #1         ;length plus one for new tmp str
- bne prepstr    ;always branches (unless len was 255)
+ adc #1         ;one more char for $ symbol
+ cmp #19        ;DOS volume$ string max length is 18
+ bcc prepstr    ;always branches (unless len was 255)
+ lda #18        ;truncate string at 18 chars
+.byte $2c       ;ignore next lda
 onechar lda #1
 prepstr
- jsr GETSPA     ;alloc space in mem for a new str
-;place str ptr in FAC1 so that it can be registered as a tmp str
- sta $61        ;actual length allocated
- stx $62        ;ptr lobyte
- sty $63        ;ptr hibyte
- jsr $b4ca      ;register str ptr in FAC1 as tmp str
-;copy the original str into the new buffer with a dollar symbol prefix
+ sta $63        ;actual length allocated
  lda #"$"
- ldy #0
+ ldy #$ff
 copystr
- sta ($62),y    ;desination tmp str
- lda ($50),y    ;source param str
  iny
- cpy $61        ;reached tmp str len?
+ sta BUF,y      ;desination tmp str
+ lda ($50),y    ;source param str
+ cpy $63        ;reached tmp str len?
  bne copystr    ;no, keep copying
+ lda #0
+ sta BUF+1,y
 ;prepare file params
- lda $61
- ldx $62
- ldy $63
+ tya
+ ldx #<BUF
+ ldy #>BUF
  jsr SETNAM
- jsr FRESTR     ;dealloc tmp str
  jsr getdskdev  ;get disk device num in x reg
  lda #$7e       ;file handle 126
  ldy #$00       ;secondary 0
@@ -1172,7 +1171,7 @@ fill
  jsr comchkget
  beq srncol
  jsr pokchr      ;get scanCode and perform fill
- jsr chkcomm     ;check for comma and quit if not found
+ jsr CHKNXT     ;check for comma and quit if not found
 srncol
  jsr getval      ;get color
  sta $02
@@ -1844,6 +1843,38 @@ newsav
  dec R6510
  jmp savee
 ;
+;mdbasic bsave need 47 bytes
+bsave
+ beq osave
+ jsr FRMEVL   ;eval expression
+;set file defaults
+ lda #$00     ;default file#
+ ldx #$01     ;default device 1 (tape)
+ ldy #$00     ;default secondary 0
+ jsr SETLFS   ;set logical file params, A=file#,X=device,Y=secondary
+;check last expression evaluated data type
+ lda $0d      ;numeric or string?
+ beq bsaver
+;continue as if normal subroutine
+ jsr $e25a    ;FRESTR and SETNAM
+ jsr $e1e6    ;get remaining save params
+ jmp $e159    ;save BASIC prg to device
+osave
+ jmp $e156
+bsaver
+ jsr skp73+3  ;start address
+ stx $c1
+ sty $c2
+ jsr dbyval   ;end address
+ stx $ae
+ sty $af
+ jsr CHRGET   ;advance to next param or end of statment
+ jsr $e1d4    ;set parms for LOAD, VERIFY, SAVE
+ ldx $ae      ;ptr to end address
+ ldy $af      ;in x and y reg
+ lda #$c1     ;first byte in zero-page used as ptr to start address
+ jmp $e15f    ;save RAM to device - finish save
+;
 ;*******************
 ; FIND cmd - tokenized search, ie: FIND FOR
 ; FIND"chars - text search, ie: FIND"FOR
@@ -1852,7 +1883,7 @@ find
  jsr findd
  inc R6510
  jsr printcr
- jmp endprg
+ jmp $A8F8
 findlnr
  inc R6510
  jsr FINDLN   ;search for line#
@@ -1885,17 +1916,18 @@ savex stx $2e
  jsr $a659  ;reset txt ptr to beginning of prg then perform CLR
  jmp endprg
 ;
+;end of renum; list any go tokens with 65535 as line number (errors)
 erenum jsr LINKPRG
- lda #$02
+ lda #>BUF
  sta $7b
- lda #$00
+ lda #<BUF
  sta $7a
  ldy #$05
 ffff lda nolin,y
- sta BUF+1,y
+ sta BUF,y
  dey
  bpl ffff
- jsr find ;65535
+ jsr find ;find all 65535
  jmp relink
 ;
 ;*******************
@@ -1951,6 +1983,7 @@ serch jsr chrget
 nocrap jsr chrget
 craper cmp #"""
  bne tokgo
+;skip over expression in quotes
 crap jsr chrget
  beq strt
  cmp #"""
@@ -1958,7 +1991,8 @@ crap jsr chrget
  beq nocrap
 tokgo tax
  beq strt
- bpl nocrap  ;x reg is zero-based index of token
+ bpl nocrap
+;check if token is a statment that use line numbers
  ldx #10     ;there are 10 tokens that reference a line number
 chktok
  cmp gotok-1,x
@@ -1975,32 +2009,12 @@ sav7a lda $7a
  jsr FRMNUM
  jsr GETADR
  jsr replac
- lda $3c
- sta $7b
- lda $3b
- sta $7a
- ldy #$00
- ldx #$00
-numchr lda $0100,x
- cmp #"0"
- bcc less0
- pha
- jsr CHRGET
- bcc skp2d
- jsr inc2d
-skp2d pla
- ldy #$00
- sta ($7a),y
- inx
- bne numchr
-less0 jsr CHRGET
- bcs ckcmma
-carycl jsr dec2d
- jsr CHRGOT
- bcc carycl
+ dec R6510
+ jsr worker
 ckcmma cmp #","
  beq sav7a
- bne craper
+ jmp craper
+;
 replac jsr tofac
 goagan jsr chrget
  jsr chrget
@@ -2017,8 +2031,8 @@ isline jsr chrget
  bne nexlin+3
 pnl ldx #$90
  sec
- jsr $bc49
- jmp $bddf
+ jsr $bc49    ;convert FAC1 to float
+ jmp FOUT+2   ;convert FAC1 to string
 nexlin jsr chrget
  jsr addinc
  beq goagan
@@ -2029,16 +2043,7 @@ inc2d jsr clrflg
  bne gbwyc
  inc $2e
 gbwyc rts
-dec2d jsr clrflg
- dec $97
- dec R6510
- jsr work
- inc R6510
- lda $2d
- bne ne2d
- dec $2e
-ne2d dec $2d
- rts
+;
 clrflg lda $7a
  sta $22
  lda $7b
@@ -2051,11 +2056,13 @@ clrflg lda $7a
  sty $0b
  sty $97
  rts
+;
 tofac lda $35
  sta $63
  lda $36
  sta $62
  jmp RUNC       ;reset ptr to current basic text to beginning
+;
 addinc lda $63
  clc
  adc $33
@@ -2066,12 +2073,33 @@ addinc lda $63
 necg jsr chrget
  bne necg
  rts
+;
 chrget ldy #$00
  inc $7a
  bne ne7a
  inc $7b
 ne7a lda ($7a),y
  rts
+;
+bufer ldy $0b
+ lda ($24),y
+ ldy $97
+ sta ($24),y
+ jsr pntreq
+ bne pne2
+ rts
+pne2 lda $24
+ bne ne24
+ dec $25
+ne24 dec $24
+ jmp bufer
+;
+pntreq lda $22
+ cmp $24
+ bne gbhah
+ lda $23
+ cmp $25
+gbhah rts
 ;
 ;******************
 ; RESTORE       - set first data line as next DATA READ
@@ -2512,7 +2540,7 @@ msb sta MSIGX  ;x coord hibyte
  lda $14
  sta SP0X,y    ;sprite x coord
  sta $fb
- jsr chkcomm
+ jsr CHKNXT
  jsr dbyval    ;y2 coord
  bne badxy     ;hibyte must be 0
  txa
@@ -2583,13 +2611,13 @@ sprite
 spron lda SPENA ;turn sprite on
  ora $bf
 onoff sta SPENA
- jsr chkcomm
+ jsr CHKNXT
 scr jsr comchkget ;get next basic text chr
  beq smcr
  jsr getval15   ;color 0-15
  ldy $be        ;sprite# 0-7
  sta SP0COL,y   ;sprite y's color
- jsr chkcomm    ;stop now if no more params
+ jsr CHKNXT    ;stop now if no more params
 smcr
  jsr comchkget  ;get next basic text chr
  beq spntr
@@ -2602,7 +2630,7 @@ smcr
 setm lda SPMC
  ora $bf        ;2^sprite#
 skipmc sta SPMC
- jsr chkcomm
+ jsr CHKNXT
 spntr jsr comchkget
  beq prorty
  jsr skip73     ;get sprite data ptr 0-255 (ptr*64)=start address
@@ -2619,7 +2647,7 @@ spntr jsr comchkget
  sta ($61),y    ;sprite y's data ptr
 
 prorty
- jsr chkcomm    ;check for comma, if end of statement then do not return here
+ jsr CHKNXT    ;check for comma, if end of statement then do not return here
  jsr getbool    ;get sprite to foreground graphics/text priority: 0=over, 1=under
  bne okpri
  lda $bf        ;2^sprite#
@@ -2674,7 +2702,7 @@ expx lda $bf    ;2^sprite#
  and XXPAND     ;x expand off
 setmagx
  sta XXPAND     ;x expand on
- jsr chkcomm
+ jsr CHKNXT
 magy
  jsr getbool    ;expand y param
  beq clry
@@ -2707,17 +2735,17 @@ mulclr lda SCROLY ;horiz fine scrolling and control reg
  sta SCROLY        ;Vertical Fine Scrolling and Control Register
  jsr getval
  sta BGCOL1        ;ext bkgnd color reg#1
- jsr chkcomm       ;check for comma and don't return here if missing
+ jsr CHKNXT       ;check for comma and don't return here if missing
  jsr getval
  sta BGCOL2        ;ext bkgnd color reg#2
- jsr chkcomm
+ jsr CHKNXT
  jsr getval
  sta BGCOL3        ;ext bkgnd color reg#3
  rts
 ;MULTI SPRITE [sc1], [sc2]
 mcspri jsr getval
  sta SPMC0         ;mcspr reg#0
- jsr chkcomm
+ jsr CHKNXT
  jsr getval
  sta SPMC1         ;mcspr reg#1
  rts
@@ -2727,7 +2755,7 @@ chrmap lda SCROLX  ;horiz fine scrolling and control reg
  sta SCROLX
  jsr getval
  sta BGCOL1
- jsr chkcomm
+ jsr CHKNXT
  jsr getval
  sta BGCOL2
  rts
@@ -2763,7 +2791,7 @@ column
  ldy $bc     ;y holds the line (from temp storage area)
  clc         ;clear carry is flag to write new value
  jsr PLOT    ;read/set cursor position on screen
- jsr chkcomm ;if current char is a comma then continue otherwise quit now
+ jsr CHKNXT ;if current char is a comma then continue otherwise quit now
  jsr getbool
  eor #1      ;flip value so that 1=on 0=off
  sta 204     ;Flash Cursor 0=Flash Cursor, non-zero No Cursor
@@ -2781,12 +2809,12 @@ color
  beq nochar
  jsr skip73
  sta COLOR      ;current cursor foreground color
- jsr chkcomm    ;if no more params then stop now
+ jsr CHKNXT    ;if no more params then stop now
 nochar jsr comchkget
  beq noback
  jsr getval15
  sta BGCOL0     ;background color
- jsr chkcomm
+ jsr CHKNXT
 noback jsr getval15_
  sta EXTCOL     ;border color
  rts
@@ -2991,10 +3019,10 @@ pokcol sta $c800,y  ;fill color mem for entire screen
 ;multi mapcol 0,1,2 bit patterns 01=black, 10=white, 11=red (00 is the background color in BGCOL0)
 mapcol
  jsr getc1
- jsr chkcomm     ;if no more params then quit otherwise continue
+ jsr CHKNXT     ;if no more params then quit otherwise continue
  jsr getc2
 getc3
- jsr chkcomm
+ jsr CHKNXT
  jsr getval15_   ;c3 (0-15) is used in multicolor mode only bit pattern 11
  sta mapcolc3    ;this color can be in the same 8x8 square that c1 & c2 are in
  rts
@@ -3540,7 +3568,7 @@ chk38 cmp #38
  lda SCROLX
  and #%11110111  ;bit 3 off 38 columns
  sta SCROLX
-cklast jsr chkcomm
+cklast jsr CHKNXT
  jsr getval      ;get num rows
  cmp #25         ;24 or 25 only
  bne chk24
@@ -3707,7 +3735,7 @@ adsr jsr ppw
  ldx $bb
  sta ATDCY1,x  ;apply attack and decay
 ;sustain and release params
- jsr chkcomm   ;if end of statement quit now
+ jsr CHKNXT   ;if end of statement quit now
  jsr getval15_ ;sustain volume
  asl
  asl
@@ -3824,7 +3852,7 @@ okfilt
 ;the filter resonance control register $d417 
 ;Bits 4-7  Set filter resonance 0-15 0=none, 15=max
 ;
- jsr chkcomm  ;if no more params then quit otherwise continue
+ jsr CHKNXT  ;if no more params then quit otherwise continue
  jsr getval15_ ;get resonance param
  asl          ;resonance is stored in the upper nibble
  asl          ;so this value must be shifted left
@@ -3859,7 +3887,7 @@ okfilt
 ;3  = 100  hi pass
 ;4  = 101  notch reject
 ;
- jsr chkcomm  ;if no more params then quit otherwise continue
+ jsr CHKNXT  ;if no more params then quit otherwise continue
  jsr getval   ;filter type 0-4
  cmp #5
  bcs illqty5
@@ -4664,15 +4692,6 @@ comchk
  cmp #","          ;is on a comma
  rts
 ;*******************
-chkcomm
- ldy #0            ;quickly check
- lda ($7a),y       ;if current txtptr
- cmp #","          ;is on a comma
- beq comma         ;return normally if comma exists
- pla               ;don't return to caller if no comma
- pla
-comma rts
-;*******************
 ;check for comma and throw missing op error if not there
 ckcom2
  ldy #0
@@ -4734,7 +4753,7 @@ skp73 jsr FRMNUM   ;eval numeric expr & type
  rts
 ;*******************
 types
- jsr chkcomm     ;current char a comma?
+ jsr CHKNXT     ;current char a comma?
  jsr comchkget
  beq noparam     ;another comma found so skip plot type param
  jsr skip73      ;get plot type value
@@ -4742,7 +4761,7 @@ types
  bcs illqty4
  sta lastplott
 noparam
- jsr chkcomm     ;if current char is not a comma do not return here
+ jsr CHKNXT     ;if current char is not a comma do not return here
  lda SCROLX
  and #%00010000  ;check if multicolor mode on or off
  bne mcplot
@@ -5751,7 +5770,7 @@ noinc51
  bne nextchar
  lda $ff        ;restore original plot type
  sta lastplott
-texted jmp memnorm ;rts
+texted jmp memnorm
 ;execute function index by y
 fndctrl2
  tya
@@ -7998,9 +8017,8 @@ findd
  lda ($2b),y ;should be $0804
  sta $3a
  jsr CHRGOT
- bne dofind
- rts
-dofind cmp #"""
+ beq findd-1 ;nothing to find
+ cmp #"""
  bne noquo
  jsr CHRGET
 noquo lda $2b
@@ -8560,6 +8578,29 @@ copy lda ($7a),y
  bcs copy
 deldone rts
 ;
+worker
+ lda $3c
+ sta $7b
+ lda $3b
+ sta $7a
+ ldy #$00
+ ldx #$00
+numchr lda $0100,x
+ cmp #"0"
+ bcc less0
+ pha
+ jsr CHRGET
+ bcc skp2d
+ jsr inc2d
+skp2d pla
+ ldy #$00
+ sta ($7a),y
+ inx
+ bne numchr
+less0 jsr CHRGET
+ bcs workdone
+dec2d jsr clrflg
+ dec $97
 work ldy $0b
  iny  
  lda ($22),y
@@ -8567,29 +8608,20 @@ work ldy $0b
  iny
  sta ($22),y
  jsr pntreq
- bne pne
- rts
-pne inc $22
+ beq zzzz
+ inc $22
  bne work
  inc $23
  bne work
-bufer ldy $0b
- lda ($24),y
- ldy $97
- sta ($24),y
- jsr pntreq
- bne pne2
- rts
-pne2 lda $24
- bne ne24
- dec $25
-ne24 dec $24
- jmp bufer
-pntreq lda $22
- cmp $24
- bne gbhah
- lda $23
- cmp $25
-gbhah rts
+ jsr bufer
+zzzz
+ lda $2d
+ bne ne2d
+ dec $2e
+ne2d dec $2d
+ jsr CHRGOT
+ bcc dec2d
+workdone
+ jmp memnorm
 ;
 .end
