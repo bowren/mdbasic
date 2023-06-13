@@ -15,6 +15,7 @@ TMPASC = $d7 ;ASCII value of last character printed to screen
 INSRT  = $d8 ;Editor Current Insert Character Count
 
 ;BASIC and Kernal work registers
+BAD    = $0100 ;Tape Input Error Log and string work area
 BUF    = $0200 ;BASIC Line Editor Input Buffer
 COLOR  = $0286 ;Current Foreground Color for Text
 GDCOL  = $0287 ;Color of Character under Cursor
@@ -319,7 +320,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.06.11"
+.text "mdbasic 23.06.12"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -1050,16 +1051,14 @@ prepstr
  ldy #$ff
 copystr
  iny
- sta BUF,y      ;desination tmp str
+ sta BAD,y      ;create tmp str in buffer
  lda ($50),y    ;source param str
  cpy $63        ;reached tmp str len?
  bne copystr    ;no, keep copying
- lda #0
- sta BUF+1,y
 ;prepare file params
  tya
- ldx #<BUF
- ldy #>BUF
+ ldx #<BAD
+ ldy #>BAD
  jsr SETNAM
  jsr getdskdev  ;get disk device num in x reg
  lda #$7e       ;file handle 126
@@ -7962,11 +7961,11 @@ hexx
  lda $65
  jsr dechex
  lda #$00
- sta $0100,y
+ sta BAD,y
 ;find most significant digit index
  ldy #0
 nxzro
- lda $0100,y
+ lda BAD,y
  beq hexzro ;reached end of str so value is 0
  cmp #"0"   ;ignore leading zeros
  bne msd
@@ -7987,7 +7986,7 @@ dechex pha
  adc #$07
 add48 clc
  adc #48
- sta $0100,y
+ sta BAD,y
  iny
  pla
  and #$0f
@@ -7997,7 +7996,7 @@ add48 clc
  adc #$07
 noadd7 clc
  adc #48
- sta $0100,y
+ sta BAD,y
  iny
  rts
 ;
@@ -8132,20 +8131,20 @@ timedig
  lsr
  clc
  adc #"0"
- sta $0100,y
+ sta BAD,y
  iny
  pla
  and #15
  clc
  adc #"0"
- sta $0100,y
+ sta BAD,y
  iny
  lda #":"
  cpy #8
  bcc setterm
  lda #0
 setterm
- sta $0100,y
+ sta BAD,y
  iny
  rts
 ;
@@ -8161,29 +8160,29 @@ dotime
 ;seconds
  ldx #7
  ldy #8
- lda $0100,x
+ lda BAD,x
  sta tim2sec,y
  dey
  dex
- lda $0100,x
+ lda BAD,x
  sta tim2sec,y
 ;minutes
  ldx #4
  ldy #15
- lda $0100,x
+ lda BAD,x
  sta tim2sec,y
  dey
  dex
- lda $0100,x
+ lda BAD,x
  sta tim2sec,y
 ;hours
  ldx #1
  ldy #25
- lda $0100,x
+ lda BAD,x
  sta tim2sec,y
  dey
  dex
- lda $0100,x
+ lda BAD,x
  sta tim2sec,y
  rts
 ;
@@ -8585,7 +8584,7 @@ worker
  sta $7a
  ldy #$00
  ldx #$00
-numchr lda $0100,x
+numchr lda BAD,x
  cmp #"0"
  bcc less0
  pha
