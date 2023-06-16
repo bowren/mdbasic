@@ -1,6 +1,6 @@
 # MDBASIC
 MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
-MDBASIC version 23.06.11<br>
+MDBASIC version 23.06.15<br>
 <br>
 Download the documentation file <b>mdbasic.pdf</b> for details.<br>
 <br>
@@ -81,7 +81,7 @@ TRACE                     :REM RUN PROGRAM WITH TRACE ENABLED
 36 DUMP SCREEN            :REM PRINT TEXT SCREEN TO PRINTER
 38 DUMP BITMAP            :REM PRINT BITMAP TO PRINTER
 39 TEXT                   :REM RETURN TO TEXT MODE
-40 PLAY "AA#BCC#DD#FF#"   :REM PLAY NOTES IN BKGRND
+40 PLAY "AA#BCC#DD#FF#"   :REM PLAY NOTES IN BACKGROUND
 42 VOICE 1,1000           :REM SET VOICE 1 PITCH TO 1000HZ
 43 WAIT 60                :REM PAUSE FOR 60 JIFFIES (1 SEC)
 45 ENVELOPE 1,0,0,15,0    :REM SET VOICE 1 ATTACK/DECAY/SUSTAIN/RELEASE
