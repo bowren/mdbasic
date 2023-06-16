@@ -152,7 +152,7 @@ IMAIN  = $0302 ;Vector to the Main BASIC Program Loop
 IGONE  = $0308 ;Vector to the Routine That Executes the Next BASIC Program Token
 
 ;IRQ Control
-MDBIRQ = $0313 ;MDBASIC IRQ Control Register bit0=play,bit1=flash,bit2=key
+MDBIRQ = $0313 ;MDBASIC IRQ Control Register bit0=play,bit1=playsprite,bit2=key
 CINV   = $0314 ;Vector to IRQ Interrupt Routine
 
 ;CBM BASIC functions
@@ -241,7 +241,6 @@ VERIFY = $e165 ;perform VERIFY
 HALT   = $e386 ;halt program and return to main BASIC loop
 INIT   = $e3bf ;initialize BASIC
 LP2    = $e5b4 ;get a character from the keyboard buffer
-CHKNXT = $e206 ;fetch current character and check for end of line
 
 ;Commodore 64 Kernal API
 CINT   = $ff81 ;initialize screen editor and video chip
@@ -320,7 +319,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.06.12"
+.text "mdbasic 23.06.15"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -411,7 +410,7 @@ cmdtab
 .rta on     ;$91 ON augmented
 .rta wait   ;$92 WAIT augmented
 .rta $e168  ;$93 LOAD
-.rta bsave  ;$94 SAVE $e156
+.rta bsave  ;$94 SAVE augmented
 .rta VERIFY ;$95
 .rta DEF    ;$96
 .rta poke   ;$97 POKE augmented
@@ -512,7 +511,7 @@ cmdtab
 .rta old     ;$f1
 .rta trace   ;$f2
 .rta find    ;$f3
-.rta time    ;$f4
+.rta time    ;$f4 cmd and func
 .rta SNERR   ;$f5 placeholder for round (not a command, func only)
 .rta key     ;$f6 cmd & func
 .rta error   ;$f7 cmd & func
@@ -1167,13 +1166,32 @@ clse7f
 ; FILL x1,y1 TO x2,y2, [scanCode], [color]
 fill
  jsr getcoords
- jsr comchkget
+ jsr ckcom2     ;check for and skip over comma, misop err if missing
+ cmp #","       ;another comma?
  beq srncol
- jsr pokchr      ;get scanCode and perform fill
- jsr CHKNXT     ;check for comma and quit if not found
+ jsr skip73     ;get scan code
+ sta $bb
+;fill text
+ ldx $bf        ;line count
+pokep ldy $be
+nextp lda $bb
+ sta ($fb),y
+ dey
+ bpl nextp
+ lda $fb
+ clc
+ adc #40
+ sta $fb
+ lda $fc
+ adc #$00
+ sta $fc
+ dex
+ bpl pokep
 srncol
- jsr getval      ;get color
+ jsr chkcomm    ;check and skip over comma, quit if not found
+ jsr skip73     ;get color
  sta $02
+;fill color
  ldx $bf
 nxtc ldy $be
  lda $02
@@ -1189,25 +1207,6 @@ nxtcol sta ($fd),y
  sta $fe
  dex
  bpl nxtc
- rts
-pokchr
- jsr skip73      ;get scan code
- sta $bb
- ldx $bf
-pokep ldy $be
-nextp lda $bb
- sta ($fb),y
- dey
- bpl nextp
- lda $fb
- clc
- adc #40
- sta $fb
- lda $fc
- adc #$00
- sta $fc
- dex
- bpl pokep
  rts
 ;
 tokopn
@@ -1594,7 +1593,7 @@ doauto jsr LINGET
  jsr $bc49  ;convert FAC1 to float
  jsr FOUT+2 ;convert FAC1 to ASCII String at $0100
  ldy #1
-getnum lda $00ff,y ;Work Area for Floating Point to String Conversions
+getnum lda BAD-1,y ;Work Area for Floating Point to String Conversions
  beq endnum
  sta KEYD-1,y   ;put char in keyboard buffer
  iny
@@ -1684,7 +1683,7 @@ endprg
 oldrun jmp RUN  ;CBM BASIC - perform RUN
 newrun
  php
- jsr detrap     ;turn off error trapping incase it was enabled in previous run
+ jsr detrap     ;turn off error trapping in case it was enabled in previous run
  jsr clearerr   ;clear last error info
  lda #0
  sta keyflag    ;ensure key trapping is off
@@ -2137,8 +2136,8 @@ newpoke
  lda #TOKEN_TO   ;token to skip over
  jsr CHKCOM+2    ;check for and skip over TO token, syntax error if not found
  jsr skp73_      ;get 2-byte int in $14,$15
- jsr ckcom2      ;throw misop if current char is not comma
- jsr GETBYTC     ;get poke value
+ jsr ckcom2      ;check for and skip over comma, misop err if missing
+ jsr GETBYTC+3   ;get poke value
  stx $fe         ;set poke value
  lda #0
  sta $fd         ;set default poke type 0=SET,1=AND,2=OR,3=EOR
@@ -2147,8 +2146,7 @@ newpoke
  jsr GETBYTC
  stx $fd
  cpx #4
- bcc gopoke
- jmp FCERR
+ bcs baderr2
 gopoke
  dec R6510
  jmp pokee
@@ -2167,15 +2165,8 @@ getlin jsr FINDLN  ;search for line#
 dec5f2 dex
  rts
 ;
-clearerr
- ldy #0
- sty errnum
- dey           ;y is now #$FF
- sty errline   ;make last error line -1
- sty errline+1
- rts
-undef
- jmp UNDEFST   ;UNDEF'D STATEMENT
+undef jmp UNDEFST   ;UNDEF'D STATEMENT
+baderr2 jmp FCERR   ;illegal qty err
 ;
 ; ERROR CLR    :clear last error data
 ; ERROR OFF    :turn off error trapping
@@ -2187,14 +2178,20 @@ error
  bne raiseerr
 erroff
  jsr detrap
-errclr jsr clearerr
- jmp CHRGET
+errclr
+ jsr CHRGET
+clearerr
+ ldy #0
+ sty errnum
+ dey           ;y is now #$FF
+ sty errline   ;make last error line -1
+ sty errline+1
+ rts
 raiseerr
  jsr skip73z  ;valid error number is 1-127
  bmi baderr2  ;128 and over is invalid
  tax
  jmp (IERROR)
-baderr2 jmp FCERR ;illegal qty err
 ;
 ;*******************
 ; SWAP A, B    SWAP A%, B%    SWAP A$, B$
@@ -2207,8 +2204,7 @@ swap
  sta $fd       ;save param1 data type
  lda $0e       ;numeric type int or float
  sta $fe       ;save param1 numeric type
- jsr ckcom2
- jsr CHRGET
+ jsr ckcom2    ;check for and skip over comma, misop err if missing
  jsr PTRGET    ;get param2
  lda $0e       ;param2 numeric type, int or float
  cmp $fe       ;does param2 have the same numeric type as param1?
@@ -2255,9 +2251,7 @@ close
  beq clsfiles
 gfn jsr skip73    ;get file number
  jsr CLOSE        ;close file if open, ignore if not
- jsr CHRGOT       ;get current BASIC txt char
- beq mop4-1       ;stop if no more file numbers
- jsr CHKCOM       ;skip over comma, error if missing
+ jsr chkcomm      ;check for comma, quit if none otherwise skip over it
  jmp gfn          ;process next file number
 clsfiles
  jsr CLALL        ;close all open files
@@ -2411,7 +2405,7 @@ resume
  pla          ;discard calling subroutine
  pla
  tsx
- lda $0101,x
+ lda BAD+1,x
  cmp #TOKEN_ERROR
  beq okresu
  ldx #35      ;can't resume error
@@ -2492,7 +2486,7 @@ return beq oldrtn
  pla          ;discard call to this subroutine
  pla
  tsx
- lda $0101,x
+ lda BAD+1,x
  cmp #TOKEN_GOSUB
  beq resume0
  ldx #12      ;RETURN WITHOUT GOSUB
@@ -2523,7 +2517,10 @@ move
 msbx sta $fc
  jmp moveto
 getfrom
- jsr dbyval
+ jsr CHRGET
+ cmp #","      ;comma means skip over x param
+ beq gety
+ jsr skp73
  sty $fc       ;hibyte of x coordinate
  beq bitof     ;msb off
  cpy #2        ;x coordinate hibyte can only be 0 or 1
@@ -2539,8 +2536,9 @@ msb sta MSIGX  ;x coord hibyte
  lda $14
  sta SP0X,y    ;sprite x coord
  sta $fb
- jsr CHKNXT
- jsr dbyval    ;y2 coord
+gety
+ jsr chkcomm
+ jsr skp73     ;y2 coord
  bne badxy     ;hibyte must be 0
  txa
  ldy $0f       ;sprite# * 2
@@ -2559,8 +2557,8 @@ moveto
  bcs badxy     ;illegal coordinate error
  stx lastplotx
  sty lastplotx+1
- jsr ckcom2    ;throw misop if current char is not comma
- jsr dbyval    ;get y2 coordinate
+ jsr ckcom2    ;check for and skip over comma, misop err if missing
+ jsr skp73     ;get y2 coordinate
  bne badxy     ;hibyte must be 0
  stx lastploty
 ;getspeed
@@ -2597,8 +2595,8 @@ sprite
  beq spriteon
  plp
  jsr sprnum     ;sprite# returned in $be and 2^sprite# in $bf
- jsr ckcom2     ;throw misop if current char is not comma
- jsr comchkget  ;get next char and compare to comma
+ jsr ckcom2     ;check for and skip over comma, misop err if missing
+ cmp #","       ;get next char and compare to comma
  beq scr        ;another comma so skip param
  jsr getbool2   ;sprite visible 0=off, 1=on
  lda $14        ;visible param
@@ -2610,15 +2608,13 @@ sprite
 spron lda SPENA ;turn sprite on
  ora $bf
 onoff sta SPENA
- jsr CHKNXT
-scr jsr comchkget ;get next basic text chr
+scr jsr chkcomm
+ cmp #","
  beq smcr
  jsr getval15   ;color 0-15
  ldy $be        ;sprite# 0-7
  sta SP0COL,y   ;sprite y's color
- jsr CHKNXT    ;stop now if no more params
-smcr
- jsr comchkget  ;get next basic text chr
+smcr jsr chkcomm ;stop now if no more params
  beq spntr
  jsr getbool2   ;get multicolor flag 0 or 1
  bne setm
@@ -2629,8 +2625,8 @@ smcr
 setm lda SPMC
  ora $bf        ;2^sprite#
 skipmc sta SPMC
- jsr CHKNXT
-spntr jsr comchkget
+ jsr chkcomm
+spntr cmp #","
  beq prorty
  jsr skip73     ;get sprite data ptr 0-255 (ptr*64)=start address
 
@@ -2646,8 +2642,8 @@ spntr jsr comchkget
  sta ($61),y    ;sprite y's data ptr
 
 prorty
- jsr CHKNXT    ;check for comma, if end of statement then do not return here
- jsr getbool    ;get sprite to foreground graphics/text priority: 0=over, 1=under
+ jsr chkcomm    ;check for comma, if end of statement then do not return here
+ jsr getbool2   ;get sprite to foreground graphics/text priority: 0=over, 1=under
  bne okpri
  lda $bf        ;2^sprite#
  eor #$ff       ;prepare to turn off bit for sprite
@@ -2689,7 +2685,8 @@ expand
  sta YXPAND
  rts
 getexpxy
- jsr comchkget
+ jsr CHRGET
+ cmp #","
  beq magy
  jsr getbool2   ;expand x param
  beq expx
@@ -2701,9 +2698,9 @@ expx lda $bf    ;2^sprite#
  and XXPAND     ;x expand off
 setmagx
  sta XXPAND     ;x expand on
- jsr CHKNXT
+ jsr chkcomm
 magy
- jsr getbool    ;expand y param
+ jsr getbool2   ;expand y param
  beq clry
  lda YXPAND     ;y expand
  ora $bf        ;2^sprite#
@@ -2734,18 +2731,18 @@ mulclr lda SCROLY ;horiz fine scrolling and control reg
  sta SCROLY        ;Vertical Fine Scrolling and Control Register
  jsr getval
  sta BGCOL1        ;ext bkgnd color reg#1
- jsr CHKNXT       ;check for comma and don't return here if missing
- jsr getval
+ jsr chkcomm       ;check for comma and don't return here if missing
+ jsr skip73
  sta BGCOL2        ;ext bkgnd color reg#2
- jsr CHKNXT
- jsr getval
+ jsr chkcomm
+ jsr skip73
  sta BGCOL3        ;ext bkgnd color reg#3
  rts
 ;MULTI SPRITE [sc1], [sc2]
 mcspri jsr getval
  sta SPMC0         ;mcspr reg#0
- jsr CHKNXT
- jsr getval
+ jsr chkcomm
+ jsr skip73
  sta SPMC1         ;mcspr reg#1
  rts
 ;MULTI TEXT [cc1], [cc2]
@@ -2754,8 +2751,8 @@ chrmap lda SCROLX  ;horiz fine scrolling and control reg
  sta SCROLX
  jsr getval
  sta BGCOL1
- jsr CHKNXT
- jsr getval
+ jsr chkcomm
+ jsr skip73
  sta BGCOL2
  rts
 ;
@@ -2778,7 +2775,8 @@ locate
  stx $bc
  jsr CHRGOT
  beq column  ;end of statement
-row jsr comchkget
+row jsr CHRGET
+ cmp #","
  beq column
  jsr skp73   ;get value as int: ;x=lobyte, y=hibyte
  bne badloc  ;hibyte must be zero
@@ -2790,8 +2788,8 @@ column
  ldy $bc     ;y holds the line (from temp storage area)
  clc         ;clear carry is flag to write new value
  jsr PLOT    ;read/set cursor position on screen
- jsr CHKNXT ;if current char is a comma then continue otherwise quit now
- jsr getbool
+ jsr chkcomm ;if current char is a comma then continue otherwise quit now
+ jsr getbool2
  eor #1      ;flip value so that 1=on 0=off
  sta 204     ;Flash Cursor 0=Flash Cursor, non-zero No Cursor
  rts
@@ -2808,13 +2806,13 @@ color
  beq nochar
  jsr skip73
  sta COLOR      ;current cursor foreground color
- jsr CHKNXT    ;if no more params then stop now
-nochar jsr comchkget
+nochar jsr chkcomm ;if no more params then stop now, otherwise get next char
+ cmp #","       ;another comma?
  beq noback
  jsr getval15
  sta BGCOL0     ;background color
- jsr CHKNXT
-noback jsr getval15_
+noback jsr chkcomm
+ jsr getval15
  sta EXTCOL     ;border color
  rts
 ;
@@ -2877,8 +2875,8 @@ nexbyt lda ($be),y
 dodesign
  jsr skip73    ;get screen code
  jsr times8    ;multiply A reg value times 8
- jsr ckcom2    ;throw misop if current text is not a comma
- jsr getbool   ;get charset
+ jsr ckcom2    ;check for and skip over comma, misop err if missing
+ jsr getbool2  ;get charset
  beq charset0
  lda #$f8      ;charset 1 at $f800
 .byte $2c      ;defeat lda #$f0 by making it bit $f0a9
@@ -2887,20 +2885,16 @@ charset0
  clc
  adc $bf
  sta $bf
- jsr ckcom2    ;throw misop if current text is not a comma
- ldy #0        ;loop for all 8 bytes of data
-gtdata sty $02
- jsr getval
+ ldy #$00      ;loop for all 8 bytes of data
+gtdata
+ sty $02
+ jsr ckcom2    ;check for and skip over comma, misop err if missing
+ jsr skip73
  ldy $02
  sta ($be),y
- jsr ckcom2
- iny 
- cpy #7
+ iny
+ cpy #8
  bne gtdata
- jsr getval
- ldy $02
- iny 
- sta ($be),y
  rts
 ;
 ;*******************
@@ -2992,6 +2986,7 @@ hiresmode
  sta SCROLX         ;apply setting to control register
  jsr comchk
  bne bitmapon
+ jsr CHRGET
  jsr getc2          ;background color for all 8x8 squares
  ldy #0
 pokcol sta $c800,y  ;fill color mem for entire screen
@@ -3018,11 +3013,11 @@ pokcol sta $c800,y  ;fill color mem for entire screen
 ;multi mapcol 0,1,2 bit patterns 01=black, 10=white, 11=red (00 is the background color in BGCOL0)
 mapcol
  jsr getc1
- jsr CHKNXT     ;if no more params then quit otherwise continue
+ jsr chkcomm     ;if no more params then quit otherwise continue
  jsr getc2
 getc3
- jsr CHKNXT
- jsr getval15_   ;c3 (0-15) is used in multicolor mode only bit pattern 11
+ jsr chkcomm
+ jsr getval15    ;c3 (0-15) is used in multicolor mode only bit pattern 11
  sta mapcolc3    ;this color can be in the same 8x8 square that c1 & c2 are in
  rts
 getc1a           ;alternate entry point
@@ -3045,7 +3040,7 @@ getc2
  lda mapcolc1c2  ;again, get global variable storage but for low nibble this time
  and #%11110000  ;erase lo nibble
  sta $02         ;temp var for final byte value calculation
- jsr getval15_   ;c2 (0-15) changes the background of the 8 x 8 square
+ jsr getval15    ;c2 (0-15) changes the background of the 8 x 8 square
  ora $02
  sta mapcolc1c2  ;update global variable for colors
  rts
@@ -3054,8 +3049,7 @@ getc2
 ; PULSE voc#(1-3), width%(0-100)
 pulse jsr ppw
  pha          ;save voice SID register offset (voice#-1)*7
- jsr ckcom2   ;throw misop if current char is not comma
- jsr CHRGET
+ jsr ckcom2   ;check for and skip over comma, misop err if missing
  jsr FRMNUM   ;get width% (0.00 to 100.00)
  lda #<m4095  ;REGVAL=ROUND(40.95*WIDTH%) result in range 0-4095
  ldy #>m4095  ;y=hi byte, a=lo byte pointer to 5-byte FAC value
@@ -3094,8 +3088,8 @@ pulse jsr ppw
 badwav jmp FCERR
 wave jsr ppw   ;get voice SID register offset (voice#-1)*7
  sta $bb       ;save SID register offset
- jsr ckcom2    ;throw misop if current char is not a comma
- jsr getval    ;get waveform single byte operand value into $14
+ jsr ckcom2    ;check for and skip over comma, misop err if missing
+ jsr skip73    ;get waveform single byte operand value into $14
  sta $02       ;get waveform value selection
  cmp #9        ;first bad value
  bcs badwav    ;greater or equal to first bad value
@@ -3387,8 +3381,8 @@ pntweg beq mop3
  bcs hellno
 okvalu stx $fb
  sty $fc
- jsr ckcom2  ;must have a comma before y coord value of 0-199 
- jsr dbyval  ;x=lobyte, y=hibyte
+ jsr ckcom2  ;check for and skip over comma, misop err if missing
+ jsr skp73   ;x=lobyte, y=hibyte
  bne hellno  ;y reg holds hibyte for y coordinate and must be zero
  cpx #200    ;x reg holds lobyte for y coordinate and must be between 0 and 199
  bcs hellno
@@ -3421,8 +3415,8 @@ paint jsr getpnt
 ; bits0-3: quadrant visible 0=no,1=yes, bits4-7: radius line visible 0=no,1=yes
 circle
  jsr getpnt     ;center point x,y
- jsr ckcom2     ;throw misop if current char is not comma
- jsr getval     ;x radius size
+ jsr ckcom2     ;check for and skip over comma, misop err if missing
+ jsr skip73     ;x radius size
  bmi illqty8    ;max x radius 127
  sta $35
  lda SCROLX
@@ -3432,15 +3426,16 @@ circle
  asl $35        ;mc mode needs 2x size
  bmi illqty8    ;mc mode limit is 63
 hirescir
- jsr ckcom2     ;misop error if current char is not comma
- jsr getval     ;y radius size
+ jsr ckcom2     ;check for and skip over comma, misop err if missing
+ jsr skip73     ;y radius size
  bmi illqty8    ;max y radius 127
  sta $36
  lda #%00001111 ;default options
  sta $2a        ;variable to hold value
  jsr CHRGOT
  beq docircle
- jsr comchkget  ;position for options param
+ jsr CHRGET     ;position for options param
+ cmp #","
  beq circlept   ;skip if comma found
  jsr skip73     ;get options value
  sta $2a        ;circle options
@@ -3486,8 +3481,8 @@ illqty8 jmp FCERR     ;illegal quantity error
 text
  beq norm
  jsr getpnt   ;get plot x,y
- jsr ckcom2   ;raise misop err if current char is not comma
- jsr getstr   ;get text string returning ptr in vector ($50)
+ jsr ckcom2   ;check for and skip over comma, misop err if missing
+ jsr getstr0  ;get text string returning ptr in vector ($50)
  lda #1       ;default size value
  sta $57      ;temp var of x size
  sta $58      ;temp var of y size
@@ -3540,7 +3535,7 @@ setscrly
 screen
  beq mop
  cmp #TOKEN_ON
- bcc setscr      ;param should be var or const
+ bcc setscr
  bne scnoff
  jsr screenon
  jmp CHRGET
@@ -3553,8 +3548,8 @@ clrscrn cmp #TOKEN_CLR
  lda #147        ;clear screen
  jsr CHROUT
  jmp CHRGET
-setscr cmp ","
- beq cklast+3
+setscr cmp #","
+ beq cklast
  jsr skip73      ;get num cols
  cmp #40         ;38 or 40 only
  bne chk38
@@ -3567,8 +3562,8 @@ chk38 cmp #38
  lda SCROLX
  and #%11110111  ;bit 3 off 38 columns
  sta SCROLX
-cklast jsr CHKNXT
- jsr getval      ;get num rows
+cklast jsr chkcomm
+ jsr skip73      ;get num rows
  cmp #25         ;24 or 25 only
  bne chk24
  lda SCROLY
@@ -3628,8 +3623,8 @@ keynum
  bcs illqty3
 ;assign function key
 okkey sta $02     ;save key#
- jsr ckcom2       ;throw misop if current char is not comma
- jsr getstr
+ jsr ckcom2       ;check for and skip over comma, misop err if missing
+ jsr getstr0
  dec R6510
  jmp keyy
 onkeyoff lda #0
@@ -3687,8 +3682,8 @@ getcoords
  bcs badscroll
  stx $fb
  stx $be
- jsr ckcom2      ;throw misop if current char is not comma
- jsr dbyval      ;y1
+ jsr ckcom2      ;check for and skip over comma, misop err if missing
+ jsr skp73       ;y1
  bne badscroll   ;hibyte must be 0
  cpx #25         ;max rows
  bcs badscroll
@@ -3706,8 +3701,8 @@ getcoords
  sec
  sbc $be
  sta $be
- jsr ckcom2
- jsr dbyval      ;y2
+ jsr ckcom2      ;check for and skip over comma, misop err if missing
+ jsr skp73       ;y2
  bne badscroll   ;hibyte must be 0
  cpx #25
  bcs badscroll
@@ -3722,8 +3717,8 @@ getcoords
 ; ENVELOPE voice#, attack, decay, sustain, release
 adsr jsr ppw
  sta $bb       ;SID register offset for voice
- jsr ckcom2    ;misop error if current char is not a comma
- jsr getval15_ ;attack
+ jsr ckcom2    ;check for and skip over comma, misop err if missing
+ jsr getval15  ;attack
  asl
  asl
  asl
@@ -3734,8 +3729,8 @@ adsr jsr ppw
  ldx $bb
  sta ATDCY1,x  ;apply attack and decay
 ;sustain and release params
- jsr CHKNXT   ;if end of statement quit now
- jsr getval15_ ;sustain volume
+ jsr chkcomm   ;if end of statement quit now
+ jsr getval15  ;sustain volume
  asl
  asl
  asl
@@ -3771,16 +3766,18 @@ adsr jsr ppw
 ;6. range check to ensure not larger than 2047, error if so
 ;7. store the result in SID registers
 ;
+novoice
+ jmp iverr      ;illegal voice number
 filter
  beq mop2
- cmp #TOKEN_VOICE ;VOICE token?
+ cmp #TOKEN_VOICE
  bne getfreq1
 ;FILTER VOICE voice#, boolean
  jsr getval     ;get voice 1-4
+ beq novoice
  cmp #5         ;4=external input via pin 5 of audio/video port
- bcc savoc
- jmp iverr      ;illegal voice number
-savoc tay       ;voice 1 to 4
+ bcs novoice
+ tay            ;voice 1 to 4
  dey            ;index 0 to 3
  lda bitweights,y ;bit pattern for RESON register
  sta $02        ;remember for later
@@ -3800,6 +3797,8 @@ setfilter
  rts
 ; FILTER cutoff, [resonance], [type]
 getfreq1
+ cmp #","
+ beq reson
  jsr FRMNUM     ;convert current expression to a number and store in FAC1
  jsr MOVEF      ;copy FAC1 to FAC2 (numerator) frequency value 
  lda #<five8
@@ -3851,8 +3850,9 @@ okfilt
 ;the filter resonance control register $d417 
 ;Bits 4-7  Set filter resonance 0-15 0=none, 15=max
 ;
- jsr CHKNXT  ;if no more params then quit otherwise continue
- jsr getval15_ ;get resonance param
+reson
+ jsr chkcomm  ;if no more params then quit otherwise continue
+ jsr getval15  ;get resonance param
  asl          ;resonance is stored in the upper nibble
  asl          ;so this value must be shifted left
  asl
@@ -3886,8 +3886,8 @@ okfilt
 ;3  = 100  hi pass
 ;4  = 101  notch reject
 ;
- jsr CHKNXT  ;if no more params then quit otherwise continue
- jsr getval   ;filter type 0-4
+ jsr chkcomm  ;if no more params then quit otherwise continue
+ jsr skip73   ;filter type 0-4
  cmp #5
  bcs illqty5
  cmp #3       ;3 and 4 need to add 1 to achive desired bit pattern
@@ -3917,7 +3917,6 @@ play
  beq mop2
  cmp #TOKEN_STOP
  bne playy
- jsr playirqoff
  jsr endplay
  jmp CHRGET
 playy
@@ -3930,7 +3929,7 @@ plyspr
  jsr CHRGET
  cmp #TOKEN_OFF
  bne getani
- lda #0         ;all sprites off
+ lda #0         ;all sprite animation off
  sta aniopt
 plysprx
  jmp CHRGET
@@ -3980,34 +3979,49 @@ cpystr lda ($50),y
  sta playbuf1,y ;zero-byte terminator
  sta playindex  ;start index of string
  jsr initvoice
- lda #1
- sta playtime   ;initial wait
- jmp playirqon
+ ldy #1
+ sty playtime   ;initial wait
+ dey
+ lda ($50),y
+ cmp #"!"       ;play in foreground?
+ beq pfgnd
+ jmp playirqon  ;play in background
+;play notes in foreground
+pfgnd lda $a2
+  ldy $c5       ;matrix value of last key pressed
+  cpy #$3f      ;STOP key?
+  beq endplay
+  cmp $a2
+  beq pfgnd+2
+  jsr playit
+  bcc pfgnd
+  rts
 ;
 ; IRQ routine to play next note
 playit
  dec playtime
- bne jea31
+ bne nxtply
  lda R6510
  pha
  and #%11111110
  sta R6510
  jsr notegot
- beq stoplay
+ beq played
  jsr nextn
  pla
  sta R6510
-jea31 rts
-stoplay
- jsr endplay
+nxtply
+ clc
+ rts
+played
  pla
  sta R6510
- jmp playirqoff
-
 endplay
+ jsr playirqoff
  ldx playvoice  ;SID reg offset
  lda playwave   ;select current waveform; start release cycle
  sta VCREG1,x   ;start decay cycle
+ sec
  rts
 
 initvoice
@@ -4066,14 +4080,14 @@ getoffsetparam
  txa
  beq badidx   ;BASIC string indexes are based at 1 (not 0)
  sta $02      ;start index
- jsr ckcom2   ;misop err if current text is not a comma
- jsr getstr   ;get source string as second param
+ jsr ckcom2   ;check for and skip over comma, misop err if missing
+ jsr getstr0  ;get source string as second param
 getsrcparam
  stx $fb
  sty $fc
  sta $fd      ;len of src str
- jsr ckcom2   ;throw misop if current text is not a comma
- jsr getstr   ;find string a = len($52), x=lobyte($50) ptr, y=hibyte($51) ptr
+ jsr ckcom2   ;check for and skip over comma, misop err if missing
+ jsr getstr0  ;find string a = len($52), x=lobyte($50) ptr, y=hibyte($51) ptr
  lda $fd      ;src len
  beq notfound ;zero length strings cannot be searched
  cmp $02      ;start index
@@ -4106,6 +4120,7 @@ notfound ldy #0
 instrend
  jsr GIVAYF   ;convert 16-bit signed int in A,Y regs to 5-byte float in FAC1
  jmp CHKCLS   ;check for and skip closing parentheses
+;
 ;*******************
 ; P=PTR(x) or P=PTR(x%) or P=PTR(x$) where x is the variable name
 ptr
@@ -4114,6 +4129,7 @@ ptr
  lda $48
  ldy $47
  jmp GIVAYF
+;
 ;*******************
 ; V = ROUND(n)   where n=num to round to nearest whole number
 ; V = ROUND(n,d) where n=num to round, d(-9 to +9) = num of places left (-) or right (+) of decimal point
@@ -4177,6 +4193,7 @@ xmul10 jsr MUL10  ;multiply FAC1 by 10
  dex
  bne movedec
 nomul rts
+;
 ;*******************
 ; J = JOY(n) where n=joystick number 1 or 2
 joy
@@ -4592,6 +4609,9 @@ keyirqon
  jsr mdbirqon
  cli
  rts
+;ensure MDBASIC IRQ handler is enabled
+;this subroutine assumes IRQs are already disabled
+;caller should be an IRQ subroutine or use sei/cli
 mdbirqon
  ldy CINV+1
  cpy #>mdbirqhdl
@@ -4607,7 +4627,7 @@ setirq
  rts
 mdbirqoff
  ldx irqtmp   ;restore IRQ vector
- ldy irqtmp+1 ;back to original $EA31
+ ldy irqtmp+1 ;back to original $EA31 or user-defined address
  jmp setirq
 ;
 ;*******************************
@@ -4681,23 +4701,28 @@ peekoper lda ($7a),y
  beq peekoper
 peekdone rts
 ;******************
-comchkget jsr CHRGET ;get next basic text chr
- cmp #","
- rts
-;******************
 comchk
  ldy #0            ;quickly check
  lda ($7a),y       ;if current txtptr
  cmp #","          ;is on a comma
  rts
 ;*******************
-;check for comma and throw missing op error if not there
+chkcomm
+ ldy #0            ;quickly check
+ lda ($7a),y       ;if current txtptr
+ cmp #","          ;is on a comma
+ beq comma         ;return normally if comma exists
+ pla               ;don't return to caller if no comma
+ pla
+ rts
+;*******************
+;check for and skip over comma, misop err if missing
 ckcom2
  ldy #0
  lda ($7a),y
- cmp #","          ;good code should have comma
- bne missop        ;branch not taken saves 1 cycle
- rts               ;faster for non error condition
+ cmp #","
+ bne missop
+comma jmp CHRGET
 missop ldx #31     ;missing operand error
  jmp (IERROR)      ;vector to print basic error message
 ;*******************
@@ -4752,21 +4777,21 @@ skp73 jsr FRMNUM   ;eval numeric expr & type
  rts
 ;*******************
 types
- jsr CHKNXT     ;current char a comma?
- jsr comchkget
+ jsr chkcomm     ;current char a comma?
+ cmp #","
  beq noparam     ;another comma found so skip plot type param
  jsr skip73      ;get plot type value
  cmp #4          ;plot type 0=erase, 1=plot, 2=toggle, 3=none (locate only)
  bcs illqty4
  sta lastplott
+ jsr chkcomm     ;if current char is not a comma do not return here
 noparam
- jsr CHKNXT     ;if current char is not a comma do not return here
  lda SCROLX
  and #%00010000  ;check if multicolor mode on or off
  bne mcplot
  jmp getc1a      ;get hires plot color 0-15
 mcplot
- jsr getval      ;get color selection, multicolor selection index 1-3
+ jsr skip73      ;get color selection, multicolor selection index 1-3
  beq illqty4
  cmp #4          ;mc mode color index selection is 1,2 or 3
  bcs illqty4
@@ -4940,7 +4965,7 @@ md418      .byte 0   ;holds current volume (lo nibble) and filter type (hi nibbl
 irqtmp     .word 0   ;temp IRQ vector storage
 
 ;sprite animation
-aniopt  .byte 0     ;enables animation for 8 sprites with 8 bit flags
+aniopt     .byte 0     ;enables animation for 8 sprites with 8 bit flags
 anidly     .repeat 8,0 ;IRQ delay per sprite
 aniwait    .repeat 8,0 ;param
 ptrbegin   .repeat 8,0 ;param
@@ -4977,12 +5002,13 @@ lastplotx2
 ;********************************************************************
 ;
 *=$a000 ;"MDBASIC RAM under ROM Memory Block"
-playbuf1 .repeat 256,0
 
 ;temp storage for PAINT and SCROLL command
 paintbuf1 .repeat 256,0
 paintbuf2 .repeat 256,0
 paintbuf3 .repeat 256,0
+
+playbuf1 .repeat 256,0
 
 ;table for converting ascii to screen code
 ;zero value indicates ctrl or non-displayable char
@@ -5519,61 +5545,59 @@ ydiv8 lda $fd  ;y coordinate
 ydiv8x ldy #0
  rts
 ;
-txtsetcol
+txtblk
+ lda #%00000000
+.byte $2c
+txtwhi
+ lda #%00010000
+.byte $2c
+txtred
+ lda #%00100000
+.byte $2c
+txtcyan
+ lda #%00110000
+.byte $2c
+txtpurple
+ lda #%01000000
+.byte $2c
+txtgreen
+ lda #%01010000
+.byte $2c
+txtblue
+ lda #%01100000
+.byte $2c
+txtyellow
+ lda #%01110000
+.byte $2c
+txtorange
+ lda #%10000000
+.byte $2c
+txtbrown
+ lda #%10010000
+.byte $2c
+txtlred
+ lda #%10100000
+.byte $2c
+txtgray1
+ lda #%10110000
+.byte $2c
+txtgray2
+ lda #%11000000
+.byte $2c
+txtlgreen
+ lda #%11010000
+.byte $2c
+txtlblue
+ lda #%11100000
+.byte $2c
+txtgray3
+ lda #%11110000
  sta $61
  lda mapcolc1c2  ;hi nibble is dot color
  and #%00001111  ;erase hi nibble
  ora $61         ;temp storage of color
  sta mapcolc1c2  ;update global variable for colors
  rts
-txtblk
- lda #%00000000
- beq txtsetcol
-txtwhi
- lda #%00010000
- bne txtsetcol
-txtred
- lda #%00100000
- bne txtsetcol
-txtcyan
- lda #%00110000
- bne txtsetcol
-txtpurple
- lda #%01000000
- bne txtsetcol
-txtgreen
- lda #%01010000
- bne txtsetcol
-txtblue
- lda #%01100000
- bne txtsetcol
-txtyellow
- lda #%01110000
- bne txtsetcol
-txtorange
- lda #%10000000
- bne txtsetcol
-txtbrown
- lda #%10010000
- bne txtsetcol
-txtlred
- lda #%10100000
- bne txtsetcol
-txtgray1
- lda #%10110000
- bne txtsetcol
-txtgray2
- lda #%11000000
- bne txtsetcol
-txtlgreen
- lda #%11010000
- bne txtsetcol
-txtlblue
- lda #%11100000
- bne txtsetcol
-txtgray3
- lda #%11110000
- bne txtsetcol
 ;
 txtcr
  lda #0
@@ -7246,6 +7270,9 @@ calcptr
  sta $fe     ;apply hibyte of color RAM ptr
  rts
 ;
+nextn0       ;start over from beginning
+ lda #0
+ sta playindex
 nextn2
  jsr notegot
  beq nextn2-1
@@ -7256,7 +7283,7 @@ nextn
 goodnote
  sec            ;ascii of notes must start at A (65)
  sbc #"a"       ;ascii - A(65) starts at 0 for A, 1 for B, etc.
- bmi octchg
+ bmi plyrpt ;octchg
  ldx PALNTSC    ;NTSC or PAL?
  beq wrdidx
  clc            ;adjust note index for PAL
@@ -7309,16 +7336,19 @@ notewait2
 endply
  rts
 
+plyrpt cmp #"@"-"a"
+ beq nextn0
+
 octchg
- cmp #251 ;<
+ cmp #"<"-"a" ;251 ;<
  bne octup2
 prevoct
  dec playoct
  bpl nextn3
  bmi nextoct
 octup2
- cmp #253  ;>
- bne nextn2
+ cmp #">"-"a" ;253  ;>
+ bne nextn3
 nextoct
  inc playoct
  lda playoct
@@ -7332,12 +7362,10 @@ nonnote
  cmp #"v"
  bne notepause
  jsr getdigitval
- beq badvoc     ;voice 0 invalid
+ beq skipnote   ;voice 0 invalid
  cmp #4         ;voice 1,2 or 3 only
- bcc goodvoc
-badvoc lda #1   ;use default voice 1
-goodvoc
- jsr ppw2       ;get SID register offset for voice 
+ bcs skipnote
+ jsr ppw2       ;get SID register offset for voice
  jsr initvoice
  jmp nextn2
 
@@ -7369,7 +7397,7 @@ noteoct
  
 notewave
  cmp #"w"
- bne skipnote
+ bne nextn3
  jsr getdigitval
  cmp #9
  bcs skipnote
@@ -7750,9 +7778,9 @@ nxtbaud
  bne getdb
 opn232 jmp open232
 getdb
- jsr ckcom2+3  ;must be comma else misop
+ jsr ckcom2    ;check for and skip over comma, misop err if missing
 ;get data bits
- jsr comchkget ;get next char & cmp to comma
+ cmp #","      ;another comma?
  beq getstpbits
  jsr rom3      ;data bits (word length) 5,6,7 or 8
  bne badserial ;hibyte must be zero
@@ -7784,7 +7812,8 @@ badserial
  rts
 ;
 getstpbits
- jsr comchkget
+ jsr CHRGET
+ cmp #","
  beq getduplex
  jsr rom3       ;get stop bits (0 or 1)
  bne badserial  ;hibyte must be 0
@@ -7802,7 +7831,8 @@ getstpbits
  beq open232
 ;
 getduplex
- jsr comchkget
+ jsr CHRGET
+ cmp #","
  beq getparity
  jsr rom3       ;duplex (0 or 1)
  bne badserial  ;hibyte must be zero
@@ -7821,7 +7851,8 @@ getduplex
  beq open232
 ;
 getparity
- jsr comchkget
+ jsr CHRGET
+ cmp #","
  beq gethndshk
  jsr rom3       ;parity (0 to 4)
  bne badserial  ;hibyte must be zero
