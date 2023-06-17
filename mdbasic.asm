@@ -319,7 +319,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.06.15"
+.text "mdbasic 23.06.17"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -948,7 +948,7 @@ loop1 iny
 found iny     ;found a command match for every chr in string
  lda newcmd,y ;get current char in command string
  bmi oldend   ;if on last chr of command then continue with old list function
- jsr $ab47    ;output char
+ jsr CHROUT
  jmp found    ;next char
 oldend jmp $a6ef ;list old
 ;
@@ -990,7 +990,7 @@ vars dec R6510
  jmp varss
 ;
 ;*******************
-;DISK "DOS command string"
+;DISK S$                         - DOS command string
 ;"S0:myfile.bas"                 - delete a file
 ;"N0:label,id"                   - full format disk with a label and id
 ;"N0:label"                      - soft format (BAM only) with label
@@ -1501,22 +1501,7 @@ wait
  jsr CHRGOT   ;another param?
  beq delay2   ;no, do jiffy wait
  jsr $b7f1    ;evaluate expression to single byte int to x reg
- stx $49      ;mask1
- ldx #0       ;default for mask2
- jsr CHRGOT   ;mask2 param?
- beq setmask2 ;not provided, use default
- jsr $b7f1    ;evaluate expression to single byte int to x reg
-setmask2
- stx $4a      ;mask2
- ldy #$00
-waiting
- lda ($14),y  ;check mem loc value
- eor $4a      ;apply mask2
- and $49      ;and mask1
- bne waited   ;match, stop now
- jsr STOP
- bne waiting  ;STOP key pressed, stop now
-waited rts
+ jmp WAIT+3   ;continue with original WAIT cmd
 delay2        ;entry point for internal use; set x and y reg accordingly
  clc          ;flag for STOP key
  txa
@@ -1732,11 +1717,14 @@ ioerr jmp $e0f9 ;handle i/o error
 newlod
  cpx #5
  bcs oldload
- dec R6510        ;rom to ram (a000-bfff)
+ dec R6510      ;switch from HIROM to HIRAM (a000-bfff)
  jmp loadd      ;continue under rom with the rest of the new load routine
-romin inc R6510
- jsr CLRCHN
- lda $b8
+romin
+ lda R6510
+ ora #%00000001 ;ensure HIROM active
+ sta R6510
+ jsr CLRCHN     ;restore default I/O devices
+ lda $b8        ;close current open file
  jmp CLOSE
 ;
 newload
@@ -1790,8 +1778,7 @@ oklod2
 oklod3
  lda $9d    ;display message if not in prg mode, #$C0=kernal & ctrl, #$80=ctrl only
  bpl lodone ;don't display load addresses
- lda #" "
- jsr CHROUT
+ jsr $ab3f ; print space
  ldx $2b    ;assume BASIC mem load
  lda $2c
  ldy $02    ;secondary device: 0=BASIC load, 1=binary
@@ -2009,7 +1996,7 @@ sav7a lda $7a
  jsr replac
  dec R6510
  jsr worker
-ckcmma cmp #","
+ cmp #","
  beq sav7a
  jmp craper
 ;
@@ -2712,47 +2699,64 @@ setmagy sta YXPAND
  rts
 ;
 ;*******************
-;MULTI [TEXT] [cc1], [cc2]        - multicolor text mode
-;MULTI COLOR [eb1], [eb2], [eb3]  - extended background color mode
-;MULTI SPRITE [sc1], [sc2]        - multicolor sprite mode color bit patterns 01,11
-;
+;MULTI [TEXT] [cc1], [cc2]         - multicolor text mode
+;MULTI COLOR  [eb1], [eb2], [eb3]  - extended background color mode
+;MULTI SPRITE [sc1], [sc2]         - multicolor sprite mode color bit patterns 01,11
 multi
- beq chrmap
- cmp #TOKEN_TEXT   ;text token
- beq chrmap
- cmp #TOKEN_SPRITE ;sprite token
+ cmp #TOKEN_SPRITE
  beq mcspri
- cmp #TOKEN_COLOR  ;color token
- beq mulclr
- jmp SNERR         ;syntax error
+ cmp #TOKEN_COLOR
+ bne chrmap
 ;MULTI COLOR [eb1], [eb2], [eb3]
-mulclr lda SCROLY ;horiz fine scrolling and control reg
+ lda SCROLY        ;horiz fine scrolling and control reg
  ora #%01000000    ;turn on bit 6 - enable extended background color mode for text
  sta SCROLY        ;Vertical Fine Scrolling and Control Register
- jsr getval
+ jsr CHRGET
+ cmp #","
+ beq geteb2
+ jsr getval15      ;eb1
  sta BGCOL1        ;ext bkgnd color reg#1
+geteb2
  jsr chkcomm       ;check for comma and don't return here if missing
- jsr skip73
+ cmp #","
+ beq geteb3
+ jsr getval15      ;eb2
  sta BGCOL2        ;ext bkgnd color reg#2
+geteb3
  jsr chkcomm
- jsr skip73
+ jsr getval15      ;eb3
  sta BGCOL3        ;ext bkgnd color reg#3
  rts
 ;MULTI SPRITE [sc1], [sc2]
-mcspri jsr getval
+mcspri
+ jsr CHRGET
+ cmp #","
+ beq getsc2
+ jsr getval15      ;sc1
  sta SPMC0         ;mcspr reg#0
+getsc2
  jsr chkcomm
- jsr skip73
+ jsr getval15      ;sc2
  sta SPMC1         ;mcspr reg#1
  rts
-;MULTI TEXT [cc1], [cc2]
-chrmap lda SCROLX  ;horiz fine scrolling and control reg
- ora #%00010000    ;turn on bit 4 - enable multi color text or bitmap mode
+;MULTI [TEXT] [cc1], [cc2]
+chrmap
+ cmp #TOKEN_TEXT
+ bne getcc1
+ jsr CHRGET     ;skip over TEXT token
+getcc1
+ pha
+ lda SCROLX     ;horiz fine scrolling and control reg
+ ora #%00010000 ;turn on bit 4 - enable multi color text or bitmap mode
  sta SCROLX
- jsr getval
+ pla
+ cmp #","
+ beq getcc2
+ jsr getval15   ;cc1
  sta BGCOL1
- jsr chkcomm
- jsr skip73
+getcc2
+ jsr chkcomm    ;check for and skip over comma, if missing then exit cmd
+ jsr getval15   ;cc2
  sta BGCOL2
  rts
 ;
@@ -2795,8 +2799,8 @@ column
  rts
 ;
 ;*****************
-badloc jmp hellno  ;illegal coordinate error
 mop6 jmp missop    ;missing operand error
+badloc jmp hellno  ;illegal coordinate error
 ;
 ;*******************
 ; COLOR [foregndColor (0-31)], [backgndColor (0-15)], [borderColor (0-15)]
@@ -2912,8 +2916,6 @@ clrbyt sta ($62),y
  bne clrbyt
  rts
 ;
-mop7 jmp missop
-;
 ;BITMAP CLR (does not switch to bitmap mode)
 ;BITMAP FILL x1,y1 TO x2,y2, [plotType], [color]
 ;BITMAP OFF
@@ -2949,6 +2951,9 @@ bitmap
  jsr types
  dec R6510
  jmp bitfil         ;perform FILL on rect; put code under ROM
+;
+mop7 jmp missop
+;
 bmon jsr bitmapon
  bne bmclr+3        ;always branches
 bmoff jsr norm
@@ -3012,23 +3017,25 @@ pokcol sta $c800,y  ;fill color mem for entire screen
 ;hires mapcol 0,1   dot color black, background (of 8x8 square of dot) white
 ;multi mapcol 0,1,2 bit patterns 01=black, 10=white, 11=red (00 is the background color in BGCOL0)
 mapcol
+ beq mop7
+ cmp #","
+ beq getc2a
  jsr getc1
- jsr chkcomm     ;if no more params then quit otherwise continue
+getc2a
+ jsr chkcomm
+ cmp #","
+ beq getc3
  jsr getc2
 getc3
  jsr chkcomm
  jsr getval15    ;c3 (0-15) is used in multicolor mode only bit pattern 11
  sta mapcolc3    ;this color can be in the same 8x8 square that c1 & c2 are in
  rts
-getc1a           ;alternate entry point
- jsr CHRGET
 getc1
- php
  lda mapcolc1c2  ;last plot color plotted
  and #%00001111  ;erase hi nibble
  sta $02         ;tmp storage
- plp
- jsr getval15_0  ;c1 (0-15) changes the color of the plotting dots
+ jsr getval15    ;c1 (0-15) changes the color of the plotting dots
  asl             ;move low nibble to high nibble
  asl
  asl
@@ -3083,7 +3090,7 @@ pulse jsr ppw
 ; 6 pulse + saw tooth 
 ; 7 pulse + saw tooth + triangle
 ; 8 noise
-;WAVE [voice#], [waveform], [gate], [sync], [ring], [disable]
+;WAVE voice#, waveform, [gate], [sync], [ring], [disable]
 ;
 badwav jmp FCERR
 wave jsr ppw   ;get voice SID register offset (voice#-1)*7
@@ -3209,7 +3216,8 @@ draw
 drawloop
  cmp #"c"
  bne chkplottype
- jsr getc1a
+ jsr CHRGET
+ jsr getc1
  jmp nxtmov
 chkplottype cmp #"p"
  bne godraw
@@ -3241,7 +3249,7 @@ drawloop2
  jmp drawloop
 ;
 ;*******************
-; PLOT x,y, type, color
+; PLOT x,y, [type], [color]
 plot jsr getpnt
  jsr types
 plotit dec R6510
@@ -3988,14 +3996,13 @@ cpystr lda ($50),y
  jmp playirqon  ;play in background
 ;play notes in foreground
 pfgnd lda $a2
-  ldy $c5       ;matrix value of last key pressed
-  cpy #$3f      ;STOP key?
-  beq endplay
-  cmp $a2
-  beq pfgnd+2
-  jsr playit
-  bcc pfgnd
-  rts
+ cmp $a2
+ beq pfgnd+2
+ jsr STOP       ;stop key pressed?
+ beq endplay
+ jsr playit
+ bcc pfgnd
+ rts
 ;
 ; IRQ routine to play next note
 playit
@@ -4207,19 +4214,20 @@ joy
  eor #%00000001
  tay
  lda CIAPRA,y
- and #$0f
+ tay             ;remember full value
+ and #%00001111  ;lower nibble holds position value
  sta $14
- lda CIAPRA,y
- and #$10   ;fire button
+ tya             ;restore full value
+ and #%00010000  ;bit 4 is fire button
  sta $15
- sec
  lda #$0f
+ sec
  sbc $14
  ldx $15
  cpx #$10
  beq nofire
  ora #%10000000 ;fire flag
-nofire tay  ;lowbyte
+nofire tay      ;lowbyte
  jmp nobutt
 illqty7 jmp FCERR ;display illegal qty error
 ;
@@ -4234,15 +4242,16 @@ keyfn
 ; E = ERROR(n) where n=0 Error Number, n=1 Error Line Number
 err
  jsr getfnparam
- cmp #1
- beq geterrline
- bcs illqty7
- ldy errnum  ;y=lobyte
- jmp nobutt
-geterrline
+ tya
+ beq errorno
+ dey
+ bne illqty7
  ldy errline
  lda errline+1
  jmp GIVAYF  ;convert binary int to FAC then return
+errorno
+ ldy errnum  ;y=lobyte
+ jmp nobutt
 ;
 ;*******************
 ; P = POT(n) where n=potentiometer number (1-4)
@@ -4274,19 +4283,18 @@ waitl dey
  ldx #$ff       ;set data direction to output
  stx CIDDRA
  cli
- tay
- pla            ;restore pot num
- lsr
- bcc b2or4
- lda #$04
- bne and02      ;always branches
-b2or4 lda #$08
-and02 and $02
+ tay            ;lobyte value
+ pla            ;restore pot num 1-4
+ lsr            ;carry set if odd pot num
+ lda #%00000100 ;odd port nums should check bit 2 for fire button
+ bcs and02      ;odd port num
+ asl            ;even port nums should check bit 3 for fire button
+and02 bit $02   ;fire button pressed?
  bne nobutt
-butt lda #$01   ;hibyte
- bne endpot     ;always branches
-nobutt lda #$00 ;hibyte
-endpot jmp GIVAYF  ;convert binary int to FAC then return
+butt lda #$01   ;hibyte 1 to indicate fire button pressed
+.byte $2c       ;defeats LDA #0 by making it BIT $00A9
+nobutt lda #0   ;hibyte 0 to indicate fire button not pressed
+ jmp GIVAYF     ;convert binary int to FAC then return
 ;
 ;*******************
 ; P = PEN(n) where (n=0:x, n=1:y) to read $D013 (X) and $D014 (Y) Light Pen Registers.
@@ -4406,7 +4414,10 @@ error2 txa
  jmp READY    ;print READY. then continue with BASIC main loop
 doerr
  sta $02
- jsr $a67a    ;empty the stack
+ jsr romin    ;ensure HIROM enabled and restore default devices
+ lda #0       ;default I/O channel keyboard/screen
+ sta $13      ;set current I/O channel
+ jsr $a67a    ;empty system and temp string stacks
  jsr norm     ;set text mode normal display
  lda $9d      ;0=prg mode
  beq prgmode
@@ -4416,11 +4427,7 @@ prgmode lda #147 ;clr screen
  jsr CHROUT
  lda #$80     ;only control messages - SEARCHING, SAVING, FOUND, etc.
  jsr SETMSG
- jsr CLRCHN   ;restore default devices
- lda #$00     ;channel for screen/keyboard
- sta $13      ;set current I/O channel
- lda #"?"
- jsr CHROUT   ;print question mark '?'
+ jsr $ab45    ;print question mark
  lda $02      ;current error num
  beq usererr  ;user defined error numbers
  cmp #36      ;are 0, 35-127
@@ -4442,23 +4449,23 @@ hibyer jsr printstr
  lda #$69    ;address of the zero-terminated string ($a369) = "  ERROR"
  ldy #$a3
  jsr STROUT  ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
- ldy $3a
- iny
- bne inline
+ ldy $3a     ;hibyte of txtptr of beginning of line where error occured
+ iny         ;a value of $ff indicates immediate mode
+ bne inline  ;otherwise program mode
  jmp READY   ;print READY. then continue with BASIC main loop
 inline
  jsr INPRT   ;display text IN {line#}
- lda $39
- sta $14
+ lda $39     ;put the current BASIC line number
+ sta $14     ;where FINDLN expect to see it
  lda $3a
  sta $15
- jsr FINDLN
+ jsr FINDLN   ;set position to line num causing error
  jsr printcr
  lda #$01     ;set LIST flag on
  sta listflag
  jsr $a6c9    ;perform LIST line#
- ldx #$02
- ldy #$00
+ ldx #$02     ;place cursor on first digit of line number
+ ldy #$00     ;which would be line 2 column 0
  clc
  jsr PLOT
  jmp (IMAIN)  ;main BASIC loop
@@ -4777,19 +4784,19 @@ skp73 jsr FRMNUM   ;eval numeric expr & type
  rts
 ;*******************
 types
- jsr chkcomm     ;current char a comma?
+ jsr chkcomm     ;if current char is comman skip over it
  cmp #","
  beq noparam     ;another comma found so skip plot type param
  jsr skip73      ;get plot type value
  cmp #4          ;plot type 0=erase, 1=plot, 2=toggle, 3=none (locate only)
  bcs illqty4
  sta lastplott
- jsr chkcomm     ;if current char is not a comma do not return here
 noparam
+ jsr chkcomm     ;if current char is not a comma do not return here
  lda SCROLX
  and #%00010000  ;check if multicolor mode on or off
  bne mcplot
- jmp getc1a      ;get hires plot color 0-15
+ jmp getc1       ;get hires plot color 0-15
 mcplot
  jsr skip73      ;get color selection, multicolor selection index 1-3
  beq illqty4
@@ -4884,6 +4891,8 @@ printer lda ($22),y
  iny
  bne printer
 prtdone rts
+printeq lda #"="
+.byte $2c
 printqt lda #"""
 .byte $2c
 printcr lda #$0d
@@ -6845,8 +6854,7 @@ type lda $fb  ;skip over 2 byte name
  beq string  ;otherwise int
  lda #"%"    ;display integer symbol
  jsr CHROUT
- lda #"="    ;display equals symbol
- jsr CHROUT
+ jsr printeq
  ldy #0
  lda ($fb),y ;first byte is lobyte for int
  pha
@@ -6856,16 +6864,15 @@ type lda $fb  ;skip over 2 byte name
  pla         ;hibyte in a reg
  jsr rom1    ;switch ROM in and call routines to print int in a,y regs
  jmp nxtvar  ;process next variable
-float lda #"="
- jsr CHROUT
+float
+ jsr printeq
  lda $fb
  ldy $fc
  jsr rom2
  jmp nxtvar
 string lda #"$"
  jsr CHROUT
- lda #"="
- jsr CHROUT
+ jsr printeq
  jsr printqt
  ldy #0
  lda ($fb),y
@@ -8327,16 +8334,20 @@ clk50
 ;
 ;initialize BASIC vectors
 newvec
- lda #0
- sta EXTCOL     ;border color black
+;set colors customizable by POKEing the lda value
+ lda #14        ;light blue
+ sta COLOR      ;current text color
+ lda #0         ;black
  sta BGCOL0     ;background color black
+ lda #0         ;black
+ sta EXTCOL     ;border color black
+;
+ lda #0
  sta traceflag  ;trace flag off
  sta keyflag    ;key trapping off
  jsr sidclr
  lda #$80       ;all keys to repeat
  sta RPTFLAG
- lda #14        ;light blue
- sta COLOR      ;current foreground color for text
  lda #<toknew
  sta $0304
  lda #>toknew
