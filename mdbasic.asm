@@ -2685,8 +2685,8 @@ expx lda $bf    ;2^sprite#
  and XXPAND     ;x expand off
 setmagx
  sta XXPAND     ;x expand on
- jsr chkcomm
 magy
+ jsr chkcomm
  jsr getbool2   ;expand y param
  beq clry
  lda YXPAND     ;y expand
