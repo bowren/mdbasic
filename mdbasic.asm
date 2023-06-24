@@ -319,7 +319,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.06.23"
+.text "mdbasic 23.06.24"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -4037,12 +4037,12 @@ initvoice
 
 ;init SID registers for selected voice
  tax
+ lda #%01000000 ;select default waveform to pulse; start decay cycle
+
 inivoc
  stx playvoice  ;voice register offset
-
- lda #%01000000 ;select default waveform to pulse; start decay cycle
- sta playwave
- sta VCREG1,x
+ sta playwave   ;waveform
+ sta VCREG1,x   ;apply waveform/start release cycle
 
  lda #0
  sta FRELO1,x
@@ -5118,6 +5118,7 @@ infwords
 .word $02A6  ;PAL or NTSC
 .word $FF80  ;Kernal version/system id
 .word playindex ;index of next note to play in play string
+.word playoct ;current play octave
 ;
 ;function key assignments, 8 keys, 16 bytes each
 keybuf
@@ -8482,12 +8483,12 @@ inff
  cmp #10
  bcc useinfbytes
  beq csraddr
- cmp #17
+ cmp #18
  beq membank
  bcs basline
  sec
- sbc #11
- asl
+ sbc #11        ;first infoword index
+ asl            ;double byte ptr index
  tax
  lda infwords+1,x
  tay
@@ -8530,7 +8531,7 @@ membank
  eor #%00000011
  jmp goinf
 basline
- cmp #18
+ cmp #19
  bne dtaline
  ldy $3a
  lda $39
