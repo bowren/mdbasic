@@ -319,7 +319,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.06.17"
+.text "mdbasic 23.06.23"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -888,8 +888,8 @@ fntime
 ;get time as a string
  jsr getimstr
  inc R6510
- ldy #1
- lda #$00
+ ldy #>BAD
+ lda #<BAD
  jsr STRLIT
  jmp CHRGET
 ;get time in seconds since midnight
@@ -900,10 +900,8 @@ time2
  pha
  lda $7b
  pha
- lda #<tim2sec
- sta $7a
- lda #>tim2sec
- sta $7b
+ stx $7a
+ sty $7b
  jsr FRMNUM
  pla
  sta $7b
@@ -1471,6 +1469,7 @@ vol
  lda md418   ;read current value which includes upper nibble that holds the resonance
  and #%11110000  ;clear volume bits only
  ora $02     ;apply new volume bits only
+setvol
  sta md418   ;maintain global var value for reading
  sta SIGVOL  ;SID register lower nibble is volume, upper nibble is filter type
  rts
@@ -1483,7 +1482,7 @@ sys
  sta $02      ;current register index offset
 regloop
  jsr CHRGOT   ;another param?
- beq sysend 
+ beq sysend
  jsr $b7f1    ;evaluate expression to single byte int to x reg
  txa
  inc $02      ;next regsiter index
@@ -3134,7 +3133,7 @@ wave jsr ppw   ;get voice SID register offset (voice#-1)*7
 waveit
  ldx $bb
  lda $02
- sta VCREG1,x ;select waveform and start release cycle if attac/decay/sustain is already started
+ sta VCREG1,x ;select waveform and start release cycle if attack/decay/sustain is already started
  rts
 ;
 ;subroutine to clear SID
@@ -3265,12 +3264,12 @@ memnorm
 line
  beq mop3
  cmp #TOKEN_INPUTN ;input# token (line input#)
- bcc liner     ;line x,y to a,z
- jsr ERRDIR    ;throw error if direct mode; only x reg is affected
+ bcc liner         ;line x,y to a,z
+ jsr ERRDIR        ;throw error if direct mode; only x reg is affected
  cmp #TOKEN_INPUT  ;input token (line input)
- beq getprompt ;perform line input prompt$, var$
- bcc lineinput ;perfrom lineinput# num%, var$
-badinp jmp SNERR     ;syntax error
+ beq getprompt     ;perform line input prompt$, var$
+ bcc lineinput     ;perfrom lineinput# num%, var$
+badinp jmp SNERR
 lineinput
  jsr getval   ;get single byte param in a reg, misop err if missing
  tax
@@ -3912,9 +3911,7 @@ settype
  lda md418    ;current value using SID mock register
  and #%10001111 ;clear bits 4-6, keep the rest
  ora $02      ;apply new value
- sta md418    ;save value to SID mock register
- sta SIGVOL   ;apply to SID register
- rts
+ jmp setvol
 ;
 ;*******************
 ; PLAY S$
@@ -4032,20 +4029,21 @@ endplay
  rts
 
 initvoice
- sta playvoice  ;voice register offset
- tax
+ ldx #30        ;default note length to 30 jiffies (approx 1/60 sec.)
+ stx playlen    ;note duration 30/60=0.50 sec.
 
- lda #%00010000 ;select default waveform to triangle; start decay cycle
+ ldx #4         ;default octave 4
+ stx playoct
+
+;init SID registers for selected voice
+ tax
+inivoc
+ stx playvoice  ;voice register offset
+
+ lda #%01000000 ;select default waveform to pulse; start decay cycle
  sta playwave
  sta VCREG1,x
 
- lda #30        ;default note length to 30 jiffies (approx 1/60 sec.)
- sta playlen    ;note duration 30/60=0.50 sec.
-
- lda #4         ;default octave 4
- sta playoct
-
-;init SID registers for selected voice
  lda #0
  sta FRELO1,x
  sta FREHI1,x
@@ -4055,15 +4053,13 @@ initvoice
 
  lda #$10       ;set attack duraction to 8ms (hi nibble)
  sta ATDCY1,x   ;and decay duration to 6ms (lo nibble)
- lda #$F8       ;set sustain volume to 15    (hi nibble)
+ lda #$F8       ;set sustain volume to 15 (hi nibble)
  sta SUREL1,x   ;and release duration to 300ms (lo nibble)
 
  lda md418      ;all voices volume register mirror
- bne vocrdy     ;if volume is 0 (off) turn it up!
+ bne initvoice-1 ;if volume is 0 (off) turn it up!
  ora #%00001111 ;set volume to max
- sta md418
- sta SIGVOL     ;SID main volume register
-vocrdy rts
+ jmp setvol
 ;
 ;******************************************
 ;* mdbasic functions instr(), ptr(), csr(), pen(), joy(), pot(), hex$() *
@@ -4643,16 +4639,10 @@ mdbirqoff
 ;get voice param and convert to SID register offset in accumulator
 ppw
  jsr getvoc  ;1,2,3
-ppw2
- tay
- dey         ;0,1,2
- tya
- beq t7done  ;voice1=0, voice2=7, voice3=14
- lda #7      ;voice 2 offset 7
- dey
- beq t7done
- asl         ;voice 3 offset 14
-t7done rts   ;result in accumulator
+ppw2 tax
+ dex         ;0,1,2
+ lda sidoff,x
+ rts
 ;
 ;*******************
 ;multiply the value in accumulator by 8 returning word in $be,$bf
@@ -4908,6 +4898,9 @@ filestr .null " files."
 
 ;table for calculating 2^n where n=0-7
 bitweights .byte 1,2,4,8,16,32,64,128
+
+;SID voice register offsets
+sidoff .byte 0,7,14
 ;
 ;10 tokens use line numbers that need to be renumbered when using renum
 gotok
@@ -4950,22 +4943,6 @@ keyptr     .word 0 ;basic txt ptr of statement for ON KEY GOSUB line#
 keyline    .word $FFFF ;line number for ON KEY subroutine
 keyidx     .byte 0 ;current index of char to put in keyboard buffer via IRQ
 keystrflg  .byte 0 ;flag to indicate key string from KEY cmd
-;expression to calc seconds since midnight
-tim2sec
-.text "(d"  ;placholder for 1/10 sec
-.byte $ad   ;divide token
-.text "10)"
-.byte $aa   ;plus token
-.text "ss"  ;placeholder for seconds
-.byte $aa   ;plus token
-.text "(60"
-.byte $ac   ;times token
-.text "mm)" ;placeholder for minutes
-.byte $aa   ;plus token
-.text "(3600"
-.byte $ac   ;times token
-.text "hh)" ;placeholder for hours
-.byte 0
 
 ;SID mock registers
 md417      .byte 0   ;holds current filter control and resonance
@@ -4993,9 +4970,9 @@ moveflag   .byte 0   ;flag for LINE function for which cmd is executing; 0=LINE,
 autonum    .word 10  ;hold 2-byte value of auto line numbering setting
 
 ;PLAY command use only - used during IRQ
-playtime   .byte 0   ;current jiffies till next note for each voice
-playvoice  .byte 0   ;SID register offset for each voice
-playwave   .byte 0   ;waveform for each voice
+playtime   .byte 0   ;current jiffies till next note
+playvoice  .byte 0   ;SID register offset for play voice
+playwave   .byte 0   ;waveform for play notes
 
 ;********************************************************************
 ;* Temp variables during subroutine execution only (local vars)     *
@@ -5042,10 +5019,10 @@ ascctrl
 .byte 146,147,149,150,151,152,153,154
 .byte 155,156,157,158,159
 ascctlfn
-.word txtwhi,txtcr,txtlc,txtdwn,txtrvson,txthome,txtbs,txtred
-.word txtright,txtgreen,txtblue,txtorange,txtcr,txtuc,txtblk,txtcsrup
-.word txtrvsoff,txtbitclr,txtbrown,txtlred,txtgray1,txtgray2,txtlgreen,txtlblue
-.word txtgray3,txtpurple,txtleft,txtyellow,txtcyan
+.word txtclr,txtcr,txtlc,txtdwn,txtrvson,txthome,txtbs,txtclr
+.word txtright,txtclr,txtclr,txtclr,txtcr,txtuc,txtclr,txtcsrup
+.word txtrvsoff,txtbitclr,txtclr,txtclr,txtclr,txtclr,txtclr,txtclr
+.word txtclr,txtclr,txtleft,txtclr,txtclr
 
 ;table for printing a bitmap screen
 bmdt
@@ -5140,6 +5117,7 @@ infwords
 .word GDCOL  ;color under cursor
 .word $02A6  ;PAL or NTSC
 .word $FF80  ;Kernal version/system id
+.word playindex ;index of next note to play in play string
 ;
 ;function key assignments, 8 keys, 16 bytes each
 keybuf
@@ -5554,53 +5532,21 @@ ydiv8 lda $fd  ;y coordinate
 ydiv8x ldy #0
  rts
 ;
-txtblk
- lda #%00000000
-.byte $2c
-txtwhi
- lda #%00010000
-.byte $2c
-txtred
- lda #%00100000
-.byte $2c
-txtcyan
- lda #%00110000
-.byte $2c
-txtpurple
- lda #%01000000
-.byte $2c
-txtgreen
- lda #%01010000
-.byte $2c
-txtblue
- lda #%01100000
-.byte $2c
-txtyellow
- lda #%01110000
-.byte $2c
-txtorange
- lda #%10000000
-.byte $2c
-txtbrown
- lda #%10010000
-.byte $2c
-txtlred
- lda #%10100000
-.byte $2c
-txtgray1
- lda #%10110000
-.byte $2c
-txtgray2
- lda #%11000000
-.byte $2c
-txtlgreen
- lda #%11010000
-.byte $2c
-txtlblue
- lda #%11100000
-.byte $2c
-txtgray3
- lda #%11110000
+;find index of ascii value in color code table
+txtclr
+ txa             ;ASCII value
+ ldx #15         ;colors 0-15
+clrtab
+ cmp $e8da,x     ;PETASCII color code table
+ beq xindex
+ dex
+ bpl clrtab
+xindex
+ txa             ;index of color
+ asl             ;move to hi-nibble
+ asl
+ asl
+ asl
  sta $61
  lda mapcolc1c2  ;hi nibble is dot color
  and #%00001111  ;erase hi nibble
@@ -5805,13 +5751,13 @@ noinc51
 texted jmp memnorm
 ;execute function index by y
 fndctrl2
+ tax            ;save ascii value
  tya
  asl
  tay
  lda ascctlfn,y
  sta $55
- iny
- lda ascctlfn,y
+ lda ascctlfn+1,y
  sta $56
  lda #>nxtchar-1
  pha
@@ -7290,7 +7236,7 @@ nextn
 goodnote
  sec            ;ascii of notes must start at A (65)
  sbc #"a"       ;ascii - A(65) starts at 0 for A, 1 for B, etc.
- bmi plyrpt ;octchg
+ bmi plyrpt
  ldx PALNTSC    ;NTSC or PAL?
  beq wrdidx
  clc            ;adjust note index for PAL
@@ -7329,7 +7275,7 @@ playnote
  tya 
  sta FREHI1,x   ;voice x freq hi byte
  lda playwave   ;select current waveform
- ora #%00000001 ;and start attack/decay cycle
+ ora #%00000001 ;and start attack/decay/sustain cycle
  sta VCREG1,x   ;make sound via waveform setting
 
  jsr notegot
@@ -7372,8 +7318,14 @@ nonnote
  beq skipnote   ;voice 0 invalid
  cmp #4         ;voice 1,2 or 3 only
  bcs skipnote
- jsr ppw2       ;get SID register offset for voice
- jsr initvoice
+ jsr ppw2       ;get voice register offset
+ cmp playvoice  ;already using this voice?
+ beq skipnote
+ tax            ;new voice register offset
+ ldy playvoice  ;old voice register offset
+ lda playwave   ;current waveform
+ sta VCREG1,y   ;start decay cycle for current voice
+ jsr inivoc     ;set new voice
  jmp nextn2
 
 notepause
@@ -7385,7 +7337,7 @@ notepause
  jsr getdigitval
  bpl notewait2  ;use supplied wait length
  bmi notewait   ;use current note length as default wait length
- 
+
 notelen
  cmp #"l"
  bne noteoct
@@ -7413,8 +7365,6 @@ notewave
  asl
  asl
  sta playwave   ;set new waveform
- ldx playvoice
- sta VCREG1,x   ;bit0 = start release
 skipnote jmp nextn2
 
 getdigitval     ;get 2-digit value 0-99
@@ -8132,9 +8082,8 @@ linend lda $fb
 prgend
  rts
 ;
-;get 8-byte time string at $0100 
+;get 8-byte time string into string buffer
 getimstr
- ldy #0
  lda TO2HRS      ;reading pauses capture of time to these registers
 ;convert 12 hour clock to 24 hour clock
  php
@@ -8153,6 +8102,7 @@ not12
  adc #%00010010  ;12 in BCD format
  cld
 getime
+ ldy #0
  jsr timedig
  lda TO2MIN
  jsr timedig
@@ -8187,41 +8137,52 @@ setterm
  rts
 ;
 ;build expression to convert time$ to time in seconds since midnight
+;expression to calc seconds since midnight
+tim2sec
+.text "00.0" ;placeholder for seconds and one tenth of second
+.byte $aa    ;plus token
+.text "60"
+.byte $ac    ;times token
+.text "00"   ;placeholder for minutes
+.byte $aa    ;plus token
+.text "3600"
+.byte $ac    ;times token
+.text "00"   ;placeholder for hours
+.byte 0
+;
 dotime
+;copy to buffer the expression string for calc time in seconds
+ ldy #18
+cpytimfun
+ lda tim2sec,y
+ sta BAD+10,y
+ dey
+ bpl cpytimfun
+;get time string
  jsr getimstr  ;returns TO2TEN in A reg
 ;1/10 second
  and #15
  clc
  adc #"0"
- ldy #1
- sta tim2sec,y
+ sta BAD+13    ;one tenth of a second
 ;seconds
- ldx #7
- ldy #8
- lda BAD,x
- sta tim2sec,y
- dey
- dex
- lda BAD,x
- sta tim2sec,y
+ lda BAD+6
+ sta BAD+10
+ lda BAD+7
+ sta BAD+11
 ;minutes
- ldx #4
- ldy #15
- lda BAD,x
- sta tim2sec,y
- dey
- dex
- lda BAD,x
- sta tim2sec,y
+ lda BAD+3
+ sta BAD+18
+ lda BAD+4
+ sta BAD+19
 ;hours
- ldx #1
- ldy #25
- lda BAD,x
- sta tim2sec,y
- dey
- dex
- lda BAD,x
- sta tim2sec,y
+ lda BAD
+ sta BAD+26
+ lda BAD+1
+ sta BAD+27
+;return ptr to string result
+ ldx #<BAD+10
+ ldy #>BAD+10
  rts
 ;
 ;set time from string
@@ -8521,7 +8482,7 @@ inff
  cmp #10
  bcc useinfbytes
  beq csraddr
- cmp #16
+ cmp #17
  beq membank
  bcs basline
  sec
@@ -8569,7 +8530,7 @@ membank
  eor #%00000011
  jmp goinf
 basline
- cmp #17
+ cmp #18
  bne dtaline
  ldy $3a
  lda $39
