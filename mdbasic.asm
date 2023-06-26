@@ -319,7 +319,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.06.24"
+.text "mdbasic 23.06.25"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -4893,6 +4893,29 @@ prtchr and #$7f
 ;* Global Constant Storage
 ;********************************************************************
 
+;INF() memory locations
+infbytes
+.byte PNTR      ;csr logical column
+.byte TBLX      ;csr physical line
+.byte BLNSW     ;csr blink enabled
+.byte LNMX      ;csr max columns on current line (39 or 79)
+.byte GDBLN     ;ASCII value of char under csr (when blinking)
+.byte TMPASC    ;ASCII value of last character printed to screen
+.byte INSRT     ;insert char count
+.byte LDTND     ;num open files
+.byte NDX       ;num chars in keyboard buffer
+infwords
+.word SHFLAG
+.word COLOR     ;current foreground color for text
+.word GDCOL     ;color under cursor
+.word $02A6     ;PAL or NTSC
+.word $FF80     ;Kernal version/system id
+.word playindex ;index of next note to play in play string
+.word playoct   ;current play octave
+.word lastplotx ;last plotted x coordinate
+.word lastploty ;last plotted y coordinate
+
+;
 nolin .null "65535"
 filestr .null " files."
 
@@ -5100,26 +5123,6 @@ scrolls .rta scroll0,scroll1,scroll2,scroll3
 ;strings for keylist
 addchr .shift "+chr$("
 
-;INF() memory locations
-infbytes
-.byte PNTR   ;csr logical column
-.byte TBLX   ;csr physical line
-.byte BLNSW  ;csr blink enabled
-.byte LNMX   ;csr max columns on current line (39 or 79)
-.byte GDBLN  ;ASCII value of char under csr (when blinking)
-.byte TMPASC ;ASCII value of last character printed to screen
-.byte INSRT  ;insert char count
-.byte LDTND  ;num open files
-.byte NDX    ;num chars in keyboard buffer
-infwords
-.word SHFLAG
-.word COLOR  ;current foreground color for text
-.word GDCOL  ;color under cursor
-.word $02A6  ;PAL or NTSC
-.word $FF80  ;Kernal version/system id
-.word playindex ;index of next note to play in play string
-.word playoct ;current play octave
-;
 ;function key assignments, 8 keys, 16 bytes each
 keybuf
 .text "list"
@@ -8477,15 +8480,35 @@ iodone
  lda $61
 iodone1 rts
 ;
+getdot
+ jsr getpoint   ;put last plot coordinates in x = $fb,$fc and y = $fd
+ jsr ydiv8
+ lda R6510
+ pha
+ and #%11111101 ;bit1 0=HIRAM
+ sei            ;disable IRQ since kernal HIROM is switching to HIRAM
+ sta R6510
+ lda ($c3),y
+ and ptab2,x    ;only desired bits, multicolor uses 2
+ beq rtndot     ;pixel not set
+ lda #1         ;pixel set
+rtndot
+ tay
+ pla
+ sta R6510
+ cli
+ tya
+ jmp goinf
+;
 inff
  tax
  beq phycol
  cmp #10
  bcc useinfbytes
  beq csraddr
- cmp #18
- beq membank
- bcs basline
+ cmp #20
+ beq getdot
+ bcs membank
  sec
  sbc #11        ;first infoword index
  asl            ;double byte ptr index
@@ -8526,12 +8549,14 @@ int4
  sta $61
  rts
 membank
+ cmp #21
+ bne basline
  lda CI2PRA
  and #%00000011
  eor #%00000011
  jmp goinf
 basline
- cmp #19
+ cmp #22
  bne dtaline
  ldy $3a
  lda $39
