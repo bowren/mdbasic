@@ -131,7 +131,7 @@ TI2ALO = $dd04 ;Timer A (lo byte)
 TI2AHI = $dd05 ;Timer A (hi byte)
 ;
 ;TOD #2 Registers
-TO2TEN = $dd08 ;TOD clock tenths of a seconds in BCD format (lower nibble)
+TO2TEN = $dd08 ;TOD clock tenths of a seconds in BCD format (lower nybble)
 TO2SEC = $dd09 ;TOD clock seconds in BCD format
 TO2MIN = $dd0a ;TOD clock minutes in BCD format
 TO2HRS = $dd0b ;TOD clock hours in BCD format
@@ -319,7 +319,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.06.25"
+.text "mdbasic 23.07.05"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -1466,12 +1466,12 @@ old lda #$08
 vol
  jsr getval15_0 ;only values from 0-15 allowed
  sta $02
- lda md418   ;read current value which includes upper nibble that holds the resonance
+ lda md418   ;read current value which includes upper nybble that holds the resonance
  and #%11110000  ;clear volume bits only
  ora $02     ;apply new volume bits only
 setvol
  sta md418   ;maintain global var value for reading
- sta SIGVOL  ;SID register lower nibble is volume, upper nibble is filter type
+ sta SIGVOL  ;SID register lower nybble is volume, upper nybble is filter type
  rts
 ;
 ;*******************
@@ -1527,13 +1527,11 @@ auto
  beq autooff
  cmp #TOKEN_ON
  bne autoset
- jsr applyauto
- jmp CHRGET
+ lda #1
+.byte $2c
 autooff
- lda $e449     ;$A483 is original main loop
- sta IMAIN
- lda $e44a
- sta IMAIN+1
+ lda #0
+ sta autoflag
  jmp CHRGET
 autoset jsr skp73
  lda $15
@@ -1546,23 +1544,36 @@ okauto ora $14
  sta autonum+1
  lda $14
  sta autonum
-applyauto lda #<aline
- sta IMAIN
- lda #>aline
- sta IMAIN+1
+applyauto
+ lda #1
+ sta autoflag
  rts
-;**auto line numbering routine**
-aline jsr INLIN
+;
+;******************
+; MDBASIC immediate mode input via vector (IMAIN)
+;******************
+immed
+ lda SCROLY
+ eor #%00010000
+ and #%00110000
+ beq aline
+ jsr norm       ;restore normal display
+;determine next line number
+aline
+ jsr INLIN
  stx $7a
  sty $7b
- jsr CHRGET
+ jsr CHRGET     ;carry clear when numeral
  tax
  beq aline
  ldx #$ff
  stx $3a
- bcc doauto
- jmp $a496
-doauto jsr LINGET
+ bcc doauto     ;numeric input
+ jmp $a496      ;non-line number input
+doauto
+ jsr LINGET
+ lda autoflag
+ beq eauto
  jsr CHRGOT
  beq eauto
  lda $14
@@ -2913,10 +2924,20 @@ clrbyt sta ($62),y
  bne clrbyt
  inc $63
  bne clrbyt
+ lda mapcolc1c2     ;last set background color
+setbmcol
+ ldy #0
+pokcol sta $c800,y  ;fill color mem for entire screen
+ sta $c900,y
+ sta $ca00,y        ;1000 bytes, not 1024 bytes
+ sta $cb00-24,y     ;this overlaps to prevent clearing sprite ptrs
+ iny
+ bne pokcol
  rts
 ;
-;BITMAP CLR (does not switch to bitmap mode)
+;BITMAP CLR
 ;BITMAP FILL x1,y1 TO x2,y2, [plotType], [color]
+;BITMAP ON
 ;BITMAP OFF
 ;BITMAP [colorMode], [bkgndColor]
 ;colorMode 0=hires, 1=multicolor (mc)
@@ -2926,12 +2947,12 @@ clrbyt sta ($62),y
 ;MAPCOL c1,c2,c3 (c3 mc mode only) to change colors:
 ;hires c1 (0-15) dot color, c2 (0-15) 8x8 square bkgnd color, c3 not used but can be set
 ;multicolor uses dual plotted bit pattern to select the color:
-; BGCOL0 (0-15) color for bit pattern 00
-;     c1 (0-15) color for bit pattern 01
-;     c2 (0-15) color for bit pattern 10
-;     c3 (0-15) color for bit pattern 11
-;NOTE when in mc mode graphics cmds use color index 1-3 (not color value 0-15)
-;as a color parameter to select the color from mc pallete
+;  00 from BGCOL0 (0-15)
+;  01 from video matrix hi-nybble: c1 (0-15)
+;  10 from video matrix lo-nybble: c2 (0-15)
+;  11 from color RAM lo-nybble:    c3 (0-15)
+;NOTE when in mc mode all graphics cmds use color index 1-3 (not color value 0-15)
+;as a color parameter to select the color from tri-color pallete
 ;
 bitmap
  beq mop7
@@ -2992,14 +3013,8 @@ hiresmode
  bne bitmapon
  jsr CHRGET
  jsr getc2          ;background color for all 8x8 squares
- ldy #0
-pokcol sta $c800,y  ;fill color mem for entire screen
- sta $c900,y
- sta $ca00,y        ;1000 bytes, not 1024 bytes
- sta $cb00-24,y     ;this overlaps to prevent clearing sprite ptrs
- iny
- bne pokcol
- beq bitmapon       ;will always branch
+ jsr setbmcol
+ jmp bitmapon
 ;
 ;*******************
 ;
@@ -3009,9 +3024,9 @@ pokcol sta $c800,y  ;fill color mem for entire screen
 ; c2 background color (0-15) of dot in 8x8 square (lower 4-bits in Color RAM)
 ;In multi color mode (c1,c2,c3):
 ;    00 Background Color Register 0 BGCOL0 ($D021)
-; c1 01 Upper nibble of Video Matrix (scan code)
-; c2 10 Lower nibble of Video Matrix (scan code)
-; c3 11 Lower nibble of Color RAM for Video Matrix ($D800-$DBE8)
+; c1 01 Upper nybble of Video Matrix (scan code)
+; c2 10 Lower nybble of Video Matrix (scan code)
+; c3 11 Lower nybble of Color RAM for Video Matrix ($D800-$DBE8)
 ;
 ;hires mapcol 0,1   dot color black, background (of 8x8 square of dot) white
 ;multi mapcol 0,1,2 bit patterns 01=black, 10=white, 11=red (00 is the background color in BGCOL0)
@@ -3032,19 +3047,19 @@ getc3
  rts
 getc1
  lda mapcolc1c2  ;last plot color plotted
- and #%00001111  ;erase hi nibble
+ and #%00001111  ;erase hi nybble
  sta $02         ;tmp storage
  jsr getval15    ;c1 (0-15) changes the color of the plotting dots
- asl             ;move low nibble to high nibble
+ asl             ;move low nybble to high nybble
  asl
  asl
  asl
- ora $02         ;apply new value to high nibble while keeping original low nibble value
+ ora $02         ;apply new value to high nybble while keeping original low nybble value
  sta mapcolc1c2  ;replace global variable storage for c1 (plot color)
  rts
 getc2
- lda mapcolc1c2  ;again, get global variable storage but for low nibble this time
- and #%11110000  ;erase lo nibble
+ lda mapcolc1c2  ;again, get global variable storage but for low nybble this time
+ and #%11110000  ;erase lo nybble
  sta $02         ;temp var for final byte value calculation
  jsr getval15    ;c2 (0-15) changes the background of the 8 x 8 square
  ora $02
@@ -3067,7 +3082,7 @@ pulse jsr ppw
  lda $15
  cmp #$10     ;0-4095 only (12-bit value)
  bcs badwav
- sta PWHI1,y  ;Pulse Waveform Width (hi nibble)
+ sta PWHI1,y  ;Pulse Waveform Width (hi nybble)
  lda $14
  sta PWLO1,y  ;Pulse Waveform Width (lo byte)
  rts
@@ -3418,7 +3433,7 @@ paint jsr getpnt
 ;
 ;*******************
 ; CIRCLE xcenter, ycenter, xsize, ysize, [options], [plottype], [color]
-; options are represented in 8 bits grouped by nibbles:
+; options are represented in 8 bits grouped by nybbles:
 ; bits0-3: quadrant visible 0=no,1=yes, bits4-7: radius line visible 0=no,1=yes
 circle
  jsr getpnt     ;center point x,y
@@ -3526,11 +3541,11 @@ ne dec R6510
 ;
 screenoff
  lda SCROLY
- and #%11101111  ;bit4 = 1 screen off
+ and #%11101111  ;bit4 = 0 screen off
  jmp setscrly
 screenon
  lda SCROLY
- ora #%00010000  ;bit4 = 0 screen on
+ ora #%00010000  ;bit4 = 1 screen on
 setscrly
  sta SCROLY
  rts
@@ -3859,12 +3874,12 @@ okfilt
 ;
 reson
  jsr chkcomm  ;if no more params then quit otherwise continue
- jsr getval15  ;get resonance param
- asl          ;resonance is stored in the upper nibble
+ jsr getval15 ;get resonance param
+ asl          ;resonance is stored in the upper nybble
  asl          ;so this value must be shifted left
  asl
  asl
- ora md417    ;include voice number in lower nibble
+ ora md417    ;include voice number in lower nybble
  sta md417    ;store for future read (cannot read SID registers, only write)
  sta RESON    ;SID's Output Filter Resonance Control Register
 ;get the type 0-4 if present, stop otherwise
@@ -4049,12 +4064,12 @@ inivoc
  sta FREHI1,x
  sta PWLO1,x    ;in case user select pulse waveform
  lda #$08       ;set the pulse duty cycle to 50% (12-bit reg val 0-4095, 25%=2048)
- sta PWHI1,x    ;lower nibble only, upper nibble is unused (12-bit value)
+ sta PWHI1,x    ;lower nybble only, upper nybble is unused (12-bit value)
 
- lda #$10       ;set attack duraction to 8ms (hi nibble)
- sta ATDCY1,x   ;and decay duration to 6ms (lo nibble)
- lda #$F8       ;set sustain volume to 15 (hi nibble)
- sta SUREL1,x   ;and release duration to 300ms (lo nibble)
+ lda #$10       ;set attack duraction to 8ms (hi nybble)
+ sta ATDCY1,x   ;and decay duration to 6ms (lo nybble)
+ lda #$F8       ;set sustain volume to 15 (hi nybble)
+ sta SUREL1,x   ;and release duration to 300ms (lo nybble)
 
  lda md418      ;all voices volume register mirror
  bne initvoice-1 ;if volume is 0 (off) turn it up!
@@ -4211,7 +4226,7 @@ joy
  tay
  lda CIAPRA,y
  tay             ;remember full value
- and #%00001111  ;lower nibble holds position value
+ and #%00001111  ;lower nybble holds position value
  sta $14
  tya             ;restore full value
  and #%00010000  ;bit 4 is fire button
@@ -4366,7 +4381,8 @@ resvec
 ;***********************
 ;* new RUN-STOP vector *
 ;***********************
-runstp lda #$7f
+runstp
+ lda #$7f
  sta CI2ICR
  ldy CI2ICR
  bmi nothin
@@ -4376,15 +4392,13 @@ runstp lda #$7f
 ;********************
 ;* new BREAK vector *
 ;********************
-brkirq jsr IOINIT
- lda #$04        ;initialize to 1024 ($0400)
- sta HIBASE      ;text page hi byte pointer
+brkirq
+ jsr norm
+ jsr IOINIT
  jsr $e518       ;initialize screen and keyboard
- lda R6510
- and #%11111110
- sta R6510       ;switch LOROM to LORAM
+ dec R6510       ;LORAM signal select RAM
  jsr newvec      ;init vectors
- inc R6510       ;switch LORAM to LOROM
+ inc R6510       ;LORAM signal select ROM (BASIC)
  jsr CLALL
  ldx $fd9f       ;original CBM IRQ vector ($ea31) for CIA #1
  ldy $fda0       ;driven by CIA #1 Timer B
@@ -4396,10 +4410,11 @@ brkirq jsr IOINIT
  sta CI2ICR      ;clear NMI event flags and enable NMI events
  jmp ($a002)     ;warm start vector
 nothin jmp $fe72 ;NMI RS-232 Handler
-;*********************
-;* new error handler *
-;*********************
-errors lda listflag  ;is LIST currently executing?
+;*************************
+;* MDBASIC ERROR HANDLER *
+;*************************
+errors
+ lda listflag ;is LIST currently executing?
  beq error2   ;list flag is off
  lda #0
  sta listflag ;list flag off
@@ -4821,7 +4836,7 @@ ptrhi           ;determine hibyte for address of sprite pointers
  sta $62        ;VIC-II Base Address hibyte 0=$00, 1=$40, 2=$80 ,3=$C0
 ;determine location of sprite data pointers
  lda VMCSB      ;calc screen RAM page offset (n*1K) 1=$0400, 2=$0800, 3=$0C00, etc.
- and #%11110000 ;upper nibble holds the number of 1K chunks
+ and #%11110000 ;upper nybble holds the number of 1K chunks
  lsr            ;convert to offset for hibyte, 1K=(4*256), 1=4, 2=8, 3=12, etc.
  lsr            ;zero shifted into carry by lsr so it is clear
  adc $62        ;base+offset
@@ -4953,8 +4968,9 @@ five8 .byte $83,$39,$99,$99,$9a  ;FAC binary representation of 5.8
 ;* Global Variable Storage
 ;********************************************************************
 
-traceflag  .byte 0 ;trace flag 0=off, 1-on
-listflag   .byte 0 ;list flag 0=off, 1=on
+autoflag   .byte 0 ;auto line numbering flag: 0=off, 1=on
+traceflag  .byte 0 ;trace flag: 0=off, 1=on
+listflag   .byte 0 ;list flag: 0=off, 1=on
 keyflag    .byte 0 ;key capture mode 0=disabled, 1=enabled, 2=paused
 keyentry   .byte 0 ;scan code of the last key captured with ON KEY statement enabled
 errnum     .byte 0 ;last error number that occured, default 0 (no error)
@@ -4969,22 +4985,22 @@ keystrflg  .byte 0 ;flag to indicate key string from KEY cmd
 
 ;SID mock registers
 md417      .byte 0   ;holds current filter control and resonance
-md418      .byte 0   ;holds current volume (lo nibble) and filter type (hi nibble)
+md418      .byte 0   ;holds current volume (lo nybble) and filter type (hi nybble)
 
 irqtmp     .word 0   ;temp IRQ vector storage
 
 ;sprite animation
 aniopt     .byte 0     ;enables animation for 8 sprites with 8 bit flags
-anidly     .repeat 8,0 ;IRQ delay per sprite
-aniwait    .repeat 8,0 ;param
-ptrbegin   .repeat 8,0 ;param
-ptrend     .repeat 8,0 ;param
+anidly     .repeat 8,0 ;IRQ driven count-down timer for each sprite
+aniwait    .repeat 8,0 ;cmd param for each sprite for count-down begin
+ptrbegin   .repeat 8,0 ;param for each sprite starting data pointer
+ptrend     .repeat 8,0 ;param for each sprite ending data pointer
 
 ;GENERAL GRAPHICS COMMANDS (Shared):
 lastplotx  .word 0   ;last plotted dot's x coord
 lastploty  .byte 0   ;last plotted dot's y coord
 lastplott  .byte 1   ;last plot type used
-mapcolc1c2 .byte $15 ;current plot color; hi nibble = c1 (white), lo nibble = c2 (green)
+mapcolc1c2 .byte $15 ;current plot color; hi nybble = c1 (white), lo nybble = c2 (green)
 mapcolc3   .byte 7   ;c3 (1-3) multicolor mode color for bit pattern 11 (default yellow)
 mapcolbits .byte 8   ;(values 8,16,24) used for plotting a dot on a multi-color bitmap
 
@@ -5057,8 +5073,6 @@ bmdt
 .byte $a1,$bb,$f2,$1a,$08,$20,$20,$20,$f2,$09,$09,$be,$a1,$92,$bb,$f2
 .byte $1a,$09,$12,$20,$92,$20,$12,$20,$f2,$1a,$0a,$20,$92,$20,$12,$20
 .byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
-;
-.byte 0 ;place holder for this spot seems to be messed up on start
 ;
 ;PLAY command temp vars used during IRQ
 temp1     .byte 0
@@ -5416,7 +5430,7 @@ pokadd
  lda $fc        ;temp var hibyte of x coord
  beq nod010     ;x is less than 256
  lda $07        ;temp var of sprite's bit#
- ora MSIGX      ;MSB of sprites 0-7 x coordinate 
+ ora MSIGX      ;MSB of sprites 0-7 x coordinate
  bne std010
 nod010 lda $07
  eor #$ff
@@ -5489,14 +5503,14 @@ colorb sta ($c3),y ;write byte with bit pattern targeting the one bit in hires o
  lda $fb     ;x coordinate lobyte
  ror         ;out of carry
  lsr         ;to calc x/8
- lsr 
+ lsr
  clc
  adc $ecf0,y ;video matrix lowbyte at line y
  sta $c3
  lda btab,y  ;video maxtrix hibyte offset
  adc #$c8    ;video matrix starts at $c800 in bitmap mode
  sta $c4
- lda mapcolc1c2 ;hires dot color (hi nibble) and background color of 8x8 square (lo nibble)
+ lda mapcolc1c2 ;hires dot color (hi nybble) and background color of 8x8 square (lo nybble)
  ldy #0
  sta ($c3),y
  lda $c4
@@ -5547,13 +5561,13 @@ clrtab
  bpl clrtab
 xindex
  txa             ;index of color
- asl             ;move to hi-nibble
+ asl             ;move to hi-nybble
  asl
  asl
  asl
  sta $61
- lda mapcolc1c2  ;hi nibble is dot color
- and #%00001111  ;erase hi nibble
+ lda mapcolc1c2  ;hi nybble is dot color
+ and #%00001111  ;erase hi nybble
  ora $61         ;temp storage of color
  sta mapcolc1c2  ;update global variable for colors
  rts
@@ -5771,7 +5785,7 @@ fndctrl2
 ;
 ;**************************
 painter
- ldx #$01
+ ldx #1         ;bits per pixel, 1=hires, 2=multicolor
  ldy #$07
  lda SCROLX
  and #%00010000 ;check if multicolor mode on or off
@@ -5836,14 +5850,6 @@ fdp1 inc $fd
  lda $fc
  adc #$00
  sta $fc
- lda $c5      ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
- cmp #$3f     ;STOP key?
- bne paintit  ;stop painting
- jmp norm     ;restore text mode (stop key pressed)
-epaint
- jmp memnorm  ;switch LORAM back to LOROM and HIRAM back to HIROM
-paintit 
- lda $fc
  beq peekit
  lda $fb
  cmp #$40
@@ -5864,7 +5870,14 @@ fillit
  lda $fd
  cmp #$c8
  bcs fillit
+;check STOP key
+ lda $c5
+ cmp #$3f
+ beq epaint
  jmp beginp
+epaint
+ jmp memnorm  ;switch LORAM back to LOROM and HIRAM back to HIROM
+;
 readb jsr ydiv8
  stx $aa
  lda R6510
@@ -6976,9 +6989,9 @@ pekbyt
  cli            ;****enable irqs
  txa            ;get saved value
  and $02
- cmp #16        ;hi nibble to lo nibble for indexing 
+ cmp #16        ;hi nybble to lo nybble for indexing 
  bcc ttatx      ;value is between 0 and 15, good index
- lsr            ;move hi nibble to lo nibble for indexing 
+ lsr            ;move hi nybble to lo nybble for indexing 
  lsr
  lsr
  lsr
@@ -8313,6 +8326,10 @@ newvec
  jsr sidclr
  lda #$80       ;all keys to repeat
  sta RPTFLAG
+ lda #<immed
+ sta IMAIN
+ lda #>immed
+ sta IMAIN+1
  lda #<toknew
  sta $0304
  lda #>toknew
