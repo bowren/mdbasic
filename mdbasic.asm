@@ -319,7 +319,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.07.05"
+.text "mdbasic 23.09.10"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -563,7 +563,7 @@ ilvne  .shift "illegal voice number"  ;32
 illspr .shift "illegal sprite number" ;33
 ilcoor .shift "illegal coordinate"    ;34
 cantre .shift "can't resume"          ;35
-usrerr .shift "user defined"          ;36
+usrerr .shift "user defined"          ;36 to 127 and 0
 ;
 erradd .word misop, ilvne, illspr, ilcoor, cantre, usrerr
 ;
@@ -1130,8 +1130,7 @@ dumpvars jsr opnprt0
  jsr vars
  jmp closer+2
 dumplist jsr opnprt0
- lda #$01
- sta listflag
+ jsr lstrap
  jsr opget   ;calls CHRGET first thing!
  jsr $a6c9   ;perform list
  jsr printcr ;print carriage return
@@ -1150,6 +1149,7 @@ dumpfiles jsr opnprt0
  jsr CHRGET ;skip over FILES token
  jsr files
 ;close MDBASIC file handles and restore std io channels
+clsmdb
  lda #0
  sta $13
 clse7e
@@ -1555,27 +1555,27 @@ applyauto
 immed
  lda SCROLY
  eor #%00010000
- and #%00110000
+ and #%00110000 ;is screen off or bitmap mode on?
  beq aline
  jsr norm       ;restore normal display
-;determine next line number
 aline
- jsr INLIN
+ jsr INLIN      ;input a BASIC line into buffer
  stx $7a
  sty $7b
  jsr CHRGET     ;carry clear when numeral
  tax
  beq aline
- ldx #$ff
- stx $3a
- bcc doauto     ;numeric input
- jmp $a496      ;non-line number input
+ ldx #$ff       ;indicate immediate mode by setting
+ stx $3a        ;line number hi byte to invalid value
+ bcc doauto     ;input begins with numeric value
+ jmp $a496      ;non-line number input, tokenize then execute
 doauto
  jsr LINGET
  lda autoflag
  beq eauto
  jsr CHRGOT
  beq eauto
+;determine next line number
  lda $14
  clc
  adc autonum
@@ -1601,18 +1601,20 @@ eauto jmp $a49f ;main loop for direct mode
 ;*******************
 ; TRACE line#
 ;runs the program with trace mode enabled
-trace pha ;save CHRGET value
- lda #$ff
- sta $f9
- sta $fa
+trace
+ php     ;save flags from CHRGET
+ lda #1
  ldx #<exccmd
  ldy #>exccmd
  jsr settrace
- pla     ;restore CHARGET value
+ plp     ;restore flags from CHARGET
  jmp RUN
 ;**trace subroutine during prg execution
-trace1 lda $9d ;prg mode?
- beq trace2
+trace1
+ ldy $3a     ;when current line num hibyte is $FF (invalid)
+ iny         ;then immediate mode
+ bne trace2
+;turn off trace mode
  lda #$00
  ldx #<execut
  ldy #>execut
@@ -1621,32 +1623,25 @@ settrace
  stx IGONE
  sty IGONE+1
  rts
-trace2 lda $39
- cmp $f9
- bne copyln
- lda $3a
- cmp $fa
- beq etrace
-copyln lda $39 ;copy line#
+trace2
+ lda $39
  sta $14
- sta $f9
  lda $3a
  sta $15
- sta $fa
- ldy #$4f
- lda HIBASE
- sta clrtop+2
- lda #" "
-clrtop sta $0400,y
- dey
- bpl clrtop
- lda PNTR   ;remember current cursor position
+;clear top 2 lines
+ ldx #0
+ jsr $e9ff
+ inx
+ jsr $e9ff
+;save current cursor position on stack
+ lda PNTR
  pha
  lda TBLX
  pha
  jsr weglst ;find and display line number in $14,$15
  pla        ;restore original cursor position
  tax
+;restore cursor position from stack
  pla
  tay
  clc
@@ -1664,8 +1659,8 @@ weglst
  jsr $a82c  ;test STOP key for break in program
  lda #19    ;chr 19 = cursor home
  jsr CHROUT
- ldy #$01
- sty listflag
+ jsr lstrap
+ ldy #1
  jmp $a6d7  ;perform LIST of current line
 endprg
  jsr $a67a  ;empty the stack
@@ -2313,6 +2308,18 @@ entrap         ;enable error trapping
  ldx #<trap
  ldy #>trap
  bne seterrvec ;hibyte of vector will always be non-zero
+lstrap
+ ldx IERROR
+ ldy IERROR+1
+ stx oldtrap
+ sty oldtrap+1
+ ldx #<retrap
+ ldy #>retrap
+ bne seterrvec ;hibyte of vector will always be non-zero
+retrap
+ ldx oldtrap
+ ldy oldtrap+1
+ bne seterrvec
 detrap         ;enable error trapping
  ldx #<errors
  ldy #>errors
@@ -2324,9 +2331,10 @@ seterrvec
 ;*******************************************
 ; error trap routine for ON ERROR RESUME NEXT
 ;*******************************************
-resumenext     ;ON ERROR RESUME NEXT
- lda $9d       ;0=suppress msgs (program running mode)
- bne quitrun
+resumenext
+ ldy $3a       ;when current line num hibyte is $FF (invalid)
+ iny           ;then immediate mode
+ beq quitrun
  txa
  bmi olerr
  stx errnum    ;update last error number
@@ -2334,41 +2342,21 @@ resumenext     ;ON ERROR RESUME NEXT
  sta errline+1
  lda $39
  sta errline
-nxtstmt        ;prepare next stmt for execution
- ldy #0
- lda ($7a),y
- bne _a807
- ldy #2
- lda ($7a),y
- clc
- bne _a7ce
- jmp endprg    ;return control to main BASIC loop
-_a7ce iny
- lda ($7a),y
- sta $39
- iny
- lda ($7a),y
- sta $3a
- tya
- adc $7a
- sta $7a
- bcc _a7e1
- inc $7b
-_a7e1 jmp pullit
-_a807 cmp #$3a
- beq _a7e1
- jmp REM
+ jmp DATA      ;scan for start of next BASIC stmt
 ;
 quitrun
  jsr detrap    ;disable error trapping
-olerr jmp errors
+olerr
+ jmp errors    ;use normal error routine
 ;*******************************************
 ; general error trap routine
 ;*******************************************
-trap lda $9d   ;MSGFLG Flag Kernal Message Control
- bne quitrun   ;$C0=kernal & ctrl, $80=ctrl only, $40=kernal only, $00=none
+trap
+ ldy $3a       ;when current line num hibyte is $FF (invalid)
+ iny           ;then immediate mode
+ beq quitrun
  txa           ;x holds the error num
- bmi olerr     ;bit 7 on means no error
+ bmi olerr     ;bit7, 0=error, 1=switch to immediate mode
  stx errnum    ;set current error number
  jsr detrap    ;disable error trapping
  lda #3        ;3 plus the 2 for this jsr is 5 bytes
@@ -2383,7 +2371,7 @@ trap lda $9d   ;MSGFLG Flag Kernal Message Control
  lda $39
  sta errline
  pha
- lda #TOKEN_ERROR ;error token
+ lda #TOKEN_ERROR
  pha
  lda txtptr
  sta $7a
@@ -2411,17 +2399,17 @@ okresu
  jsr clearerr ;clear last error info
  jsr CHRGOT
  beq resum    ;no token or digit, then resume with statement that caused the error
- cmp #TOKEN_NEXT ;next token?
+ cmp #TOKEN_NEXT
  bne resume0
 ;perform RESUME NEXT - next statement after the one that caused the error
  pla          ;discard ERROR token
- pla 
+ pla
  sta $39      ;pull line number from stack and make current
- pla 
+ pla
  sta $3a
- pla 
+ pla
  sta $7a      ;pull text ptr from stack and make current
- pla 
+ pla
  sta $7b
  ldy #0       ;the first stmt on line will begin
  lda ($7a),y  ;at the end marker of previous line.
@@ -2446,16 +2434,40 @@ resume0
  pla
  jsr CHRGOT
  jsr GOTO     ;perform goto (adjust txt ptr to given line num)
- jmp nxtstmt
+nxtstmt       ;prepare next stmt for execution
+ ldy #0
+ lda ($7a),y
+ bne _a807
+ ldy #2
+ lda ($7a),y
+ clc
+ bne _a7ce
+ jmp endprg    ;return control to main BASIC loop
+_a7ce iny
+ lda ($7a),y
+ sta $39
+ iny
+ lda ($7a),y
+ sta $3a
+ tya
+ adc $7a
+ sta $7a
+ bcc _a7e1
+ inc $7b
+_a7e1 jmp pullit
+_a807 cmp #$3a
+ beq _a7e1
+ jmp REM
+;
 ;perform RESUME - with statement that caused the error
 resum pla     ;discard ERROR token
  pla          ;pull line number from stack and make current
  sta $39
- pla 
+ pla
  sta $3a
  pla          ;pull text ptr from stack and make current
  sta $7a
- pla 
+ pla
  sta $7b
 ;empty stack to where the base call was made
 pullit
@@ -2471,7 +2483,7 @@ pullit2
  bne pullit2
 stoppull
  lda #$19     ;25=empty temp string index value
- sta $16      ;reset temp string stack 
+ sta $16      ;reset temp string stack
  lda #0
  sta $10      ;SUBFLG Subscript Reference to an Array or User-Defined Function Call (FN)
  jsr entrap   ;enable error trapping
@@ -3121,25 +3133,25 @@ wave jsr ppw   ;get voice SID register offset (voice#-1)*7
  sta $02       ;waveform
  jsr comchk
  bne waveit
- jsr getbool
+ jsr getbool   ;gate
  ora $02       ;position is bit 0
  sta $02
  jsr comchk
  bne waveit
- jsr getbool
+ jsr getbool   ;sync
  asl           ;position is bit 1
  ora $02
  sta $02
  jsr comchk
  bne waveit
- jsr getbool
+ jsr getbool   ;ring
  asl           ;position is bit 2
  asl
  ora $02
  sta $02
  jsr comchk
  bne waveit
- jsr getbool
+ jsr getbool   ;disable
  asl           ;position is bit 3
  asl
  asl
@@ -3148,7 +3160,7 @@ wave jsr ppw   ;get voice SID register offset (voice#-1)*7
 waveit
  ldx $bb
  lda $02
- sta VCREG1,x ;select waveform and start release cycle if attack/decay/sustain is already started
+ sta VCREG1,x ;apply setting for voice
  rts
 ;
 ;subroutine to clear SID
@@ -4410,31 +4422,27 @@ brkirq
  sta CI2ICR      ;clear NMI event flags and enable NMI events
  jmp ($a002)     ;warm start vector
 nothin jmp $fe72 ;NMI RS-232 Handler
+;
 ;*************************
 ;* MDBASIC ERROR HANDLER *
 ;*************************
-errors
- lda listflag ;is LIST currently executing?
- beq error2   ;list flag is off
- lda #0
- sta listflag ;list flag off
- rts
-error2 txa
+errors txa
  bpl doerr    ;bit 7 off means error condition
  jsr detrap   ;ensure error trapping off
+redy
  jmp READY    ;print READY. then continue with BASIC main loop
 doerr
  sta $02
- jsr romin    ;ensure HIROM enabled and restore default devices
- lda #0       ;default I/O channel keyboard/screen
- sta $13      ;set current I/O channel
  jsr $a67a    ;empty system and temp string stacks
- jsr norm     ;set text mode normal display
- lda $9d      ;0=prg mode
- beq prgmode
+ jsr clsmdb   ;close mdb file handles 126 & 127 and set default I/O channels
+ jsr norm     ;set text mode normal display and ensure BASIC ROM enabled
+ ldy $3a      ;when current line num hibyte is $FF (invalid)
+ iny          ;then immediate mode
+ bne prgmode  ;otherwise program mode
  lda #13      ;cr
 .byte $2c     ;defeat lda #147 by making it BIT $93A9
-prgmode lda #147 ;clr screen
+prgmode
+ lda #147     ;clr screen
  jsr CHROUT
  lda #$80     ;only control messages - SEARCHING, SAVING, FOUND, etc.
  jsr SETMSG
@@ -4454,26 +4462,25 @@ erridx asl    ;calc 2-byte index to message
  lda erradd,x ;MDBASIC errors 31-35
  ldy erradd+1,x
  bne hibyer   ;always branches since hi-byte would not be 0
-cbmerr lda $a326,x  ;$A328-$A364 Error Message Vector Table
+cbmerr
+ lda $a326,x  ;$A328-$A364 Error Message Vector Table
  ldy $a327,x
-hibyer jsr printstr
- lda #$69    ;address of the zero-terminated string ($a369) = "  ERROR"
+hibyer
+ jsr printstr
+ lda #$69     ;address of the zero-terminated string ($a369) = "  ERROR"
  ldy #$a3
- jsr STROUT  ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
- ldy $3a     ;hibyte of txtptr of beginning of line where error occured
- iny         ;a value of $ff indicates immediate mode
- bne inline  ;otherwise program mode
- jmp READY   ;print READY. then continue with BASIC main loop
-inline
- jsr INPRT   ;display text IN {line#}
- lda $39     ;put the current BASIC line number
- sta $14     ;where FINDLN expect to see it
+ jsr STROUT   ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
+ ldy $3a      ;hibyte of txtptr of beginning of line where error occured
+ iny          ;a value of $ff indicates immediate mode
+ beq redy     ;otherwise program mode
+ jsr INPRT    ;display text IN {line#}
+ lda $39      ;put the current BASIC line number
+ sta $14      ;where FINDLN expect to see it
  lda $3a
  sta $15
  jsr FINDLN   ;set position to line num causing error
  jsr printcr
- lda #$01     ;set LIST flag on
- sta listflag
+ jsr lstrap
  jsr $a6c9    ;perform LIST line#
  ldx #$02     ;place cursor on first digit of line number
  ldy #$00     ;which would be line 2 column 0
@@ -4970,14 +4977,13 @@ five8 .byte $83,$39,$99,$99,$9a  ;FAC binary representation of 5.8
 
 autoflag   .byte 0 ;auto line numbering flag: 0=off, 1=on
 traceflag  .byte 0 ;trace flag: 0=off, 1=on
-listflag   .byte 0 ;list flag: 0=off, 1=on
 keyflag    .byte 0 ;key capture mode 0=disabled, 1=enabled, 2=paused
 keyentry   .byte 0 ;scan code of the last key captured with ON KEY statement enabled
 errnum     .byte 0 ;last error number that occured, default 0 (no error)
 errline    .word $FFFF ;last line number causing error, default -1 (not applicable)
 errtrap    .word 0 ;error handler line number
 txtptr     .word 0 ;basic txt ptr of statement causing error
-stackptr   .byte 0 ;stack ptr before cmd execution for use by ON ERROR
+oldtrap    .word errors ;temp storage of original error trap routine in use
 keyptr     .word 0 ;basic txt ptr of statement for ON KEY GOSUB line#
 keyline    .word $FFFF ;line number for ON KEY subroutine
 keyidx     .byte 0 ;current index of char to put in keyboard buffer via IRQ
@@ -8062,8 +8068,7 @@ founit lda $39
  sta $14
  lda $3a
  sta $15
- lda #$01
- sta listflag
+ jsr lstrap
  jsr findlnr  ;search for line#
  lda #$91     ;crsr up
  jsr CHROUT
@@ -8363,9 +8368,9 @@ newvec
  sta $0332
  lda #>newsave
  sta $0333
- lda #$FF   ;MDBASIC takes 8k of the BASIC RAM area
+ lda #$ff   ;MDBASIC takes 8k of the BASIC RAM area
  sta $37    ;the highest address is now $7FFF (32767)
- lda #$7F   ;$37-$38 holds value of highest address used by BASIC, originally $9FFF (40959)
+ lda #$7f   ;$37-$38 holds value of highest address used by BASIC, originally $9FFF (40959)
  sta $38
  rts
 ;
