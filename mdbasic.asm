@@ -319,7 +319,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.09.10"
+.text "mdbasic 23.09.16"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -1553,6 +1553,7 @@ applyauto
 ; MDBASIC immediate mode input via vector (IMAIN)
 ;******************
 immed
+ jsr detrap     ;ensure error trapping is off
  lda SCROLY
  eor #%00010000
  and #%00110000 ;is screen off or bitmap mode on?
@@ -2332,31 +2333,31 @@ seterrvec
 ; error trap routine for ON ERROR RESUME NEXT
 ;*******************************************
 resumenext
+ txa
+ bmi quitrun
  ldy $3a       ;when current line num hibyte is $FF (invalid)
  iny           ;then immediate mode
  beq quitrun
- txa
- bmi olerr
  stx errnum    ;update last error number
  lda $3a       ;update last BASIC line# causing error
  sta errline+1
  lda $39
  sta errline
- jmp DATA      ;scan for start of next BASIC stmt
+ jsr DATA      ;scan for start of next BASIC stmt
+ jmp nxtstmt
 ;
 quitrun
  jsr detrap    ;disable error trapping
-olerr
- jmp errors    ;use normal error routine
+ jmp READY     ;use normal error routine
 ;*******************************************
 ; general error trap routine
 ;*******************************************
 trap
+ txa           ;x holds the error num
+ bmi quitrun   ;bit7, 0=error, 1=switch to immediate mode
  ldy $3a       ;when current line num hibyte is $FF (invalid)
  iny           ;then immediate mode
  beq quitrun
- txa           ;x holds the error num
- bmi olerr     ;bit7, 0=error, 1=switch to immediate mode
  stx errnum    ;set current error number
  jsr detrap    ;disable error trapping
  lda #3        ;3 plus the 2 for this jsr is 5 bytes
@@ -2384,8 +2385,9 @@ trap
  jmp NEWSTT   ;setup next statement for execution and continue BASIC main loop
 ;
 ;*******************
-; RESUME line#
+; RESUME
 ; RESUME NEXT
+; RESUME line#
 resume
  pla          ;discard calling subroutine
  pla
@@ -2393,6 +2395,7 @@ resume
  lda BAD+1,x
  cmp #TOKEN_ERROR
  beq okresu
+ jsr detrap
  ldx #35      ;can't resume error
  jmp (IERROR)
 okresu
@@ -2424,7 +2427,7 @@ okresu
 skpstmt
  jsr CHRGET   ;get current char at txtptr
  jsr DATA     ;scan for start of next BASIC stmt
- jmp nxtstmt  ;setup next stmt for execution
+ jmp nxtstmt0 ;setup next stmt for execution
 ;perform RESUME line#
 resume0
  pla          ;discard ERROR token
@@ -2434,6 +2437,8 @@ resume0
  pla
  jsr CHRGOT
  jsr GOTO     ;perform goto (adjust txt ptr to given line num)
+nxtstmt0
+ jsr entrap   ;re-enable error trapping
 nxtstmt       ;prepare next stmt for execution
  ldy #0
  lda ($7a),y
@@ -2454,21 +2459,7 @@ _a7ce iny
  sta $7a
  bcc _a7e1
  inc $7b
-_a7e1 jmp pullit
-_a807 cmp #$3a
- beq _a7e1
- jmp REM
-;
-;perform RESUME - with statement that caused the error
-resum pla     ;discard ERROR token
- pla          ;pull line number from stack and make current
- sta $39
- pla
- sta $3a
- pla          ;pull text ptr from stack and make current
- sta $7a
- pla
- sta $7b
+_a7e1
 ;empty stack to where the base call was made
 pullit
  pla
@@ -2486,8 +2477,31 @@ stoppull
  sta $16      ;reset temp string stack
  lda #0
  sta $10      ;SUBFLG Subscript Reference to an Array or User-Defined Function Call (FN)
- jsr entrap   ;enable error trapping
  jmp (IGONE)  ;read and execute the next statement
+_a807 cmp #$3a
+ beq _a7e1
+ jmp REM
+;
+;perform RESUME - with statement that caused the error
+resum pla     ;discard ERROR token
+ pla          ;pull line number from stack and make current
+ sta $39
+ pla
+ sta $3a
+ pla          ;pull text ptr from stack and make current
+ sta $7a
+ pla
+ sta $7b
+findstart
+ jsr CHRGOT
+ beq aaaa
+ lda $7a
+ bne bbbb
+ dec $7b
+bbbb dec $7a
+ jmp findstart
+aaaa
+ jmp nxtstmt0
 ;
 ;*******************
 ;RETURN [line#]
@@ -2557,8 +2571,16 @@ gety
  cmp #TOKEN_TO
  beq moveto    ;TO token not present so we are done
  rts
+badxy jmp hellno
 moveto
- jsr backuppoint ;save last plot used by graphics commands
+;save last plot used by graphics commands
+ ldx #2
+backuppoint
+ lda lastplotx,x
+ sta $50,x
+ dex
+ bpl backuppoint
+;
  lda $bf       ;temp var holding 2^sprite# value
  sta $07       ;temp var for moving sprite on a line
  jsr dbyval    ;get x2 coordinate
@@ -2581,8 +2603,14 @@ nosped lda #$01
  sta moveflag  ;flag to tell LINE cmd to move a sprite instead of plot line
  jsr strtln    ;calculate line and move sprite along that line at given speed
  dec moveflag  ;reset flag back to 0 for LINE cmd
- jmp restorepoint
-badxy jmp hellno
+;restore last plot coordinate
+ ldx #2
+restorepoint
+ lda $50,x
+ sta lastplotx,x
+ dex
+ bpl restorepoint
+ rts
 ;
 spriteon
  dey            ;0 dec to 255 for all sprites
@@ -3381,20 +3409,6 @@ swappoint
  sta lastplotx,x
  dex
  bpl swappoint+2
- rts
-backuppoint    ;save plot coordinate
- ldy #2
- lda lastplotx,y
- sta lastplotx2,y
- dey
- bpl backuppoint+2
- rts
-restorepoint  ;restore last plot coordinate
- ldy #2
- lda lastplotx2,y
- sta lastplotx,y
- dey
- bpl restorepoint+2
  rts
 ;
 point2
@@ -4428,7 +4442,6 @@ nothin jmp $fe72 ;NMI RS-232 Handler
 ;*************************
 errors txa
  bpl doerr    ;bit 7 off means error condition
- jsr detrap   ;ensure error trapping off
 redy
  jmp READY    ;print READY. then continue with BASIC main loop
 doerr
@@ -5019,15 +5032,7 @@ playtime   .byte 0   ;current jiffies till next note
 playvoice  .byte 0   ;SID register offset for play voice
 playwave   .byte 0   ;waveform for play notes
 
-;********************************************************************
-;* Temp variables during subroutine execution only (local vars)     *
-;********************************************************************
 
-;this temp space is used to save last plot x,y so sprite move can use it
-lastplotx2
-.word 0  ;temp copy of last used x coord
-.byte 0  ;temp copy of last used y coord
-;
 ;********************************************************************
 ;* ROM barrier at A000-BFFF switch to RAM using $01 before entry    *
 ;********************************************************************
