@@ -319,7 +319,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.09.16"
+.text "mdbasic 23.09.21"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -838,8 +838,8 @@ zero txa
  jmp nexth
 ;
 ;clear $5d-$60 work area and $61-$66 FAC1
-clrfac lda #0
- ldx #10
+clrfac ldx #10
+ lda #0
 loop sta $5d,x
  dex
  bpl loop
@@ -3464,20 +3464,15 @@ paint jsr getpnt
 circle
  jsr getpnt     ;center point x,y
  jsr ckcom2     ;check for and skip over comma, misop err if missing
- jsr skip73     ;x radius size
- bmi illqty8    ;max x radius 127
- sta $35
- lda SCROLX
- and #%00010000 ;check if multicolor mode on or off
- sta $29        ;0=hires mode, otherwise multicolor mode
- beq hirescir
- asl $35        ;mc mode needs 2x size
- bmi illqty8    ;mc mode limit is 63
-hirescir
+ jsr skip73     ;get x radius size
+ beq illqty8    ;enforce valid range of 1 to 127
+ bmi illqty8
+ sta $35        ;save x-radius size to temp variable
  jsr ckcom2     ;check for and skip over comma, misop err if missing
  jsr skip73     ;y radius size
- bmi illqty8    ;max y radius 127
- sta $36
+ beq illqty8    ;enforce valid range of 1 to 127
+ bmi illqty8
+ sta $36        ;y radius variable
  lda #%00001111 ;default options
  sta $2a        ;variable to hold value
  jsr CHRGOT
@@ -3490,18 +3485,18 @@ hirescir
 circlept
  jsr types      ;get optional plot type and color; use last used values if not supplied
 docircle
- lda $35
- ora $36
- beq endcir     ;x and y radius size are both zero
- cmp #2         ;smallest valid x,y radius size is 2,1 or 1,2
- bcs okcirc     ;plot the circle
- jmp plotit     ;just plot a dot
-okcirc
- dec R6510        ;switch LOROM to LORAM
+;get multicolor mode flag
+ lda SCROLX
+ and #%00010000 ;check if multicolor mode on or off
+ beq hirez
+ asl $35
+hirez sta $29   ;0=hires mode, 1=multicolor mode
+ dec R6510      ;switch LOROM to LORAM
  jsr circel
  jsr ciropts
  inc R6510
-endcir rts
+ ldx #21
+ jmp clrfac+2
 ;
 ;*******************
 norm
@@ -5988,35 +5983,36 @@ noopt4
 ;
 ;**************************
 circel
- lda $fb
+ lda $fb  ;center point x lobyte
  asl
- sta $61  ;center x
- lda $fc
+ sta $61
+ lda $fc  ;center point x hibyte
  rol
  sta $62
- lda $fd
+;
+ lda $fd  ;center point y lobyte
  asl
- sta $63  ;center y
- lda #0
+ sta $63
+ lda #0   ;center point y hibyte
  sta $fe
  rol
  sta $64
 ;
  lda $35  ;x radius size
- asl
- sta $11
+ asl      ;diameter = 2*radius
+ sta $11  ;x diameter lobyte
  sta $57
  sta $50
  lda #0
  rol
- sta $12
+ sta $12  ;x diameter hibyte
  sta $58
  sta $51
 ;
  lda $36  ;y radius size
  asl      ;diameter = 2*radius
  sta $14  ;y diameter
- lda #$00
+ lda #0
  rol
  sta $15  ;y diameter hibyte
 ;
@@ -6043,22 +6039,25 @@ tb6tc4 lda $59,x
  sta $0f
  lda $59
  sta $0e
- lda #0
- sta $65
- lda $15
- cmp $12
+ ldx #0
+ stx $65
+ lda $15    ;y diameter hibyte
+ cmp $12    ;x diameter hibyte
  bne cbne
- lda $14
- cmp $11
+ lda $14    ;y diameter lobyte
+ cmp $11    ;x diameter lobyte
+ bne cbne
+ cmp #2     ;x & y diameter is 2?
+ beq jloops ;special case, no looping needed
 cbne bcs csca
  inc $65
-csca lda #0
- sta $66
+csca
+ stx $66
  lda $65
  beq ce00
  jsr tfb2b2
  inc $66
- jmp loops
+jloops jmp loops
 ce00 jsr loops
  inc $66
 tfb2b2 lda $11
@@ -6110,10 +6109,10 @@ be00 jsr tfb2d4
  lsr
  sta $fe
  ror $fd
- lda $2a
- and #%00001001 ;quad 1 and 4
+ lda $2a   ;circle options
+ and #%00001001 ;show quad 1 or 4?
  beq no0
- jsr plotc ;0 degrees
+ jsr plotc
 no0 lda $61
  sec
  sbc $6f
@@ -6123,10 +6122,10 @@ no0 lda $61
  lsr
  sta $fc
  ror $fb
- lda $2a
- and #%00000110 ;quad 2 and 3
+ lda $2a   ;circle options
+ and #%00000110 ;show quad 2 or 3?
  beq no180
- jsr plotc ;180 degrees
+ jsr plotc
 no180 jsr t2d4fb
 fd512 lda $fd
  clc
@@ -6225,7 +6224,7 @@ tc4af lda $22,x
 xposte lda $59,x
  cmp $69,x
  bcs cs69
- jmp fd512
+fd512a jmp fd512
 cs69 bne ne2b9
  dex
  bpl xposte
@@ -6246,13 +6245,11 @@ ne2cf lda $6d
  sbc $fe
  sta $6a
  lda $6a
- beq zro6a
- jmp fd512
-zro6a lda $69
+ bne fd512a
+ lda $69
  cmp #3
- bcc cc69
- jmp fd512
-cc69 rts
+ bcs fd512a
+ rts
 curve stx $5e
  sta $5d
  lda #0
@@ -6328,8 +6325,8 @@ drwcir jsr tfb2d4
  lsr
  sta $fe
  ror $fd
- lda $2a
- and #%00001000
+ lda $2a   ;circle options
+ and #%00001000 ;show quad 4?
  beq plotq3
  lda $29   ;hires mode?
  beq plotq4
@@ -6348,8 +6345,8 @@ plotq3
  lsr
  sta $fc
  ror $fb
- lda $2a
- and #%00000100
+ lda $2a   ;circle options
+ and #%00000100 ;show quad 3?
  beq plotq2
  jsr plotc ;quad3
 plotq2
@@ -6362,8 +6359,8 @@ plotq2
  lsr
  sta $fe
  ror $fd
- lda $2a
- and #%00000010
+ lda $2a   ;circle options
+ and #%00000010 ;show quad 2?
  beq plotq1_
  jsr plotc ;quad2
 plotq1_
@@ -6376,8 +6373,8 @@ plotq1_
  lsr
  sta $fc
  ror $fb
- lda $2a
- and #%00000001
+ lda $2a   ;circle options
+ and #%00000001 ;show quad 1?
  beq t2d4fb
  lda $29   ;hires mode?
  beq plotq1
@@ -6448,10 +6445,10 @@ b6d8 lda $59,x
  lsr
  sta $fe
  ror $fd
- lda $2a
- and #%00001100
+ lda $2a   ;circle options
+ and #%00001100 ;show quad 3 or 4?
  beq no270
- jsr plotc ;270 degrees
+ jsr plotc
 no270 lda $63
  sec
  sbc $71
@@ -6461,10 +6458,10 @@ no270 lda $63
  lsr
  sta $fe
  ror $fd
- lda $2a
- and #%00000011
+ lda $2a   ;circle options
+ and #%00000011 ;show quad 1 or 2?
  beq no90
- jsr plotc ;90 degrees
+ jsr plotc
 no90 jsr t2d4fb
 loops2
  lda $fb
