@@ -147,15 +147,24 @@ CI2CRB = $dd0f ;Control Register B
 CHRGET = $0073 ;Get Next BASIC Text Character
 CHRGOT = $0079 ;Get Current BASIC Text Character
 KEYD   = $0277 ;Keyboard Buffer (Queue)
+
+;Vectors to various subroutines
+KEYLOG = $028f ;Vector to Keyboard Table Setup Routine
 IERROR = $0300 ;Vector to the Print BASIC Error Message Routine
 IMAIN  = $0302 ;Vector to the Main BASIC Program Loop
+ICRNCH = $0304 ;Vector to the Routine That Crunches ASCII to Tokens
+IQPLOP = $0306 ;Vector to the Routine That Lists BASIC Program Token as ASCII Text
 IGONE  = $0308 ;Vector to the Routine That Executes the Next BASIC Program Token
-
-;IRQ Control
-MDBIRQ = $0313 ;MDBASIC IRQ Control Register bit0=play,bit1=playsprite,bit2=key
+IEVAL  = $030a ;Vector to the Routine That Evaluates a Single-Term Arithmetic Expression
 CINV   = $0314 ;Vector to IRQ Interrupt Routine
+CBINV  = $0316 ;Vector to BRK Instruction Interrupt
+ILOAD  = $0330 ;Vector to Kernal LOAD Routine
+ISAVE  = $0332 ;Vector to Kernal SAVE Routine
 
-;CBM BASIC functions
+;MDBASIC IRQ Control Flags
+MDBIRQ = $0313 ;MDBASIC IRQ Control Register bit0=play,bit1=playsprite,bit2=key
+
+;CBM BASIC subroutines
 GETSTK = $a3fb ;check for space on stack
 REASON = $a408 ;check for space in memory
 READY  = $a474 ;print READY
@@ -227,6 +236,7 @@ LINPRT = $bdcd ;print 2-byte number stored in A (hibyte), X (lobyte)
 FOUT   = $bddd ;convert contents of FAC1 to ASCII String
 
 ;CBM BASIC routines to raise a specific error
+NOGOSUB= $a8e0 ;return without gosub
 UNDEFST= $a8e3 ;undef'd statement error
 TMERR  = $ad99 ;type mismatch error
 SNERR  = $af08 ;syntax error
@@ -319,7 +329,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.09.21"
+.text "mdbasic 23.09.27"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -837,8 +847,8 @@ zero txa
  jsr FINLOG ;add signed int to FAC1
  jmp nexth
 ;
-;clear $5d-$60 work area and $61-$66 FAC1
-clrfac ldx #10
+;clear num work area $5d-$60 and FAC1 $61-$68
+clrfac ldx #11
  lda #0
 loop sta $5d,x
  dex
@@ -1013,7 +1023,6 @@ disk
  jsr bufio
  inc R6510
  bcs err126
- jsr CLRCHN      ;restore default devices
 closeit
  jmp clse7e
 ;
@@ -1874,7 +1883,7 @@ find
  jsr findd
  inc R6510
  jsr printcr
- jmp $A8F8
+ jmp DATA
 findlnr
  inc R6510
  jsr FINDLN   ;search for line#
@@ -2512,8 +2521,7 @@ return beq oldrtn
  lda BAD+1,x
  cmp #TOKEN_GOSUB
  beq resume0
- ldx #12      ;RETURN WITHOUT GOSUB
- jmp (IERROR)
+ jmp NOGOSUB  ;RETURN WITHOUT GOSUB
 oldrtn jmp RETURN+2
 ;
 ;*******************
@@ -2979,9 +2987,10 @@ pokcol sta $c800,y  ;fill color mem for entire screen
 ;BITMAP FILL x1,y1 TO x2,y2, [plotType], [color]
 ;BITMAP ON
 ;BITMAP OFF
-;BITMAP [colorMode], [bkgndColor]
+;BITMAP [colorMode], [bkgndColor], [clear]
 ;colorMode 0=hires, 1=multicolor (mc)
 ;bkgndColor is applied based on colorMode:
+;clear 0=no clear, 1=clear
 ;hires mode sets color RAM in video matrix with initialization of all 1000 bytes
 ;mc mode sets the single bkgrnd color register BGCOL0
 ;MAPCOL c1,c2,c3 (c3 mc mode only) to change colors:
@@ -3020,15 +3029,38 @@ bmoff jsr norm
  bne bmclr+3        ;always branches
 bmclr jsr bitmapclr
  jmp CHRGET
-bitscr jsr getbool2 ;colorMode 0 or 1
+;
+;BITMAP [colorMode], [bkgndColor], [clear]
+bitscr
+ jsr getbool2        ;colorMode 0 or 1
  beq hiresmode
  lda SCROLX         ;horiz fine scrolling and control reg
  ora #%00010000     ;turn on bit 4 - enable multi color text or bitmap mode
  sta SCROLX
+;get bkgndColor for mc mode
  jsr comchk
  bne bitmapon       ;no more params so turn bitmap mode on
  jsr getval15_
- sta BGCOL0
+ sta BGCOL0         ;color for 00 bit pair
+ jmp bclr
+hiresmode
+ lda SCROLX         ;turn off mulicolor mode
+ and #%11101111     ;set bit#4 0=off, 1=on
+ sta SCROLX         ;apply setting to control register
+;get bkgndColor for hires mode
+ jsr comchk
+ bne bitmapon
+ jsr CHRGET
+ jsr getc2          ;background color for all 8x8 squares
+ jsr setbmcol       ;apply to all 8x8 squares
+;get clear param
+bclr
+ jsr comchk
+ bne bitmapon       ;no more params so turn bitmap mode on
+ jsr getbool
+ beq bitmapon
+ jsr bitmapclr
+;
 bitmapon
  lda C2DDRA         ;data direction for port A (CI2PRA)
  ora #%00000011     ;bits 0-1 are set to 1=output (default)
@@ -3045,16 +3077,6 @@ bitmapon
                     ;bits 4-7 video matrix base offset = 0010=2 ->2K offset from base $c000+2K=$c800
  sta VMCSB          ;apply setting to control register
  rts
-hiresmode
- lda SCROLX         ;turn off mulicolor mode
- and #%11101111     ;set bit#4 0=off, 1=on
- sta SCROLX         ;apply setting to control register
- jsr comchk
- bne bitmapon
- jsr CHRGET
- jsr getc2          ;background color for all 8x8 squares
- jsr setbmcol
- jmp bitmapon
 ;
 ;*******************
 ;
@@ -3283,8 +3305,10 @@ chkplottype cmp #"p"
 godraw
  pha
  jsr dbyval
+ txa
+ ora $15   ;is both hi and lo bytes 0
+ beq baddraw
  pla
-;
  dec R6510
  jsr godraww
  inc R6510
@@ -3324,7 +3348,7 @@ line
  cmp #TOKEN_INPUT  ;input token (line input)
  beq getprompt     ;perform line input prompt$, var$
  bcc lineinput     ;perfrom lineinput# num%, var$
-badinp jmp SNERR
+ jmp SNERR
 lineinput
  jsr getval   ;get single byte param in a reg, misop err if missing
  tax
@@ -3339,7 +3363,7 @@ getprompt
  txa          ;x reg has low byte of str ptr but next func needs it in a reg 
  jsr STROUT   ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
  jsr comchk
- bne badinp
+ bne mop3
 readline
  jsr INLIN    ;input a line to buffer from keyboard (80 chars max from keyboard)
  ldy #0       ;count number of characters input (not sure if routine returns it)
@@ -3495,8 +3519,7 @@ hirez sta $29   ;0=hires mode, 1=multicolor mode
  jsr circel
  jsr ciropts
  inc R6510
- ldx #21
- jmp clrfac+2
+ jmp clrfac
 ;
 ;*******************
 norm
@@ -6047,6 +6070,8 @@ tb6tc4 lda $59,x
  lda $14    ;y diameter lobyte
  cmp $11    ;x diameter lobyte
  bne cbne
+ ldy $15
+ bne csca
  cmp #2     ;x & y diameter is 2?
  beq jloops ;special case, no looping needed
 cbne bcs csca
@@ -7588,7 +7613,7 @@ drawright
 drhires
  inc $fb
  bne drhi2
- inc $fc 
+ inc $fc
 drhi2 lda $fc
  beq drdone
  lda $fb
@@ -7597,7 +7622,7 @@ drhi2 lda $fc
 drwrap
  ldx #0
  stx $fc
- stx $fb 
+ stx $fb
 drdone rts
 ;
 bitfil
@@ -8338,38 +8363,38 @@ newvec
  lda #>immed
  sta IMAIN+1
  lda #<toknew
- sta $0304
+ sta ICRNCH
  lda #>toknew
- sta $0305
+ sta ICRNCH+1
  lda #<newfun
- sta $030a
+ sta IEVAL
  lda #>newfun
- sta $030b
+ sta IEVAL+1
  lda #<list
- sta $0306
+ sta IQPLOP
  lda #>list
- sta $0307
+ sta IQPLOP+1
  lda #<execut
  sta IGONE
  lda #>execut
  sta IGONE+1
  jsr detrap
  lda #<brkirq
- sta $0316
+ sta CBINV
  lda #>brkirq
- sta $0317
+ sta CBINV+1
  lda #<keychk
- sta $028f
+ sta KEYLOG
  lda #>keychk
- sta $0290
+ sta KEYLOG+1
  lda #<newload
- sta $0330
+ sta ILOAD
  lda #>newload
- sta $0331
+ sta ILOAD+1
  lda #<newsave
- sta $0332
+ sta ISAVE
  lda #>newsave
- sta $0333
+ sta ISAVE+1
  lda #$ff   ;MDBASIC takes 8k of the BASIC RAM area
  sta $37    ;the highest address is now $7FFF (32767)
  lda #$7f   ;$37-$38 holds value of highest address used by BASIC, originally $9FFF (40959)
@@ -8432,9 +8457,11 @@ prtlin2
  jsr CHRIN      ;to later convert to string
  sta $62        ;for writing to output channel
  jsr READST     ;get last input status, 0=ok
- bne stdout0    ;stop now and switch to output channel if needed
- jsr stdout0    ;set current i/o to output channel
- bcs err7e
+ sta $61        ;save input status
+ jsr stdout     ;set current i/o to output channel if needed
+ bcs err7e      ;quit if error
+ lda $61        ;check current input status
+ bne pdone      ;quit if done
  jsr rom4       ;print 2-byte binary number in FAC1
  lda #" "
  jsr CHROUT
@@ -8444,17 +8471,11 @@ prtlin2
  pha            ;save status result of i/o
  jsr printcr    ;write carriage return to current output channel
  pla            ;restore status result
- rts
-;
-stdout0
- pha
- jsr stdout
- pla
- rts
+pdone rts
 stdout
  clc            ;clear carry used as error flag
  ldx $13        ;current redirected output channel
- beq stdout-1   ;0 indicates default so no need to CHKOUT
+ beq pdone      ;zero indicates default so no need to CHKOUT
  jmp CHKOUT     ;restore original I/O channel, carry set on error
 ;
 chkin7e
@@ -8468,7 +8489,7 @@ bufio
  ldy #0
 bufrd
  jsr READST    ;last read status
- bne bufwrite+3
+ bne buf0
  jsr CHRIN
  bcs rddone    ;carry indicates error, accumulator holds error#
  sta paintbuf1,y
@@ -8482,6 +8503,7 @@ rddone rts     ;return with carry set indicating error
 bufwrite
  iny
  bne zzz
+buf0
  lda #0
  sta paintbuf1,y
 zzz
@@ -8497,9 +8519,6 @@ bufwr
  bcs iodone1   ;stop if output error
  iny
  bne bufwr
- rts
- jsr stdout    ;switch current i/o channel to output channel
- bcs iodone1   ;carry indicates error, accumulator holds error#
 iodone
  lda $61
 iodone1 rts
