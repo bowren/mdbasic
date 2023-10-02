@@ -329,7 +329,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.09.27"
+.text "mdbasic 23.10.01"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -998,7 +998,7 @@ vars dec R6510
  jmp varss
 ;
 ;*******************
-;DISK S$                         - DOS command string
+;DISK dos$ [,device] [,out$]]
 ;"S0:myfile.bas"                 - delete a file
 ;"N0:label,id"                   - full format disk with a label and id
 ;"N0:label"                      - soft format (BAM only) with label
@@ -1006,7 +1006,6 @@ vars dec R6510
 ;"C0:sourceFile=destinationFile" - copy a file
 ;"R0:newfileName=oldfileName"    - rename a file
 ;"V0:"                           - validate (defragment) disk
-donehere rts
 disk
  jsr getstr0     ;get DOS string
  beq donehere
@@ -1017,12 +1016,48 @@ disk
  jsr SETLFS
  jsr OPEN        ;performs OPEN 126,8,15, "string"
  bcs err126
- lda $9d         ;display message if not in prg mode
- bpl closeit     ;don't display disk status
+;read line from current channel and device
+ ldx #126
+inpstr
  dec R6510
- jsr bufio
+ lda $9d         ;display message if not in prg mode
+ jsr bufio       ;read response and print if needed
  inc R6510
- bcs err126
+ bcs err126      ;carry indicates i/o error
+ jsr closeit
+ jsr CHRGOT      ;check another param exists
+ beq donehere    ;if not stop now, otherwise
+;copy output to specified string var
+outstr
+ tya             ;y reg holds bytes to allocate
+ sta $02
+ beq gstr
+ jsr GETSPA      ;alloc space in mem for string returning address ptr in $35,$36
+ sta $02         ;actual length allocated
+ tay
+ dec R6510
+copyer
+ lda paintbuf1-1,y ;copy input buffer
+ dey
+ sta ($35),y     ;to string variable
+ bne copyer
+ inc R6510
+gstr
+ jsr CHRGET
+ jsr PTRGET   ;search for a var & setup if not found
+ sta $49      ;variable address is returned in a (lo byte) and y (hi byte) registers
+ sty $4a
+ lda $02      ;length
+setstrptr
+ ldy #0
+ sta ($49),y  ;save it to the variable's string length byte
+ iny
+ lda $35      ;get lo byte of str ptr
+ sta ($49),y  ;save it to variable's str ptr info
+ iny
+ lda $36      ;get hi byte of str ptr
+ sta ($49),y  ;save it to variable's str ptr info
+donehere rts
 closeit
  jmp clse7e
 ;
@@ -1313,8 +1348,8 @@ rdnum
  lda #1        ;length of 1 byte
  sta $02       ;read one byte
  sta $fd       ;offset to store byte
- bne chksent   ;always branches 
-;allocate space for new string 
+ bne chksent   ;always branches
+;allocate space for new string
 rdstr
  lda #$ff      ;max string length
  jsr GETSPA    ;alloc new str return ptr in $35,$36 and length in A reg
@@ -1322,13 +1357,14 @@ rdstr
 ;change pointer to newly allocated string
  ldy #0
  sty $fd       ;offset to store bytes
- sta ($49),y   ;string length byte
- iny
- lda $35       ;lobyte str ptr
- sta ($49),y   ;var lobyte str ptr
- iny
- lda $36       ;hibyte str ptr
- sta ($49),y   ;var hibyte str ptr
+ jsr setstrptr+2
+; sta ($49),y   ;string length byte
+; iny
+; lda $35       ;lobyte str ptr
+; sta ($49),y   ;var lobyte str ptr
+; iny
+; lda $36       ;hibyte str ptr
+; sta ($49),y   ;var hibyte str ptr
 ;check if sentinel param supplied
 chksent
  lda #0
@@ -3337,25 +3373,17 @@ memnorm
  rts
 ;
 ;*******************
-; LINE INPUT ["prompt",] A$
-; LINE INPUT# filenum, A$
+; LINE INPUT ["prompt",] S$ [,S2$,...,S3$]
+; LLINE INPUT# filenum, S1$ [,S2$,...,S3$]
 ; LINE x1,y1 TO x2, y2, plotType, color
 line
  beq mop3
  cmp #TOKEN_INPUTN ;input# token (line input#)
  bcc liner         ;line x,y to a,z
- jsr ERRDIR        ;throw error if direct mode; only x reg is affected
+ beq lineinput
  cmp #TOKEN_INPUT  ;input token (line input)
- beq getprompt     ;perform line input prompt$, var$
- bcc lineinput     ;perfrom lineinput# num%, var$
- jmp SNERR
-lineinput
- jsr getval   ;get single byte param in a reg, misop err if missing
- tax
- jsr CHKIN    ;redirect std input to file handle stored in x reg 
- jsr readline
- jmp $abb5    ;final part of input# to restore i/o channel
-getprompt
+ bne snerrr
+ jsr ERRDIR        ;if not in prg mode, illegal direct error
  jsr peekop
  cmp #"""
  bne readline
@@ -3366,38 +3394,29 @@ getprompt
  bne mop3
 readline
  jsr INLIN    ;input a line to buffer from keyboard (80 chars max from keyboard)
- ldy #0       ;count number of characters input (not sure if routine returns it)
-fndend lda BUF,y
- beq inpend
- iny
+ ldy #$ff     ;count number of chars
+fndend iny
+ lda BUF,y
+ sta paintbuf1,y
  bne fndend
-inpend tya    ;y reg = string length
- jsr GETSPA   ;alloc space in mem for string returning address ptr in $35,$36
- pha          ;save number of bytes allocated on stack
- tay
- jsr CHRGET
- dey
-copyer lda BUF,y ;copy string to variable storage
- sta ($35),y
- dey
- bpl copyer
- jsr PTRGET   ;search for a var & setup if not found
- sta $49      ;variable address is returned in a (lo byte) and y (hi byte) registers
- sty $4a      ;every string variable is a pointer consisting of has 3 bytes, 2 for ptr, 1 for length
- pla          ;recall from stack the number of bytes that were allocated in mem
- ldy #0
- sta ($49),y  ;save it to the variable's string length byte
- iny
- lda $35      ;get lo byte of str ptr
- sta ($49),y  ;save it to variable's str ptr info
- iny
- lda $36      ;get hi byte of str ptr
- sta ($49),y  ;save it to variable's str ptr info
+inpend
+ jsr outstr
  jsr comchk
  beq readline
  rts
+; LINE INPUT# filenum, S1$ [,S2$,...,S3$]
+lineinput
+ jsr getval   ;get single byte param in a reg, misop err if missing
+ sta $24
+lnin
+ ldx $24
+ jsr inpstr
+ jsr comchk
+ beq lnin
+ rts
 ;
 mop3 jmp missop
+snerrr jmp SNERR
 ;
 ; LINE x1,y1 TO x2, y2, plotType, color
 liner jsr getpnt
@@ -8406,7 +8425,8 @@ filess
  lda #$ff       ;start file count at -1 to not count footer
  sta $50
  sta $51
- jsr chkin7e
+ ldx #126
+ jsr CHKIN
  bcs err7e
  jsr CHRIN      ;skip 2-byte file header
  bcs err7e
@@ -8447,7 +8467,8 @@ endfiles jsr clse7e
  jmp memnorm
 ;
 prtlin
- jsr chkin7e
+ ldx #126
+ jsr CHKIN
  bcs err7e
 prtlin2
  jsr CHRIN      ;skip 2 byte line header
@@ -8466,7 +8487,7 @@ prtlin2
  lda #" "
  jsr CHROUT
 ;print zero-terminated string in file then print CR
- jsr bufio      ;on return, carry set means error in i/o
+ jsr bufio7e    ;on return, carry set means error in i/o
  bcs err7e      ;either input or output failed
  pha            ;save status result of i/o
  jsr printcr    ;write carriage return to current output channel
@@ -8478,39 +8499,38 @@ stdout
  beq pdone      ;zero indicates default so no need to CHKOUT
  jmp CHKOUT     ;restore original I/O channel, carry set on error
 ;
-chkin7e
- ldx #$7e       ;current file number
- jmp CHKIN      ;designate a Logical file as the current input channel
-;read with buffering from channel 126
+;read with buffering from current input channel
 ;write to current output channel
+bufio7e
+ ldx #126
 bufio
- jsr chkin7e
- bcs rddone
+ sta $02        ;write flag
+ jsr CHKIN
+ bcs iodone1
+www
  ldy #0
 bufrd
- jsr READST    ;last read status
+ jsr READST     ;last read status
  bne buf0
  jsr CHRIN
- bcs rddone    ;carry indicates error, accumulator holds error#
+ bcs iodone1    ;carry indicates error, accumulator holds error#
+ beq buf1
+ cmp #13
+ beq buf0
  sta paintbuf1,y
- beq bufwrite
  iny
  bne bufrd
- jsr bufwrite  ;if more than 255 bytes then print it
- bcc bufio     ;read next 255 bytes
-rddone rts     ;return with carry set indicating error
-;write buffer up to 255 bytes
-bufwrite
- iny
- bne zzz
+.byte $2c ;prevent zero termination for 255 byte string
 buf0
  lda #0
+buf1
  sta paintbuf1,y
-zzz
  jsr READST    ;last read status
  sta $61       ;save for returning the read status
  jsr stdout    ;switch current i/o channel to output channel
- bcs rddone    ;carry indicates error, accumulator holds error#
+ bcs iodone1   ;carry indicates error, accumulator holds error#
+ lda $02       ;write flag
+ beq iodone1
  ldy #0
 bufwr
  lda paintbuf1,y
