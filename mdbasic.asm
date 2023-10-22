@@ -329,7 +329,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.10.08"
+.text "mdbasic 23.10.22"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -2969,14 +2969,9 @@ nexbyt lda ($be),y
  jmp CHRGET
 dodesign
  jsr getval    ;get screen code
- jsr times8    ;multiply A reg value times 8
- jsr ckcom2    ;check for and skip over comma, misop err if missing
- jsr getbool   ;get charset
- beq charset0
- lda #$f8      ;charset 1 at $f800
-.byte $2c      ;defeat lda #$f0 by making it bit $f0a9
-charset0
+ jsr times8    ;multiply A reg value by 8 result in $be,$bf
  lda #$f0      ;charset 0 at $f000
+ jsr getchrset
  clc
  adc $bf
  sta $bf
@@ -3572,14 +3567,7 @@ text
  sta $26      ;charset hibyte temp var
  jsr comchk
  bne ne
- jsr getvalg  ;charset 0-3
- cmp #4       ;0,1 uppercase 2,3 lower case
- bcs illqty8
- asl          ;calc hibyte offset
- asl          ;0=0, 1=4, 2=8, 3=12
-;clc not needed here since zero was shifted into carry by asl
- adc $26
- sta $26      ;charset 0=$d000,1=$d400,2=$d800,3=$dc00
+ jsr getchrset+2
 ;sizes
  jsr comchk
  bne ne
@@ -4798,6 +4786,21 @@ getstr2 jsr FRESTR ;discard temp string
  sta $52           ;length
  rts
 ;******************
+;get charset parameter 0-3
+;0=Upper-case and symbols, 1=Reverse of set 0
+;2=Lower-case and symbols  3=Reverse of set 2
+;accumulator holds the hibyte of the base address of CHAREN
+getchrset
+ sta $26      ;either $d0 (BITMAP mode) or $f0 (DESIGN mode)
+ jsr getvalg
+ cmp #4       ;0 to 3 only
+ bcs illqty4
+ asl          ;calc hibyte offset
+ asl          ;0=0, 1=4, 2=8, 3=12
+ adc $26      ;carry is already clear
+ sta $26      ;charset 0=$d000,1=$d400,2=$d800,3=$dc00
+ rts
+;
 getboolg jsr CHRGET
 getboolz beq missop
 getbool  jsr getval
@@ -7135,7 +7138,7 @@ cpyup lda ($ac),y
  sta ($fb),y
  lda ($ae),y
  sta ($fd),y
- dey 
+ dey
  bpl cpyup
  lda $ac
  sta $fb
@@ -7158,7 +7161,7 @@ nxtdwn ldy $be
  sbc #0
  sta $ad
  lda $fd
- sec 
+ sec
  sbc #40
  sta $ae
  lda $fe
@@ -7171,7 +7174,7 @@ cpydwn lda ($ac),y
  sta ($fb),y
  lda ($ae),y
  sta ($fd),y
- dey 
+ dey
  bpl cpydwn
  lda $ac
  sta $fb
@@ -7185,18 +7188,18 @@ cpydwn lda ($ac),y
 ;scroll left
 scroll2 ldy #0
  lda ($fb),y
- sta paintbuf1
+ sta $50
  lda ($fd),y
- sta paintbuf2
-cpyleft iny 
+ sta $51
+cpyleft iny
  lda ($fb),y
- dey 
+ dey
  sta ($fb),y
- iny 
+ iny
  lda ($fd),y
- dey 
+ dey
  sta ($fd),y
- iny 
+ iny
  cpy $be
  bne cpyleft
  jsr scrollh
@@ -7206,18 +7209,18 @@ cpyleft iny
 ;scroll right
 scroll3 ldy $be
  lda ($fb),y
- sta paintbuf1
+ sta $50
  lda ($fd),y
- sta paintbuf2
-cpyright dey 
+ sta $51
+cpyright dey
  lda ($fb),y
- iny 
+ iny
  sta ($fb),y
- dey 
+ dey
  lda ($fd),y
- iny 
+ iny
  sta ($fd),y
- dey 
+ dey
  bne cpyright
  jsr scrollh
  dec $bf
@@ -7232,8 +7235,8 @@ scrollh
  lda #32       ;space char
  bne shiftchar ;always branches
 gowrap
- lda paintbuf1 ;saved char
- ldx paintbuf2 ;saved color
+ lda $50       ;saved char
+ ldx $51       ;saved color
 shiftchar
  sta ($fb),y   ;char
  txa
@@ -7250,10 +7253,7 @@ shiftchar
 ;add 40 to color ptr
  sec
  sbc HIBASE
- clc
- adc #$d8
- sta $fe
- rts 
+ jmp wwww
 ;--------------
 wrapit
  lda $02
@@ -7275,14 +7275,14 @@ calcptr
  sta $fb     ;lobyte ptr to text RAM
  sta $fd     ;lobyte ptr to color RAM
  lda btab,y  ;video maxtrix hibyte offset
+ tax
  adc HIBASE  ;video matrix hibyte
  sta $fc     ;hibyte ptr to text RAM
 ;determine hibyte of color RAM
- lda #$d8    ;hibyte of color RAM first byte
- sec         ;remove text ptr hibyte offset
- sbc HIBASE  ;since already included in text ptr
+ txa
+wwww
  clc         ;add text ptr hibyte offset
- adc $fc     ;offset from current text ptr hibyte
+ adc #$d8    ;offset from current text ptr hibyte
  sta $fe     ;apply hibyte of color RAM ptr
  rts
 ;
