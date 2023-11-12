@@ -4,7 +4,9 @@
 ;
 ;zero-page registers
 R6510  = $01 ;LORAM/HIRAM/CHAREN RAM/ROM selection and cassette control register
+CHANNL = $13 ;Current I/O Channel (CMD Logical File) Number
 LDTND  = $98 ;Number of Open I/O Files/Index to the End of File Tables
+LSTX   = $c5 ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
 NDX    = $c6 ;number of keys in keyboard buffer
 BLNSW  = $cc ;Cursor Blink Enable: 0=Flash Cursor
 GDBLN  = $ce ;ASCII value of char under csr (when blinking)
@@ -329,7 +331,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.10.29"
+.text "mdbasic 23.11.11"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -528,10 +530,10 @@ cmdtab
 ;
 ;MDBASIC Function Dispatch Table
 funtab
-.word fntime, round                ;$f4,$f5
-.word keyfn, err                   ;$f6,$f7 are both a command and a function
-.word ptr, inf, pen, joy, pot, hex ;$f8,$f9,$fa,$fb,$fc,$fd
-.word instr, $ae9e                 ;$fe,$ff (PI Constant)
+.rta fntime, round                ;$f4,$f5
+.rta keyfn, err                   ;$f6,$f7 are both a command and a function
+.rta ptr, inf, pen, joy, pot, hex ;$f8,$f9,$fa,$fb,$fc,$fd
+.rta instr, $ae9e                 ;$fe,$ff (PI Constant)
 ;
 ;*** error messages ***
 ;To invoke, load x register with error# then jmp ($0300)
@@ -577,7 +579,7 @@ usrerr .shift "user defined"          ;36 to 127 and 0
 ;
 erradd .word misop, ilvne, illspr, ilcoor, cantre, usrerr
 ;
-;Program Tokenization process - text to tokens via vector ($0304)
+;Program Tokenization process - text to tokens via vector ICRNCH ($0304)
 ;
 toknew ldx $7a
  ldy #$04
@@ -680,7 +682,7 @@ cont1 iny
  bne oldtst
  beq notfou
 ;
-;Evaluate tokens via vector (IGONE)
+;Evaluate tokens via vector IGONE ($0308)
 ;
 exccmd
  lda traceflag
@@ -778,11 +780,11 @@ funtok
  sbc #FIRST_FUN_TOK
  asl              ;index * 2 for word pointer indexing
  tay              ;prepare for direct indexing
- lda funtab,y     ;lobyte value of address for function
- sta $55          ;lobyte for indirect addressing
- lda funtab+1,y   ;hibyte value of address for function
- sta $56          ;hibyte for indirect addressing
- jmp $0054        ;execute function
+ lda funtab+1,y   ;lobyte value of address for function
+ pha              ;lobyte for indirect addressing
+ lda funtab,y     ;hibyte value of address for function
+ pha              ;hibyte for indirect addressing
+ rts              ;execute function
 ;
 ;evaluate inline octal value denoted by @
 octal jsr clrfac
@@ -920,7 +922,7 @@ time2
  rts
 ;
 ;******************************************
-;LIST command re-write to decode new tokens via vector ($0306)
+;LIST command re-write to decode new tokens via vector IQPLOP ($0306)
 ;Supports freezing the listing while holding down the shift key.
 ;This routine is called repeatedly until the entire list range is complete.
 ;******************************************
@@ -1196,13 +1198,13 @@ dumpbitmap dec R6510 ;switch LOROM to LORAM
  jmp closer
 dumpfiles jsr opnprt0
  ldx #$7f
- stx $13    ;redirect std output to device on file 127
+ stx CHANNL ;redirect std output to device on file 127
  jsr CHRGET ;skip over FILES token
  jsr files
 ;close MDBASIC file handles and restore std io channels
 clsmdb
  lda #0
- sta $13
+ sta CHANNL
 clse7e
  lda #$7e
  jsr CLOSE
@@ -1281,7 +1283,7 @@ clsd232
 ;
 tokprt
  ldx #126
- stx $13      ;set current I/O channel (logical file) number
+ stx CHANNL   ;set current I/O channel (logical file) number
  jsr $e118    ;BASIC wrapper for CHKOUT with error handling
  jsr CHRGET   ;position txtptr on first char of expression
  jsr PRINT    ;perform CBM BASIC PRINT
@@ -1292,10 +1294,10 @@ waitout
  and #1
  bne waitout
 end232
- lda $13       ;current I/O channel (logical file) number for UNLSN and UNTALK
+ lda CHANNL    ;current I/O channel (logical file) number for UNLSN and UNTALK
  jsr CLRCHN    ;restore default i/o devices and send UNLSN and UNTALK to serial device
  ldx #$00      ;logical file number 0=none
- stx $13       ;set current I/O channel (logical file) number
+ stx CHANNL    ;set current I/O channel (logical file) number
  rts
 ;
 ;*******************
@@ -1335,7 +1337,7 @@ tokread
  lda #TOKEN_READ
  jsr CHKCOM+2  ;skip over READ token otherwise SYNTAX ERROR
  ldx #126      ;file number 126
- stx $13       ;current I/O channel (cmd logical file) number
+ stx CHANNL    ;current I/O channel (cmd logical file) number
  jsr $e11e     ;BASIC wrapper for CHKIN with error error handling
 ;get or create pointer to string pointer provided as param
  jsr PTRGET    ;search for a var & setup if not found
@@ -1493,16 +1495,16 @@ endtimer rts
 ; SYS address [,a] [,x] [,y] [,p]
 sys
  jsr getvaluez ;get 2-byte int into $14 lobyte, $15 hibyte
- lda #252      ;prepare for loop of 4 registers
- sta $02       ;current register index offset
+ ldy #252      ;prepare for loop of 4 registers
 regloop
+ sty $02       ;current register index offset
  jsr CHRGOT    ;another param?
  beq sysend
  jsr $b7f1     ;skip over comma then evaluate expression to single byte unsigned int into x reg
  txa
- inc $02       ;next regsiter index
  ldy $02
- sta $030c-253,y
+ sta $030c-252,y
+ iny
  bne regloop
 sysend
  jmp SYS+6    ;perform remainder of SYS
@@ -1527,7 +1529,7 @@ decx dex
  lda $a2       ;jiffy clock updated 60 times per sec.
 dlay2 cmp $a2
  beq dlay2
- lda $c5       ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
+ lda LSTX      ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
  cmp #$3f      ;STOP key?
  bne delay2    ;carry flag will be returned to caller to indicate STOP key pressed
 stopnow rts
@@ -1565,7 +1567,7 @@ applyauto
  rts
 ;
 ;******************
-; MDBASIC immediate mode input via vector (IMAIN)
+; MDBASIC immediate mode input via vector IMAIN ($0302)
 ;******************
 immed
  jsr detrap     ;ensure error trapping is off
@@ -1755,6 +1757,7 @@ romin
  lda $b8        ;close current open file
  jmp CLOSE
 ;
+; Vector to Kernal LOAD Routine ILOAD ($0330)
 newload
  sta $93     ;flag for load routine 0=Load, 1=Verify
  ldx $b9     ;secondary address
@@ -1843,6 +1846,7 @@ isbin       ;otherwise do not return to calling subroutine
  rts        ;and the running BASIC program can continue
 ;
 ;*******************
+; Vector to Kernal SAVE Routine ISAVE ($0332)
 ;secondary address 2=SCREEN, 3=CHAREN, 4=BITMAP
 newsave
  lda $b9      ;secondary address
@@ -1856,7 +1860,7 @@ newsav
  dec R6510
  jmp savee
 ;
-;mdbasic bsave need 47 bytes
+;MDBASIC binary save
 bsave
  beq osave
  jsr FRMEVL   ;eval expression
@@ -3196,14 +3200,13 @@ wave jsr ppw   ;get voice SID register offset (voice#-1)*7
  sta $bb       ;save SID register offset
  jsr ckcom2    ;check for and skip over comma, misop err if missing
  jsr getval    ;get waveform single byte operand value into $14
- sta $02       ;get waveform value selection
- cmp #9        ;first bad value
- bcs badwav    ;greater or equal to first bad value
- asl           ;multiply waveform value * 16 to target bits 4-7
+ cmp #9        ;valid values 0 to 8
+ bcs badwav
+ asl           ;move low nybble to high nybble
  asl
  asl
  asl
- sta $02       ;waveform
+ sta $02       ;waveform in bits 4-7
  jsr comchk
  bne waveit
  jsr getboolg  ;gate
@@ -3240,25 +3243,25 @@ waveit
 ; VOL n   where n=0 to 15
 vol
  jsr getval15z  ;only values from 0-15 allowed
- sta $02
  lda md418      ;read current value which includes upper nybble that holds the resonance
  and #%11110000 ;clear volume bits only
- ora $02        ;apply new volume bits only
+ ora $14        ;apply new volume bits only
 setvol
- sta md418      ;maintain global var value for reading
  sta SIGVOL     ;SID register lower nybble is volume, upper nybble is filter type
+setvol2
+ sta md418      ;mock register for $d418 Volume and Filter Select Register
  rts
 ;
 ;subroutine to clear SID
 sidclr
- ldy #$18        ;clear all 24 SID registers
+ ldy #$18       ;clear all 24 SID registers
  lda #0
+ sta md417      ;mock register for $d417 Filter Resonance Control Register
 clrsid sta FRELO1,y
  dey
  bpl clrsid
- sta md417       ;mock register for $d417 Filter Resonance Control Register
- sta md418       ;mock register for $d418 Volume and Filter Select Register
- rts
+ bmi setvol2
+;
 ;*******************
 ;NTSC and PAL hold the value of 1Hz (based on clock speed)
 ;REG_VAL=FREQUENCY/NTSC
@@ -3676,7 +3679,7 @@ key
  lda $0d        ;number or string?
  beq keynum     ;number is key assign
  jsr getstr2    ;get source string as first param
- beq doget-1
+ beq keywait-1
  ldy #0
 cpystr2
  lda ($50),y    ;source param str
@@ -3688,7 +3691,8 @@ cpystr2
  sta paintbuf3,y
  sta keyidx
  inc keystrflg  ;flag for manual key string
- jmp keyirqon
+ lda #%00000100 ;key pump irq flag
+ jmp irqon
 ;
 illqty3 jmp FCERR
 ;
@@ -4041,7 +4045,8 @@ ptr3ref sta $07f8,x
  lda $bf        ;sprite bit weight
  ora aniopt
  sta aniopt
- jmp anion      ;turn on sprite animation and ensure MDB IRQ is on
+ lda #%00000010 ;sprite animation flag on
+ jmp irqon      ;turn on sprite animation and ensure MDB IRQ is on
 ;
 ; PLAY S$
 playyy
@@ -4063,7 +4068,15 @@ cpystr lda ($50),y
  lda ($50),y
  cmp #"!"       ;play in foreground?
  beq pfgnd
- jmp playirqon  ;play in background
+ lda #%00000001 ;play flag on
+irqon
+ ora MDBIRQ
+ sta MDBIRQ
+ sei
+ jsr mdbirqon
+ cli
+ rts
+;
 ;play notes in foreground
 pfgnd lda $a2
  cmp $a2
@@ -4094,7 +4107,8 @@ played
  pla
  sta R6510
 endplay
- jsr playirqoff
+ lda #%11111110 ;play irq flag off
+ jsr irqoff
  ldx playvoice  ;SID reg offset
  lda playwave   ;select current waveform; start release cycle
  sta VCREG1,x   ;start decay cycle
@@ -4407,7 +4421,7 @@ inf
  jmp $b8d7   ;convert unsigned 4-byte int in FAC1 to a 5-byte float in FAC1
 ;
 ;********************
-;* new reset vector *
+;* new reset subroutine set by cartridge header
 ;********************
 resvec
  ldx #$ff    ;highest stack ptr offset (empty stack)
@@ -4426,7 +4440,7 @@ resvec
  and #%11111110
  sta R6510   ;switch LOROM to LORAM
  jsr newvec  ;set new vectors to MDBASIC routines
- jsr initclk ;init TOD clock #2
+ jsr initclk ;init TOD clocks
  inc R6510   ;switch LORAM to LOROM
  lda #<mesge
  ldy #>mesge
@@ -4437,7 +4451,7 @@ resvec
  jsr $e430   ;prints the BYTES FREE message
  jmp $e39d   ;to basic main loop
 ;***********************
-;* new RUN-STOP vector *
+;* new RUN-STOP IRQ-driven routine set by cartridge header
 ;***********************
 runstp
  lda #$7f
@@ -4448,7 +4462,7 @@ runstp
  jsr STOP        ;determine if STOP key was pressed
  bne nothin      ;if not, continue with NMI handler
 ;********************
-;* new BREAK vector *
+;* BREAK Instruction IRQ-driven routine via vector CBINV ($0316)
 ;********************
 brkirq
  jsr norm
@@ -4470,7 +4484,8 @@ brkirq
 nothin jmp $fe72 ;NMI RS-232 Handler
 ;
 ;*************************
-;* MDBASIC ERROR HANDLER *
+;* MDBASIC ERROR HANDLER
+;* BASIC Error Handler Routine via vector IERROR ($0300)
 ;*************************
 errors txa
  bpl doerr    ;bit 7 off means error condition
@@ -4533,7 +4548,10 @@ hibyer
  jsr PLOT
  jmp (IMAIN)  ;main BASIC loop
 ;
-; IRQ for key decode overriden to support function keys
+;*************************
+; Keyboard Table Setup Routine via vector KEYLOG ($028F)
+; IRQ driven key decode overriden to support function keys
+;*************************
 keychk
  lda $9d        ;control messages enabled?
  beq nokey      ;no, use original routine
@@ -4554,7 +4572,7 @@ stdkey sta $f5
  ldy $cb        ;matrix coordinate of current key pressed
  lda ($f5),y
  tax
- cpy $c5        ;matrix coordinate of last key pressed, 64=None Pressed
+ cpy LSTX       ;matrix coordinate of last key pressed, 64=None Pressed
  bne norep      ;not a repeat keypress
  jmp $eaf0      ;resume CBM func to decode keystroke
 norep sec
@@ -4569,17 +4587,19 @@ fkey
  asl
  asl
  sta keyidx
- lda #%00000100
+ lda #%00000100 ;key pump irq flag on
  ora MDBIRQ
  sta MDBIRQ
  jsr mdbirqon
  ldx #$ff
  jmp $eae9      ;continue regular key decode func
 ;
+;*************************
 ; IRQ driven key pump into keyboard buffer
+;*************************
 keypump
- ldx NDX        ;if keyboard buffer is empty
- bne irqdone2   ;then forward to original IRQ vector
+ ldx NDX        ;if keyboard buffer is empty then put next char
+ bne irqdone2   ;otherwise forward to original IRQ vector
  lda R6510
  and #%11111110
  sta R6510      ;switch LOROM to LORAM
@@ -4599,12 +4619,14 @@ nostrflg
 alldone
  lda #0
  sta keystrflg
- jmp keyirqoff
+ lda #%11111011 ;key pump irq flag off
+ jmp irqoff
 irqdone2
  rts
 ;
-;------------------------
+;*************************
 ;MDBASIC IRQ Handler
+;*************************
 mdbirqhdl
  lda MDBIRQ
  beq mdbirqoff2
@@ -4627,7 +4649,9 @@ mdbirqoff2
  jsr mdbirqoff
  jmp (irqtmp)   ;orgininal irq vector
 ;
+;*************************
 ;Sprite animation IRQ routine
+;*************************
 sprani
  lda aniopt
  beq anioff     ;all flags off so turn off irq
@@ -4650,42 +4674,21 @@ ptr2ref sta $07f8,x
 nxtani
  dex
  bpl chkani
-anidone rts
-;
-;MDBASIC IRQ control routines
-playirqoff
- lda #%11111110
-.byte $2c
+ rts
 anioff
  lda #%11111101
-.byte $2c
-keyirqoff
- lda #%11111011
+irqoff
  and MDBIRQ
  sta MDBIRQ
  rts
 ;
-playirqon
- lda #%00000001
-.byte $2c
-anion
- lda #%00000010
-.byte $2c
-keyirqon
- lda #%00000100
- ora MDBIRQ
- sta MDBIRQ
- sei
- jsr mdbirqon
- cli
- rts
 ;ensure MDBASIC IRQ handler is enabled
 ;this subroutine assumes IRQs are already disabled
 ;caller should be an IRQ subroutine or use sei/cli
 mdbirqon
  ldy CINV+1
  cpy #>mdbirqhdl
- beq mdbirqon-1
+ beq irqset
  ldx CINV
  stx irqtmp
  sty irqtmp+1
@@ -4694,7 +4697,7 @@ mdbirqon
 setirq
  stx CINV
  sty CINV+1
- rts
+irqset rts
 mdbirqoff
  ldx irqtmp   ;restore IRQ vector
  ldy irqtmp+1 ;back to original $EA31 or user-defined address
@@ -4714,11 +4717,10 @@ ppw2 tax
 ;*******************
 ;multiply the value in accumulator by 8 returning word in $be,$bf
 times8
- pha
- lda #0
- sta $be    ;result lobyte
- sta $bf    ;result hibyte
- pla        ;num to multiply by 8
+ ldx #0
+ stx $be    ;result lobyte
+ stx $bf    ;result hibyte
+ tax        ;num to multiply by 8
  beq end40
  asl
  rol $bf
@@ -4810,7 +4812,7 @@ getchrset
  adc $26      ;carry is already clear
  sta $26      ;charset 0=$d000,1=$d400,2=$d800,3=$dc00
  rts
-;
+;******************
 getboolg jsr CHRGET
 getboolz beq missop
 getbool  jsr getval
@@ -4818,6 +4820,7 @@ getbool  jsr getval
  bcs illqty4
  tax               ;sets zero flag if a reg is zero
  rts               ;result is in both a and x reg
+;******************
 getval15g jsr CHRGET
 getval15z beq missop
 getval15  jsr getval
@@ -4852,6 +4855,7 @@ getvalue  jsr FRMNUM ;eval numeric expr & type
  ldy $15
  rts
 ;*******************
+; get plot type and color for graphics statements
 types
  jsr chkcomm     ;if current char is comman skip over it
  cmp #","
@@ -5026,7 +5030,7 @@ keystrflg  .byte 0 ;flag to indicate key string from KEY cmd
 md417      .byte 0   ;holds current filter control and resonance
 md418      .byte 0   ;holds current volume (lo nybble) and filter type (hi nybble)
 
-irqtmp     .word 0   ;temp IRQ vector storage
+irqtmp     .word $ea31 ;temp IRQ vector storage
 
 ;sprite animation
 aniopt     .byte 0     ;enables animation for 8 sprites with 8 bit flags
@@ -5054,7 +5058,7 @@ playwave   .byte 0   ;waveform for play notes
 
 
 ;********************************************************************
-;* ROM barrier at A000-BFFF switch to RAM using $01 before entry    *
+;* ROM barrier at A000-BFFF switch to RAM using R6510 before entry  *
 ;********************************************************************
 ;
 *=$a000 ;"MDBASIC RAM under ROM Memory Block"
@@ -5501,7 +5505,7 @@ std010 sta MSIGX
  ldy $fe
  beq linedon
 movewait
- lda $c5      ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
+ lda LSTX     ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
  cmp #$3f     ;STOP key?
  bne movwait  ;carry flag will be returned to caller to indicate STOP key pressed
  pla
@@ -5929,7 +5933,7 @@ fillit
  cmp #$c8
  bcs fillit
 ;check STOP key
- lda $c5
+ lda LSTX
  cmp #$3f
  beq epaint
  jmp beginp
@@ -6938,18 +6942,19 @@ dumpscreen2
  bne upcase      ;yes, use upper/lower case text
  ldy #$07        ;7=upper and lower case, 0 = upper case and symbols
 upcase jsr opnprt
- lda #27
+;send control codes for ESC/P printers
+;Set n/180-inch line spacing using codes ESC 3 n
+ lda #27         ;ESC
  jsr CHROUT
- lda #"3"
+ lda #"3"        ;3
  jsr CHROUT
- lda #25
+ lda #25         ;n
  jsr CHROUT
- lda #0
- sta $fb
- sta $fe         ;column counter
+ ldy #0
+ sty $fb
+ sty $fe         ;column counter
  lda HIBASE      ;top page of screen mem hibyte
  sta $fc
- ldy #$00
 pchr lda ($fb),y ;scan (screen) code
 ;convert scan code to a printable standard character
  pha
@@ -6969,7 +6974,7 @@ big32 cmp #64
 dumpit sta $02
  pla
  bpl regchr
- lda #18
+ lda #18        ;RVS mode on
  jsr CHROUT
  lda $02
  jsr CHROUT
@@ -7000,12 +7005,14 @@ stopyn lda $fc
 dumpbitmap2
  ldy #5          ;secondary param - binary graphic
  jsr opnprt
-;send printer control codes
- lda #27
+;send printer codes for ESC/P printers
+;set line spacing using codes ESC A n
+;lines per inch is n/60 or n/72 for 9-pin printers
+ lda #27         ;ESC
  jsr CHROUT
- lda #$41
+ lda #65         ;A
  jsr CHROUT
- lda #8
+ lda #8          ;n
  jsr CHROUT
 ;prepare mem pointer starting at $FE07
  lda #$07
@@ -7017,19 +7024,22 @@ dumpbitmap2
  sta $fe
  lda #15
  sta $02
+;begin loop to print 300x200 bitmap image
 nxtbit lda $02
  eor #$ff
  sta $02
  ldx #$00
-;send printer codes
- lda #27
+;send printer codes for ESC/P printers
+;select 60-dpi graphics using codes ESC K nL nH
+ lda #27    ;ESC
  jsr CHROUT
- lda #75
+ lda #75    ;K
  jsr CHROUT
- lda #144
+ lda #144   ;nL
  jsr CHROUT
- lda #1
+ lda #1     ;nH
  jsr CHROUT
+;print data
  lda #25
  sta $fd
  lda #8
@@ -7051,7 +7061,7 @@ pekbyt
  and $02
  cmp #16        ;hi nybble to lo nybble for indexing 
  bcc ttatx      ;value is between 0 and 15, good index
- lsr            ;move hi nybble to lo nybble for indexing 
+ lsr            ;move hi nybble to lo nybble for indexing
  lsr
  lsr
  lsr
@@ -7084,8 +7094,8 @@ s1fbfc dec $fb
  lda $fc
  adc #$1f
  sta $fc
- jsr printcr
- lda #10
+ jsr printcr ;carriage return
+ lda #10     ;line feed
  jsr CHROUT
  lda $02
  bpl posnum
@@ -7101,9 +7111,10 @@ tcic dec $fe
  jmp nxtbit
 aldone
  jsr screenoff    ;turn screen back on
+;restore printer to 1/6 inch line using control codes for ESC/P printers
  lda #27
  jsr CHROUT
- lda #50
+ lda #"2"
  jsr CHROUT
  rts
 ;
@@ -7111,7 +7122,7 @@ aldone
 ;scroll up
 scroll0
  jsr wrapit
- lda $fb
+nxtup lda $fb
  clc
  adc #40
  sta $ac
@@ -7159,7 +7170,7 @@ cpyup lda ($ac),y
  sta $fd
  lda $af
  sta $fe
- jmp scroll0+3
+ jmp nxtup
 ;scroll down
 scroll1 jsr calcptr
  jsr wrapit
@@ -7216,7 +7227,7 @@ cpyleft iny
  jsr scrollh
  dec $bf
  bpl scroll2
- jmp memnorm ;switch LORAM back to LOROM
+hsdone jmp memnorm ;switch LORAM back to LOROM
 ;scroll right
 scroll3 ldy $be
  lda ($fb),y
@@ -7236,7 +7247,7 @@ cpyright dey
  jsr scrollh
  dec $bf
  bpl scroll3
- bmi scroll3-3
+ bmi hsdone
 ;--scroll subs--
 ;--------------
 scrollh
@@ -7895,7 +7906,7 @@ getparity
  sta $02
  lda M51CDR
  and #%00011111 ;clear target bits 5-7
- ora $02
+ ora $02        ;parity param value
  sta M51CDR
  jsr CHRGOT
  beq open232
@@ -7906,10 +7917,9 @@ gethndshk
  bne badserial  ;hibyte must be zero
  cmp #2
  bcs badserial
- sta $02
  lda M51CDR
  and #%11111110 ;clear target bit 0
- ora $02
+ ora $14        ;handshake param value
  sta M51CDR
 ;
 ;open the RS-232 channel
@@ -8324,8 +8334,9 @@ badtim2 cld
  sec
  rts
 ;
-;init TOD clocks
-;determines what the TOD clock frequency should be (50 or 60 Hz)
+;Initialize the TOD clock on both CIA 6526 chips.
+;MDBASIC uses TOD #2 for TIME and TIME$ functions.
+;Determine what the TOD clock frequency should be (50 or 60 Hz)
 ;by measuring how fast the timer can count down during the TOD's
 ;one-tenth of a second cycle.
 initclk
@@ -8345,26 +8356,34 @@ initclk
  sta TO2TEN       ;start TOD capture to registers
 t1 cmp TO2TEN     ;wait for first change
  beq t1           ;to begin the measurement
- stx CI2CRA       ;start the timer to measure TOD clock #2
+ stx CI2CRA       ;start the timer to measure TOD #2 clock speed
  lda TO2TEN       ;wait for the next change
 t2 cmp TO2TEN     ;to take a timer measurement
  beq t2
 ;capture time for TOD to increment one tenth of a second
  ldx TI2AHI       ;only interested in hibyte value
-;set both 6526 CIA chips TOD frequency 
- cpx #100         ;should be 112 for 60Hz, 50 for 50Hz
- bcc clk50
- lda #%01111111   ;clear bit 7 for 60Hz
- and CIACRA       ;apply to TOD #1 (TOD #2 already set)
- sta CIACRA
- rts
-clk50
- lda #%10000000   ;set bit 7 for 50Hz
- ora CIACRA
- sta CIACRA       ;apply to TOD #1
- lda #%10000000
+;determine bit pattern for system
+ lda #%01111111   ;assume NTSC bit pattern for AND opration
+ cpx #100         ;should be over 99 for 60Hz else 50Hz
+ bcs sethz        ;carry is clear when 50Hz else 60Hz
+ eor #$ff         ;flip bit pattern to prepare for OR operation
+sethz
+ tay              ;save bit pattern
+;use bit pattern with AND/OR operation for system
+ bcs clk60        ;carry is clear when 50Hz else 60Hz
+ ora CIACRA       ;set bit7 to 1 for 50Hz
+ tax
+ tya
  ora CI2CRA
+ bcc setclk       ;always branches
+clk60
+ and CIACRA       ;set bit7 to 0 for 60Hz
+ tax
+ tya              ;recall bit pattern
+ and CI2CRA
+setclk
  sta CI2CRA       ;apply to TOD #2
+ stx CIACRA       ;apply to TOD #1
  rts
 ;
 ;initialize BASIC vectors
@@ -8486,7 +8505,7 @@ prtlin
 pdone rts
 stdout
  clc            ;clear carry used as error flag
- ldx $13        ;current output channel
+ ldx CHANNL     ;current output channel
  beq pdone      ;zero indicates default so no need to CHKOUT
  jmp CHKOUT     ;set current output channel, carry set on error
 ;
