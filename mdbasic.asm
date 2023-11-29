@@ -208,6 +208,7 @@ PARCHK = $aef1 ;eval expr inside parentheses
 CHKCLS = $aef7 ;check for and skip closing parentheses
 CHKOPN = $aefa ;check for and skip opening parentheses 
 CHKCOM = $aefd ;check for and skip comma
+ISVAR  = $af28 ;get the value of a variable into FAC1
 DIM    = $b081 ;perform DIM
 PTRGET = $b08b ;search for a variable & setup if not found
 AYINT  = $b1bf ;convert FAC1 to a signed integer in FAC1
@@ -232,6 +233,7 @@ MOV2F  = $bbca ;move a 5-byte floating point number from FAC1 to memory $57-$5B 
 MOVEF  = $bc0f ;copy FAC1 to FAC2 without rounding
 QINT   = $bc9b ;convert FAC1 into a 4-byte (32-bit) signed integer within FAC1
 INT    = $bccc ;perform INT
+FIN    = $bcf3 ;convert ASCII string to a float in FAC1
 FINLOG = $bd7e ;add signed integer to FAC1
 INPRT  = $bdc2 ;print IN followed by a line number
 LINPRT = $bdcd ;print 2-byte number stored in A (hibyte), X (lobyte)
@@ -331,7 +333,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.11.11"
+.text "mdbasic 23.11.29"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -599,9 +601,15 @@ norma cmp #" "  ;space character?
  bvs takchr
  cmp #"?"
  bne skip
- lda #TOKEN_PRINT ;PRINT token?
+ lda #TOKEN_PRINT
  bne takchr
-skip cmp #"0"
+skip
+ cmp #"'"
+ bne skipp
+ lda #0
+ beq rem
+skipp
+ cmp #"0"
  bcc skip1
  cmp #"<"
  bcc takchr
@@ -627,14 +635,15 @@ takchr inx
  lda BUF-5,y
  beq endln
  sec
- sbc #":"
+ sbc #":"       ;ascii $3a
  beq skip2
- cmp #$49       ;data-:
+ cmp #$49       ;data token $83 minus $3a
  bne skip3
 skip2 sta $0f
 skip3 sec
- sbc #$55       ;rem-:
+ sbc #$55       ;rem token $8f minus $3a minus $55
  bne nxtchr
+rem
  sta $08
 remlop lda BUF,x
  beq takchr
@@ -736,7 +745,10 @@ onkey1
  dec keyflag    ;otherwise switch from paused (2) to on (1)
  jmp NEWSTT     ;find beginning of next statement and execute
 ;
-let jmp LET     ;perform LET
+remm jmp REM
+let cmp #"'"-$80
+ beq remm
+ jmp LET        ;perform LET
 badtok jmp SNERR
 tstcmd
  sbc #$80
@@ -762,18 +774,21 @@ newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
  jsr CHRGET
  bcc xbcf3        ;numeric digit 0 to 9
  jsr $b113        ;Check If .A Register Holds Alphabetic ASCII Character
- bcs isvar        ;is alpha
+ bcs isvari       ;is alpha
  cmp #"@"
  beq octal        ;octal value
  bcs funtok       ;probably token
- cmp #"$"         ;hex value literal?
- beq hexa
  cmp #"%"         ;binary value literal?
  beq binary
-oldfun
- jmp $aead        ;execute CBM BASIC function
-isvar jmp $af28   ;get value of variable
-xbcf3 jmp $bcf3   ;convert ASCII numerals into float with result in FAC1
+ bcs oldfun       ;probably a parenthesis or decimal point
+ cmp #"$"         ;hex value literal?
+ beq hexa
+ cmp #"!"         ;NOT short-hand
+ beq not          ;otherwise probably a quote
+oldfun jmp $aead  ;execute CBM BASIC function
+not    jmp $aed0  ;perform NOT
+isvari jmp ISVAR  ;get value of variable
+xbcf3  jmp FIN    ;convert ASCII numerals into float with result in FAC1
 funtok
  cmp #FIRST_FUN_TOK ;CBM basic max token for functions?
  bcc oldfun       ;bad func token - will raise error

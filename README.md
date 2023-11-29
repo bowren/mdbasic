@@ -1,6 +1,6 @@
 # MDBASIC
 MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
-MDBASIC version 23.10.22<br>
+MDBASIC version 23.11.29<br>
 <br>
 Download the documentation file <b>mdbasic.pdf</b> for details.<br>
 <br>
@@ -119,6 +119,17 @@ TRACE                     :REM RUN PROGRAM WITH TRACE ENABLED
 110 IF ERROR(0) = 29 THEN RESUME 65   :REM LOAD ERR, CONT AT LINE 65
 115 IF ERROR(0) = 15 THEN RESUME      :REM OVERFLOW, TRY STMT AGAIN
 120 ERROR 11                          :REM RAISE SYNTAX ERROR
+</pre>
+<br>
+<i>Other Features:</i><br>
+MDBASIC supports numeric constants of base 2 (binary), 8 (octal) or hexadecimal.<br>
+The NOT expression short-hand is the exclamation point. REM (remark) short-hand<br>
+is the apostrophe. See examples below:<br>
+<pre style="font-family:'Courier New'">
+B = %00001111   :’BINARY 15
+H = $FFFF       :’HEX 65535
+O = @20         :’OCTAL 16
+X = !X          :’SAME AS X = NOT X
 </pre>
 <br>
 <br>
