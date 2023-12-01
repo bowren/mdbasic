@@ -333,7 +333,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.11.29"
+.text "mdbasic 23.12.01"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -1025,7 +1025,6 @@ vars dec R6510
 ;"V0:"                           - validate (defragment) disk
 disk
  jsr getstr0     ;get DOS string
- beq donehere
  jsr SETNAM
  jsr getdskdev   ;get disk device num in x reg
  lda #$7e        ;file handle 126
