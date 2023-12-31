@@ -333,7 +333,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 23.12.01"
+.text "mdbasic 23.12.31"
 .byte 13
 .text "(c)1985-2023 mark bowren"
 .byte 13,0
@@ -769,6 +769,31 @@ oldcmd
 ;
 ;Evalutate functions via vector IEVAL ($030A) originally pointing to EVAL $AE86
 ;
+valfn
+ jsr CHRGET
+ jsr PARCHK        ;PARCHK Evaluate Expression Within Parentheses
+ jsr $b7ad         ;perform VAL
+ lda $61           ;if VAL is 0
+ ora $66           ;then check for hex,binary and octal value
+ bne valued
+ lda $22           ;set TXTPTR to first char in string
+ sta $7a
+ lda $23
+;push onto stack the return address of TXTPTR restore
+ sta $7b
+ lda #$b7
+ pha
+ lda #$e1
+ pha
+ jsr CHRGOT
+ cmp #"@"
+ beq octal
+ cmp #"$"
+ beq hexaa
+ cmp #"%"
+ beq binary
+valued rts        ;assume zero value
+;
 newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
  sta $0d          ;Flag Type of Data (String or Numeric) to enforce data type
  jsr CHRGET
@@ -782,7 +807,7 @@ newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
  beq binary
  bcs oldfun       ;probably a parenthesis or decimal point
  cmp #"$"         ;hex value literal?
- beq hexa
+hexaa beq hexa
  cmp #"!"         ;NOT short-hand
  beq not          ;otherwise probably a quote
 oldfun jmp $aead  ;execute CBM BASIC function
@@ -790,6 +815,8 @@ not    jmp $aed0  ;perform NOT
 isvari jmp ISVAR  ;get value of variable
 xbcf3  jmp FIN    ;convert ASCII numerals into float with result in FAC1
 funtok
+ cmp #$c5 ;VAL token?
+ beq valfn
  cmp #FIRST_FUN_TOK ;CBM basic max token for functions?
  bcc oldfun       ;bad func token - will raise error
  sbc #FIRST_FUN_TOK
@@ -1235,41 +1262,30 @@ fill
  cmp #","       ;another comma?
  beq srncol
  jsr getval     ;get scan code
- sta $bb
-;fill text
- ldx $bf        ;line count
-pokep ldy $be
-nextp lda $bb
- sta ($fb),y
- dey
- bpl nextp
- lda $fb
- clc
- adc #40
- sta $fb
- lda $fc
- adc #$00
- sta $fc
- dex
- bpl pokep
+ jsr filler
 srncol
  jsr chkcomm    ;check and skip over comma, quit if not found
- jsr getval     ;get color
+ jsr getval15   ;get fill color
+ ldx $fd
+ ldy $fe
+ stx $fb
+ sty $fc
+filler
  sta $02
-;fill color
- ldx $bf
-nxtc ldy $be
- lda $02
-nxtcol sta ($fd),y
+ ldx $bf        ;line count
+nxtc ldy $be    ;column count
+ lda $02        ;poke code
+nxtcol
+ sta ($fb),y
  dey
  bpl nxtcol
  lda #40
  clc
- adc $fd
- sta $fd
- lda $fe
+ adc $fb
+ sta $fb
+ lda $fc
  adc #$00
- sta $fe
+ sta $fc
  dex
  bpl nxtc
  rts
@@ -1936,19 +1952,8 @@ old lda #$08
  sta $0802
 old2
  jsr LINKPRG
- lda $22   ;apply calculated end-of-prg pointer
- ldx $23
- clc
- adc #$02
- sta $2d   ;Pointer to the Start of the BASIC Variable Storage Area
- sta $2f   ;Pointer to the Start of the BASIC Array Storage Area
- sta $31   ;Pointer to End of the BASIC Array Storage Area (+1), and the Start of Free RAM
- bcc savex
- inx
-savex stx $2e
- stx $30
- stx $32
- rts
+ dec R6510
+ jmp old3
 ;
 ;*******************
 ; DELETE line  (delete one line)
@@ -4938,7 +4943,7 @@ getpnt
  jsr pntweg      ;get x,y, plot type
  jmp savepoint
 ;*******************
-;these routines are used by command under ROM
+;these routines are used while BASIC ROM is switched out
 rom1 inc R6510   ;switch to rom (a000-bfff)
  jsr GIVAYF      ;convert 16-bit signed int to float (a=hibyte y=lobyte)
  jmp prtnum
@@ -8737,6 +8742,21 @@ ne2d dec $2d
  jsr CHRGOT
  bcc dec2d
 workdone
+ jmp memnorm
+;
+old3
+ lda $22   ;apply calculated end-of-prg pointer
+ ldx $23
+ clc
+ adc #$02
+ sta $2d   ;Pointer to the Start of the BASIC Variable Storage Area
+ sta $2f   ;Pointer to the Start of the BASIC Array Storage Area
+ sta $31   ;Pointer to End of the BASIC Array Storage Area (+1), and the Start of Free RAM
+ bcc savex
+ inx
+savex stx $2e
+ stx $30
+ stx $32
  jmp memnorm
 ;
 .end

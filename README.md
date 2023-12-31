@@ -1,6 +1,6 @@
 # MDBASIC
 MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
-MDBASIC version 23.12.01<br>
+MDBASIC version 23.12.31<br>
 <br>
 Download the documentation file <b>mdbasic.pdf</b> for details.<br>
 <br>
@@ -33,7 +33,7 @@ READY.
 * Displays memory address range after LOADing programs
 * LOAD/SAVE directly to/from the text screen, bitmap or character definition memory
 * SAVE custom address range using existing SAVE command
-* Binary, Hexadecimal and Octal values in expressions
+* Binary, Hexadecimal and Octal contant values in expressions and VAL strings
 * 8 assignable function keys each with up to 15 characters
 * Freeze LISTing by holding down the shift key
 </pre>
@@ -122,14 +122,17 @@ TRACE                     :REM RUN PROGRAM WITH TRACE ENABLED
 </pre>
 <br>
 <i>Other Features:</i><br>
-MDBASIC supports numeric constants of base 2 (binary), 8 (octal) or hexadecimal.<br>
+MDBASIC supports numeric constants of base 2 (binary %), 8 (octal @) or 16 (hexadecimal $).<br>
+The VAL function has been augmented to support these number bases.
 The NOT expression short-hand is the exclamation point. REM (remark) short-hand<br>
 is the apostrophe. See examples below:<br>
 <pre style="font-family:'Courier New'">
-B = %00001111   :’BINARY 15
-H = $FFFF       :’HEX 65535
-O = @20         :’OCTAL 16
-X = !X          :’SAME AS X = NOT X
+B1 = %00001111    :’DECIMAL VALUE OF 15 FROM BINARY CONSTANT %00001111
+B2 = VAL("%1111") :'DECIMAL VALUE OF 15 FROM BINARY STRING "%1111"
+SYS $C000,0       :’CALL TO ADDRESS 49152 WITH ACCUMULATOR LOADED WITH ZERO
+H = VAL("$C000")  :'DECIMAL VALUE OF 49152 FROM HEX STRING "$C000"
+O = @20           :’DECIMAL VALUE 16 FROM OCTAL CONSTANT @20
+X = !X            :’SAME AS X = NOT X
 </pre>
 <br>
 <br>
