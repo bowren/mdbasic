@@ -4346,14 +4346,14 @@ joy
  inc R6510
  jmp nobutt
 ;
-illqty7 jmp FCERR ;display illegal qty error
-;
 ;*******************
 ; K = KEY   - used with ON KEY GOSUB to indicate key causing event
 keyfn
  jsr CHRGET
  ldy keyentry
  jmp nobutt
+;
+illqty7 jmp FCERR ;display illegal qty error
 ;
 ;*******************
 ; E = ERROR(n) where n=0 Error Number, n=1 Error Line Number
@@ -4421,6 +4421,8 @@ hex
 ; V = INF(n) where n = 0 to 15 to select info
 inf
  jsr getfnparam
+ cmp #36
+ bcs illqty7
  dec R6510
  jsr inff
  inc R6510
@@ -5146,7 +5148,7 @@ infbytes
 .byte LNMX      ;csr max columns on current line (39 or 79)
 .byte GDBLN     ;ASCII value of char under csr (when blinking)
 .byte TMPASC    ;ASCII value of last character printed to screen
-.byte INSRT     ;insert char count
+.byte CHANNL    ;current i/o file number (set by CMD)
 .byte LDTND     ;num open files
 .byte NDX       ;num chars in keyboard buffer
 infwords
@@ -8656,21 +8658,23 @@ int4
  sta $61
  rts
 membank
- cmp #21
- bne basline
+ cmp #22
+ beq fstart
+ bcs infptrs
  lda CI2PRA
  and #%00000011
  eor #%00000011
  jmp goinf
-basline
- cmp #22
- bne dtaline
- ldy $3a
- lda $39
+fstart
+ lda $c1
+ ldy $c2
  jmp int4
-dtaline
- ldy $40
- lda $3f
+infptrs
+ sbc #23
+ asl
+ tax
+ lda $2b,x
+ ldy $2c,x
  jmp int4
 ;
 deletee
