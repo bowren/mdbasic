@@ -5,6 +5,7 @@
 ;zero-page registers
 R6510  = $01 ;LORAM/HIRAM/CHAREN RAM/ROM selection and cassette control register
 CHANNL = $13 ;Current I/O Channel (CMD Logical File) Number
+TXTTAB = $2B ;Pointer to the Start of BASIC Program Text
 LDTND  = $98 ;Number of Open I/O Files/Index to the End of File Tables
 LSTX   = $c5 ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
 NDX    = $c6 ;number of keys in keyboard buffer
@@ -175,7 +176,7 @@ REASON = $a408 ;check for space in memory
 READY  = $a474 ;print READY
 LINKPRG= $a533 ;relink lines of tokenized program text
 INLIN  = $a560 ;input a line to buffer from keyboard (max 88 chars)
-FINDLN = $a613 ;search for line number using ptr at $2b, $2c
+FINDLN = $a613 ;search for line number using ptr TXTTAB
 NEW    = $a642 ;perform NEW
 CLEAR  = $a65e ;perform CLR
 RUNC   = $a68e ;reset ptr of current text char to the beginning of prg text
@@ -1842,9 +1843,9 @@ oklod2
 oklod3
  lda $9d    ;display message if not in prg mode, #$C0=kernal & ctrl, #$80=ctrl only
  bpl lodone ;don't display load addresses
- jsr $ab3f ; print space
- ldx $2b    ;assume BASIC mem load
- lda $2c
+ jsr $ab3f  ;print space
+ ldx TXTTAB ;assume BASIC mem load
+ lda TXTTAB+1
  ldy $02    ;secondary device: 0=BASIC load, 1=binary
  beq prtmem
  ldx $c1    ;print mem ptr from file
@@ -1867,16 +1868,16 @@ lodbas
  clc        ;no error
  rts
 lodbin
- lda $2c    ;check if binary load was actually a BASIC prg
- cmp $c2    ;by comparing the start address of loaded binary
- bne isbin  ;with the start address of BASIC prg mem
- lda $c1    ;if it was loaded exactly in BASIC mem
- cmp $2b    ;then finish load as usual to init mem ptrs
- beq lodbas ;this will kill the current running BASIC prg
-isbin       ;otherwise do not return to calling subroutine
- pla        ;to prevent adjusting BASIC memory pointers
- pla        ;this way no corruption of BASIC mem will occur
- rts        ;and the running BASIC program can continue
+ lda TXTTAB+1 ;check if binary load was actually a BASIC prg
+ cmp $c2      ;by comparing the start address of loaded binary
+ bne isbin    ;with the start address of BASIC prg mem
+ lda $c1      ;if it was loaded exactly in BASIC mem
+ cmp TXTTAB   ;then finish load as usual to init mem ptrs
+ beq lodbas   ;this will kill the current running BASIC prg
+isbin         ;otherwise do not return to calling subroutine
+ pla          ;to prevent adjusting BASIC memory pointers
+ pla          ;this way no corruption of BASIC mem will occur
+ rts          ;and the running BASIC program can continue
 ;
 ;*******************
 ; Vector to Kernal SAVE Routine ISAVE ($0332)
@@ -3815,13 +3816,13 @@ getcoords
  cpx #40         ;max columns
  bcs badscroll
  stx $fb
- stx $be
+ stx $be         ;columns to scroll
  jsr ckcom2      ;check for and skip over comma, misop err if missing
  jsr getvalue    ;y1
  bne badscroll   ;hibyte must be 0
  cpx #25         ;max rows
  bcs badscroll
- stx $bf
+ stx $bf         ;rows to scroll
  dec R6510
  jsr calcptr
  inc R6510
@@ -4453,8 +4454,8 @@ resvec
  lda #<mesge
  ldy #>mesge
  jsr STROUT  ;display MDBASIC banner
- lda $2b     ;ptr to start of BASIC program text
- ldy $2c
+ lda TXTTAB  ;ptr to start of BASIC program text
+ ldy TXTTAB+1
  jsr REASON  ;check free mem
  jsr $e430   ;prints the BYTES FREE message
  jmp $e39d   ;to basic main loop
@@ -5109,7 +5110,7 @@ playbuf1 .repeat 256,0
 ;code  255 same as 126
 asc2scr
 ;codes 32 to 127
-.byte 32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63
+;.byte 32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63
 .byte 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,64,65,66
 .byte 67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95
 ;codes 160 to 255
@@ -5155,8 +5156,8 @@ infwords
 .word SHFLAG    ;shift flag
 .word COLOR     ;current foreground color for text
 .word GDCOL     ;color under cursor
-.word $02A6     ;PAL or NTSC
-.word $FF80     ;Kernal version/system id
+.word $02a6     ;PAL or NTSC
+.word $ff80     ;Kernal version/system id
 .word playindex ;index of next note to play in play string
 .word playoct   ;current play octave
 .word lastplotx ;last plotted x coordinate
@@ -5825,17 +5826,16 @@ texter lda $58  ;y size
  sta $ff        ;save plot type
 nextchar lda #0
  sta $59        ;index variable for current byte of dot data in char
-readstr ldy #0
+ ldy #0
  lda ($50),y    ;get character to display on bitmap
 ;convert ascii to screen code
  tay
  bpl cd0to127
  cmp #128+32
- bcc nonprt+1
- lda asc2scr-64,y
+ bcc nonprt
+ lda asc2scr-128-32,y
  jmp dotptr
 nonprt
- tya            ;find func to support nonprintable ascii
  ldy #28        ;29 ascii values have funcs
 fndctrl
  cmp ascctrl,y  ;ascii in ctrl code table?
@@ -5845,11 +5845,12 @@ fndctrl
  bmi nxtchar    ;do nothing
 cd0to127
  sec
- sbc #32
+ cmp #32
  bcc nonprt
-convert
+ cmp #64
+ bcc dotptr
  tay
- lda asc2scr,y
+ lda asc2scr-64,y
 ;determine mem ptr of dot data
 dotptr
  jsr txtprint
@@ -7163,20 +7164,20 @@ scroll0
 nxtup lda $fb
  clc
  adc #40
- sta $ac
+ sta $57
  lda $fc
  adc #0
- sta $ad
+ sta $58
  lda $fd
  clc
  adc #40
- sta $ae
+ sta $59
  lda $fe
  adc #0
- sta $af
+ sta $5a
 ;
- ldy $be       ;num bytes to move
- dec $bf
+ ldy $be       ;columns to scroll
+ dec $bf       ;rows to scroll
  bpl cpyup
 wrapup
  lda $02       ;wrap?
@@ -7194,55 +7195,55 @@ sftup
  dey
  bpl wrapup
  jmp memnorm  ;switch LORAM back to LOROM
-cpyup lda ($ac),y
+cpyup lda ($57),y
  sta ($fb),y
- lda ($ae),y
+ lda ($59),y
  sta ($fd),y
  dey
  bpl cpyup
- lda $ac
+ lda $57
  sta $fb
- lda $ad
+ lda $58
  sta $fc
- lda $ae
+ lda $59
  sta $fd
- lda $af
+ lda $5a
  sta $fe
  jmp nxtup
 ;scroll down
 scroll1 jsr calcptr
  jsr wrapit
-nxtdwn ldy $be
+nxtdwn ldy $be ;columns to scroll
  lda $fb
  sec
  sbc #40
- sta $ac
+ sta $57
  lda $fc
  sbc #0
- sta $ad
+ sta $58
  lda $fd
  sec
  sbc #40
- sta $ae
+ sta $59
  lda $fe
  sbc #0
- sta $af
+ sta $5a
  dec $bf
  bpl cpydwn
  bmi wrapup
-cpydwn lda ($ac),y
+cpydwn lda ($57),y
  sta ($fb),y
- lda ($ae),y
+ lda ($59),y
  sta ($fd),y
  dey
  bpl cpydwn
- lda $ac
+ lda $57
  sta $fb
- lda $ad
+ lda $58
  sta $fc
- lda $ae
+ lda $59
  sta $fd
- lda $af
+ lda $5a
  sta $fe
  jmp nxtdwn
 ;scroll left
@@ -7260,14 +7261,14 @@ cpyleft iny
  dey
  sta ($fd),y
  iny
- cpy $be
+ cpy $be     ;columns to scroll
  bne cpyleft
  jsr scrollh
- dec $bf
+ dec $bf     ;row to scroll
  bpl scroll2
 hsdone jmp memnorm ;switch LORAM back to LOROM
 ;scroll right
-scroll3 ldy $be
+scroll3 ldy $be ;columns to scroll
  lda ($fb),y
  sta $50
  lda ($fd),y
@@ -7283,7 +7284,7 @@ cpyright dey
  dey
  bne cpyright
  jsr scrollh
- dec $bf
+ dec $bf     ;rows to scroll
  bpl scroll3
  bmi hsdone
 ;--scroll subs--
@@ -7292,7 +7293,7 @@ scrollh
  lda $02       ;wrap?
  bne gowrap
  ldx COLOR     ;current foreground color
- lda #32       ;space char
+ lda #32       ;screen code for space char
  bne shiftchar ;always branches
 gowrap
  lda $50       ;saved char
@@ -7318,7 +7319,7 @@ shiftchar
 wrapit
  lda $02
  beq wdone
- ldy $be
+ ldy $be         ;columns to scroll
 cpybuf lda ($fb),y
  sta paintbuf1,y ;char mem buffer
  lda ($fd),y
@@ -8110,29 +8111,29 @@ noadd7 clc
 ;
 findd
  ldy #0
- lda ($2b),y ;should be $0801
+ lda (TXTTAB),y ;should be $0801
  sta $fb
  iny
- lda ($2b),y ;should be $0802
+ lda (TXTTAB),y ;should be $0802
  sta $fc
  ora $fb
  beq findd-1
  iny
- lda ($2b),y ;should be $0803
+ lda (TXTTAB),y ;should be $0803
  sta $39
  iny
- lda ($2b),y ;should be $0804
+ lda (TXTTAB),y ;should be $0804
  sta $3a
  jsr CHRGOT
  beq findd-1 ;nothing to find
  cmp #"""
  bne noquo
  jsr CHRGET
-noquo lda $2b
+noquo lda TXTTAB
  clc
  adc #4
  sta $fd
- lda $2c
+ lda TXTTAB+1
  adc #0
  sta $fe
 check ldy #$00
@@ -8659,22 +8660,27 @@ int4
  rts
 membank
  cmp #22
- beq fstart
- bcs infptrs
+ bcs fstart
  lda CI2PRA
  and #%00000011
  eor #%00000011
  jmp goinf
 fstart
- lda $c1
- ldy $c2
+ cmp #23
+ beq fend
+ bcs infptrs
+ ldx #19     ;$a4,$a4 is load end address
+.byte $2c
+fend ldx #0  ;$c1,$c2 is load start address
+ lda $ae,x
+ ldy $af,x
  jmp int4
 infptrs
- sbc #23
+ sbc #24
  asl
  tax
- lda $2b,x
- ldy $2c,x
+ lda TXTTAB,x
+ ldy TXTTAB+1,x
  jmp int4
 ;
 deletee
