@@ -5110,8 +5110,7 @@ playbuf1 .repeat 256,0
 ;code  255 same as 126
 asc2scr
 ;codes 64 to 127
-.byte 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,64,65,66
-.byte 67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95
+.byte 64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95
 ;codes 160 to 255
 .byte 32,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117
 .byte 118,119,120,121,122,123,124,125,126,127,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78
@@ -5151,6 +5150,39 @@ infwords
 .word lastplotx ;last plotted x coordinate
 .word lastploty ;last plotted y coordinate
 
+;scroll direction vectors up,down,left,right
+scrolls .rta scroll0,scroll1,scroll2,scroll3
+
+;string for keylist
+addchr .shift "+chr$("
+
+;function key assignments, 8 keys, 16 bytes each
+keybuf
+.text "list"
+.byte 13
+.repeat 16-5,0   ;F1
+.text "load"
+.byte 34
+.repeat 16-5,0   ;F3
+.text "files"
+.byte 13
+.repeat 16-6,0   ;F5
+.text "keylist"
+.byte 13
+.repeat 16-8,0   ;F7
+.text "run"
+.byte 13
+.repeat 16-4,0   ;F2
+.text "save"
+.byte 34
+.repeat 16-5,0   ;F4
+.text "text"
+.byte 13
+.repeat 16-5,0   ;F6
+.text "screenclr"
+.byte 13
+.repeat 16-10,0  ;F8
+
 ;table for printing a bitmap screen
 bmdt
 .byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
@@ -5162,11 +5194,34 @@ bmdt
 .byte $1a,$09,$12,$20,$92,$20,$12,$20,$f2,$1a,$0a,$20,$92,$20,$12,$20
 .byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
 
-;scroll direction vectors up,down,left,right
-scrolls .rta scroll0,scroll1,scroll2,scroll3
+;tables for plotting dots on a bitmap per line 0-24
+lbtab .byte 0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0
+hbtab .byte 224,225,226,227,229,230,231,232,234,235,236,237,239,240,241,242,244,245,246,247,249,250,251,252,254
 
-;string for keylist
-addchr .null "+chr$("
+;table of video screen matrix hibyte offset per line 0-24
+btab .byte 0,0,0,0,0,0,0,1,1,1,1,1,1,2,2,2,2,2,2,2,3,3,3,3,3
+
+ptab2
+.byte %10000000,%01000000,%00100000,%00010000,%00001000,%00000100,%00000010,%00000001
+.byte %01000000,%00000000,%00010000,%00000000,%00000100,%00000000,%00000001,%00000000
+.byte %10000000,%00000000,%00100000,%00000000,%00001000,%00000000,%00000010,%00000000
+.byte %11000000,%00000000,%00110000,%00000000,%00001100,%00000000,%00000011,%00000000
+ptab3
+.byte %01111111,%10111111,%11011111,%11101111,%11110111,%11111011,%11111101,%11111110
+.byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
+.byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
+.byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
+
+;baud rates not supported (too fast for IRQ) 3600,4800,7200,9600,19200
+baudrates .word 50,75,110,134,150,300,600,1200,1800,2400
+
+;MDBASIC parity parameter value range 0-4 to register M51CDR bits 7,6,5
+;0 = XX0 (0,64,128, or 192) = No Parity Generated or Received
+;1 = 001 (32)  = Odd Parity Transmitted and Received
+;2 = 011 (96)  = Even Parity Transmitted and Received
+;3 = 101 (160) = Mark Parity Transmitted and Received
+;4 = 111 (224) = Space Parity Transmitted and Received
+parity .byte %00000000,%00100000,%01100000,%10100000,%11100000
 
 ;PLAY command temp vars used during IRQ
 temp1     .byte 0
@@ -5197,63 +5252,6 @@ snotes .word 3824,4051,4547,5104,5407,6069,6813
 .word        3536
 .word        3969,4205,4720,5298,5613,6300,7072
 
-;table of video screen matrix hibyte offset per line 0-24
-btab .byte 0,0,0,0,0,0,0,1,1,1,1,1,1,2,2,2,2,2,2,2,3,3,3,3,3
-
-;MDBASIC parity parameter value range 0-4 to register M51CDR bits 7,6,5
-;0 = XX0 (0,64,128, or 192) = No Parity Generated or Received
-;1 = 001 (32)  = Odd Parity Transmitted and Received
-;2 = 011 (96)  = Even Parity Transmitted and Received
-;3 = 101 (160) = Mark Parity Transmitted and Received
-;4 = 111 (224) = Space Parity Transmitted and Received
-parity .byte %00000000,%00100000,%01100000,%10100000,%11100000
-
-;baud rates not supported (too fast for IRQ) 3600,4800,7200,9600,19200
-baudrates .word 50,75,110,134,150,300,600,1200,1800,2400
-;
-;tables for plotting dots on a bitmap per line 0-24
-lbtab .byte 0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0
-hbtab .byte 224,225,226,227,229,230,231,232,234,235,236,237,239,240,241,242,244,245,246,247,249,250,251,252,254
-
-ptab2
-.byte %10000000,%01000000,%00100000,%00010000,%00001000,%00000100,%00000010,%00000001
-.byte %01000000,%00000000,%00010000,%00000000,%00000100,%00000000,%00000001,%00000000
-.byte %10000000,%00000000,%00100000,%00000000,%00001000,%00000000,%00000010,%00000000
-.byte %11000000,%00000000,%00110000,%00000000,%00001100,%00000000,%00000011,%00000000
-ptab3
-.byte %01111111,%10111111,%11011111,%11101111,%11110111,%11111011,%11111101,%11111110
-.byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
-.byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
-.byte %00111111,%00000000,%11001111,%00000000,%11110011,%00000000,%11111100,%00000000
-;
-
-;function key assignments, 8 keys, 16 bytes each
-keybuf
-.text "list"
-.byte 13
-.repeat 16-5,0   ;F1
-.text "load"
-.byte 34
-.repeat 16-5,0   ;F3
-.text "files"
-.byte 13
-.repeat 16-6,0   ;F5
-.text "keylist"
-.byte 13
-.repeat 16-8,0   ;F7
-.text "run"
-.byte 13
-.repeat 16-4,0   ;F2
-.text "save"
-.byte 34
-.repeat 16-5,0   ;F4
-.text "text"
-.byte 13
-.repeat 16-5,0   ;F6
-.text "screenclr"
-.byte 13
-.repeat 16-10,0  ;F8
-;
 ;KEY (continued)
 keyy
  ldx #0        ;even/odd key string offset
@@ -5833,7 +5831,7 @@ nextchar lda #0
  bpl cd0to127
  cmp #128+32
  bcc nonprt
- sbc #32
+ and #%01111111
  bcs convert    ;always branches
 nonprt
  ldy #28        ;29 ascii values have funcs
@@ -5848,9 +5846,12 @@ cd0to127
  bcc nonprt
  cmp #64
  bcc dotptr
+ sbc #64
+ cmp #32
+ bcc dotptr
 convert
  tay
- lda asc2scr-64,y
+ lda asc2scr,y
 ;determine mem ptr of dot data
 dotptr
  jsr txtprint
