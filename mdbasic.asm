@@ -4422,7 +4422,7 @@ hex
 ; V = INF(n) where n = 0 to 15 to select info
 inf
  jsr getfnparam
- cmp #36
+ cmp #52
  bcs illqty7
  dec R6510
  jsr inff
@@ -5109,8 +5109,7 @@ playbuf1 .repeat 256,0
 ;codes 224-254 same as 160-190
 ;code  255 same as 126
 asc2scr
-;codes 32 to 127
-;.byte 32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63
+;codes 64 to 127
 .byte 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,64,65,66
 .byte 67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95
 ;codes 160 to 255
@@ -5130,17 +5129,6 @@ ascctlfn
 .rta txtrvsoff,txtbitclr,txtclr,txtclr,txtclr,txtclr,txtclr,txtclr
 .rta txtclr,txtclr,txtleft,txtclr,txtclr
 
-;table for printing a bitmap screen
-bmdt
-.byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
-.byte $f2,$1a,$02,$12,$97,$20,$20,$20,$f2,$1a,$03,$20,$20,$20,$f2,$1b
-.byte $04,$20,$f2,$09,$05,$a1,$20,$f2,$17,$05,$20,$20,$20,$20,$20,$20
-.byte $20,$20,$20,$f2,$08,$06,$92,$a2,$a2,$12,$bc,$92,$a2,$bb,$f2,$1b
-.byte $06,$12,$20,$f2,$0a,$07,$92,$a1,$f2,$1b,$07,$12,$20,$f2,$09,$08
-.byte $a1,$bb,$f2,$1a,$08,$20,$20,$20,$f2,$09,$09,$be,$a1,$92,$bb,$f2
-.byte $1a,$09,$12,$20,$92,$20,$12,$20,$f2,$1a,$0a,$20,$92,$20,$12,$20
-.byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
-;
 ;INF() memory locations
 infbytes
 .byte PNTR      ;csr logical column
@@ -5162,12 +5150,23 @@ infwords
 .word playoct   ;current play octave
 .word lastplotx ;last plotted x coordinate
 .word lastploty ;last plotted y coordinate
-;
+
+;table for printing a bitmap screen
+bmdt
+.byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
+.byte $f2,$1a,$02,$12,$97,$20,$20,$20,$f2,$1a,$03,$20,$20,$20,$f2,$1b
+.byte $04,$20,$f2,$09,$05,$a1,$20,$f2,$17,$05,$20,$20,$20,$20,$20,$20
+.byte $20,$20,$20,$f2,$08,$06,$92,$a2,$a2,$12,$bc,$92,$a2,$bb,$f2,$1b
+.byte $06,$12,$20,$f2,$0a,$07,$92,$a1,$f2,$1b,$07,$12,$20,$f2,$09,$08
+.byte $a1,$bb,$f2,$1a,$08,$20,$20,$20,$f2,$09,$09,$be,$a1,$92,$bb,$f2
+.byte $1a,$09,$12,$20,$92,$20,$12,$20,$f2,$1a,$0a,$20,$92,$20,$12,$20
+.byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
+
 ;scroll direction vectors up,down,left,right
 scrolls .rta scroll0,scroll1,scroll2,scroll3
 
 ;string for keylist
-addchr .shift "+chr$("
+addchr .null "+chr$("
 
 ;PLAY command temp vars used during IRQ
 temp1     .byte 0
@@ -5201,8 +5200,6 @@ snotes .word 3824,4051,4547,5104,5407,6069,6813
 ;table of video screen matrix hibyte offset per line 0-24
 btab .byte 0,0,0,0,0,0,0,1,1,1,1,1,1,2,2,2,2,2,2,2,3,3,3,3,3
 
-baudrates .word 50,75,110,134,150,300,600,1200,1800,2400
-;baud rates not supported (too fast for IRQ) 3600,4800,7200,9600,19200
 ;MDBASIC parity parameter value range 0-4 to register M51CDR bits 7,6,5
 ;0 = XX0 (0,64,128, or 192) = No Parity Generated or Received
 ;1 = 001 (32)  = Odd Parity Transmitted and Received
@@ -5210,6 +5207,9 @@ baudrates .word 50,75,110,134,150,300,600,1200,1800,2400
 ;3 = 101 (160) = Mark Parity Transmitted and Received
 ;4 = 111 (224) = Space Parity Transmitted and Received
 parity .byte %00000000,%00100000,%01100000,%10100000,%11100000
+
+;baud rates not supported (too fast for IRQ) 3600,4800,7200,9600,19200
+baudrates .word 50,75,110,134,150,300,600,1200,1800,2400
 ;
 ;tables for plotting dots on a bitmap per line 0-24
 lbtab .byte 0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0
@@ -8669,19 +8669,26 @@ fstart
  cmp #23
  beq fend
  bcs infptrs
- ldx #19     ;$a4,$a4 is load end address
+ ldx #19     ;$ae,$af holds load end address
 .byte $2c
-fend ldx #0  ;$c1,$c2 is load start address
+fend ldx #0  ;$c1,$c2 holds load start address
  lda $ae,x
  ldy $af,x
  jmp int4
 infptrs
  sbc #24
+ cmp #13
+ bcs infcolor
  asl
  tax
  lda TXTTAB,x
  ldy TXTTAB+1,x
  jmp int4
+infcolor
+ tax
+ lda EXTCOL-13,x
+ and #%00001111  ;hi nybble is not used for all color registers
+ jmp goinf
 ;
 deletee
  lda $5f
