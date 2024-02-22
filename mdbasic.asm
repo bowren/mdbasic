@@ -5833,8 +5833,8 @@ nextchar lda #0
  bpl cd0to127
  cmp #128+32
  bcc nonprt
- lda asc2scr-128-32,y
- jmp dotptr
+ sbc #32
+ bcs convert    ;always branches
 nonprt
  ldy #28        ;29 ascii values have funcs
 fndctrl
@@ -5844,11 +5844,11 @@ fndctrl
  bpl fndctrl    ;if not in table then
  bmi nxtchar    ;do nothing
 cd0to127
- sec
  cmp #32
  bcc nonprt
  cmp #64
  bcc dotptr
+convert
  tay
  lda asc2scr-64,y
 ;determine mem ptr of dot data
