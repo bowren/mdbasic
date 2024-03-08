@@ -4,18 +4,32 @@
 ;
 ;zero-page registers
 R6510  = $01 ;LORAM/HIRAM/CHAREN RAM/ROM selection and cassette control register
+COUNT  = $0b ;Index into the Text Input Buffer/Number of Array Subscripts/General Counter
+VALTYP = $0d ;Type of Data (255=String, 0=Numeric)
+INTFLG = $0e ;Type of Numeric Data (128=Integer, 0=Floating Point)
 CHANNL = $13 ;Current I/O Channel (CMD Logical File) Number
-TXTTAB = $2B ;Pointer to the Start of BASIC Program Text
+VARTAB = $2d ;Pointer to the Start of the BASIC Variable Storage Area
+TXTTAB = $2b ;Pointer to the Start of BASIC Program Text
+ARYTAB = $2f ;Pointer to the Start of the BASIC Array Storage Area
+STREND = $31 ;Pointer to End of the BASIC Array Storage Area (+1), and the Start of Free RAM
+CURLIN = $39 ;Current BASIC Line Number (lobyte)
+OLDLIN = $3b ;Previous BASIC Line Number (lobyte)
+OLDTXT = $3d ;Pointer to the Address of the Current BASIC Statement
+TXTPTR = $7a ;Pointer to the Address of the Current BASIC text char currently being scanned
 LDTND  = $98 ;Number of Open I/O Files/Index to the End of File Tables
 LSTX   = $c5 ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
 NDX    = $c6 ;number of keys in keyboard buffer
+RVS    = $c7 ;Flag: Print Reverse Characters? 0=No
 BLNSW  = $cc ;Cursor Blink Enable: 0=Flash Cursor
+SFDX   = $cb ;Matrix Coordinate of Current Key Pressed
 GDBLN  = $ce ;ASCII value of char under csr (when blinking)
 PNTR   = $d3 ;Logical Cursor Column on Current Line
+QTSW   = $d4 ;Flag: Editor in Quote Mode? 0=No
 LNMX   = $d5 ;Maximum Length of Physical Screen Line (39 or 79)
 TBLX   = $d6 ;Current Cursor Physical Line Number
 TMPASC = $d7 ;ASCII value of last character printed to screen
 INSRT  = $d8 ;Editor Current Insert Character Count
+KEYTAB = $f5 ;vector to keyboard decode table
 
 ;BASIC and Kernal work registers
 BAD    = $0100 ;Tape Input Error Log and string work area
@@ -222,7 +236,8 @@ DEF    = $b3b3 ;perform DEF
 STRLIT = $b487 ;scan and setup pointers to a string in memory ptr A lobyte, Y hibyte
 GETSPA = $b4f4 ;alloc space in mem for string
 FRESTR = $b6a3 ;discard a temporary string
-GETBYTC= $b79b ;Input a Parameter Whose Value Is Between 0 and 255
+GETBYTC= $b79b ;input a parameter whose value is between 0 and 255
+VAL    = $b7ad ;perform VAL
 GETADR = $b7f7 ;convert FAC1 to unsigned 16-bit integer; result in $14 lobyte, $15 hibyte
 POKE   = $b824 ;perform POKE
 WAIT   = $b82d ;perform WAIT
@@ -233,8 +248,10 @@ MUL10  = $bae2 ;multiply FAC1 by 10
 FMULT  = $ba28 ;copy mem pointed by Y(hi),A(lo) to FAC2 then FAC1=FAC1*FAC2
 FDIVT  = $bb12 ;divide FAC2 by FAC1 FAC1 = (FAC2/FAC1)
 MOVFM  = $bba2 ;move a 5-byte floating point number from memory to FAC1, ptr = A=lobyte, Y=hibyte
-MOV2F  = $bbca ;move a 5-byte floating point number from FAC1 to memory $57-$5B BASIC numeric work area
+MOV2F  = $bbc7 ;move a 5-byte floating point number from FAC1 to memory $57-$5B BASIC numeric work area
 MOVEF  = $bc0f ;copy FAC1 to FAC2 without rounding
+SIGN   = $bc2b ;put the sign of FAC1 into accumulator
+ABS    = $bc58 ;perform ABS
 QINT   = $bc9b ;convert FAC1 into a 4-byte (32-bit) signed integer within FAC1
 INT    = $bccc ;perform INT
 FIN    = $bcf3 ;convert ASCII string to a float in FAC1
@@ -242,6 +259,7 @@ FINLOG = $bd7e ;add signed integer to FAC1
 INPRT  = $bdc2 ;print IN followed by a line number
 LINPRT = $bdcd ;print 2-byte number stored in A (hibyte), X (lobyte)
 FOUT   = $bddd ;convert contents of FAC1 to ASCII String
+NEGOP  = $bfb4 ;perform NOT
 
 ;CBM BASIC routines to raise a specific error
 NOGOSUB= $a8e0 ;return without gosub
@@ -287,6 +305,7 @@ PLOT   = $fff0 ;Read/Set Location of the Cursor
 RESLST = $a09e ;$A09E-$A19D List of Keywords
 
 TOKEN_NEXT    = $82
+TOKEN_DATA    = $83
 TOKEN_INPUTN  = $84
 TOKEN_INPUT   = $85
 TOKEN_DIM     = $86
@@ -308,6 +327,7 @@ TOKEN_SYS     = $9e
 TOKEN_NEW     = $a2
 TOKEN_TO      = $a4
 TOKEN_THEN    = $a7
+TOKEN_EXP     = $bd
 TOKEN_VAL     = $c5
 
 FIRST_CMD_TOK = $cb  ;first MDBASIC token
@@ -326,7 +346,7 @@ TOKEN_RESUME  = $e8
 TOKEN_VOICE   = $eb
 TOKEN_TRACE   = $f2
 TOKEN_TIME    = $f4
-FIRST_FUN_TOK = $f4  ;first MDBASIC function
+FIRST_FUN_TOK = $f3  ;first MDBASIC function
 TOKEN_KEY     = $f6
 TOKEN_ERROR   = $f7
 TOKEN_PI      = $ff  ;PI symbol token
@@ -338,9 +358,9 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.02.14"
+.text "mdbasic 24.03.08"
 .byte 13
-.text "(c)1985-2024 mark bowren"
+.text "(c)1985-2014 mark bowren"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -366,7 +386,7 @@ newcmd
 .shift "move"
 .shift "sprite"
 .shift "multi"
-.shift "expand"
+.shift "find"
 .shift "serial"
 .shift "design"
 .shift "bitmap"
@@ -389,8 +409,8 @@ newcmd
 .shift "auto"
 .shift "old"
 .shift "trace"
-.shift "find"
 ;functions
+.shift "fix"
 .shift "time"
 .shift "round"
 ;statement & function
@@ -506,7 +526,7 @@ cmdtab
 .rta move    ;$d9
 .rta sprite  ;$da
 .rta multi   ;$db
-.rta expand  ;$dc
+.rta find    ;$dc
 .rta serial  ;$dd
 .rta design  ;$de
 .rta bitmap  ;$df
@@ -529,7 +549,7 @@ cmdtab
 .rta auto    ;$f0
 .rta old     ;$f1
 .rta trace   ;$f2
-.rta find    ;$f3
+.rta fix     ;$f3 func
 .rta time    ;$f4 cmd and func
 .rta SNERR   ;$f5 placeholder for round (not a command, func only)
 .rta key     ;$f6 cmd & func
@@ -537,7 +557,7 @@ cmdtab
 ;
 ;MDBASIC Function Dispatch Table
 funtab
-.rta fntime, round                ;$f4,$f5
+.rta fix,fntime, round            ;$f3,$f4,$f5
 .rta keyfn, err                   ;$f6,$f7 are both a command and a function
 .rta ptr, inf, pen, joy, pot, hex ;$f8,$f9,$fa,$fb,$fc,$fd
 .rta instr, $ae9e                 ;$fe,$ff (PI Constant)
@@ -588,7 +608,7 @@ erradd .word misop, ilvne, illspr, ilcoor, cantre, usrerr
 ;
 ;Program Tokenization process - text to tokens via vector ICRNCH ($0304)
 ;
-toknew ldx $7a
+toknew ldx TXTPTR
  ldy #$04
  sty $0f
 nxtchr lda BUF,x
@@ -620,9 +640,9 @@ skipp
  bcc takchr
 skip1 sty $71
  lda #FIRST_CMD_TOK
- sta $0b        ;current token
+ sta COUNT      ;current token
  ldy #$ff
- stx $7a
+ stx TXTPTR
  dex
 cmplop iny
  inx
@@ -632,7 +652,7 @@ tstnxt lda BUF,x
  beq cmplop
  cmp #$80      ;last letter?
  bne nxtcmd
- ora $0b
+ ora COUNT
 tachr1 ldy $71
 takchr inx
  iny
@@ -657,8 +677,8 @@ getchr iny
  sta BUF-5,y
  inx
  bne remlop
-nxtcmd ldx $7a
- inc $0b        ;next token
+nxtcmd ldx TXTPTR
+ inc COUNT      ;next token
 contin iny
  lda newcmd-1,y
  bpl contin
@@ -668,12 +688,12 @@ contin iny
 notfou lda BUF,x
  bpl tachr1
 endln sta BUF-3,y
- dec $7b
+ dec TXTPTR+1
  lda #$ff
- sta $7a
+ sta TXTPTR
  rts
 oldtok ldy #0
- sty $0b
+ sty COUNT
  lda RESLST,y  ;list of cbm keywords
  bne oldtst
 oldcmp iny
@@ -684,10 +704,10 @@ oldtst lda BUF,x
  beq oldcmp
  cmp #$80
  bne nxtold
- ora $0b
+ ora COUNT
  bne tachr1
-nxtold ldx $7a
- inc $0b
+nxtold ldx TXTPTR
+ inc COUNT
 cont1 iny
  lda RESLST-1,y
  bpl cont1
@@ -721,24 +741,25 @@ xcmd jsr tstcmd
  pha
  lda #<onkey1-1
  pha
- lda $7b       ;save basic text ptr
+ lda TXTPTR+1  ;save basic text ptr
  pha           ;of the statement to execute 
- lda $7a       ;after returning from subroutine
+ lda TXTPTR    ;after returning from subroutine
  pha           ;and it's
- lda $3a       ;basic line# to RETURN
+ lda CURLIN+1  ;basic line# to RETURN
  pha
- lda $39
+ lda CURLIN
  pha
  lda #TOKEN_GOSUB
  pha
  lda keyptr
- sta $7a
+ sta TXTPTR
  lda keyptr+1
- sta $7b
+ sta TXTPTR+1
  lda keyline
- sta $39
- lda keyline+1
- sta $3a
+ ldy keyline+1
+setline
+ sta CURLIN
+ sty CURLIN+1
 nocmd
  jmp NEWSTT     ;find beginning of next statement and execute
 ;
@@ -772,34 +793,42 @@ oldcmd
  jmp CHRGET
 ;
 ;Evalutate functions via vector IEVAL ($030A) originally pointing to EVAL $AE86
+vall
+ jsr CHRGET
+valll
+ jsr PARCHK        ;PARCHK Evaluate Expression Within Parentheses
+ jmp VAL           ;perform VAL
 ;
 valfn
- jsr CHRGET
- jsr PARCHK        ;PARCHK Evaluate Expression Within Parentheses
- jsr $b7ad         ;perform VAL
- lda $61           ;if VAL is 0
- ora $66           ;then check for hex,binary and octal value
- bne valued
- lda $22           ;set TXTPTR to first char in string
- sta $7a
- lda $23
-;push onto stack the return address of TXTPTR restore
- sta $7b
+ jsr chrget        ;advance TXTPTR one byte
+ cmp #"b"
+ bcc valll
+ sta $02
+ jsr vall          ;use VAL to determine TXTPTR
+ ldy $23           ;result of VAL is not used
+ ldx $22           ;set TXTPTR to first char in string
+ bne back1         ;backup 1 char to prepare for CHRGET
+ dey
+back1
+ dex
+ stx TXTPTR
+ sty TXTPTR+1
+;push onto stack the return address $e1b8-1 to restore TXTPTR
  lda #$b7
  pha
  lda #$e1
  pha
- jsr CHRGOT
- cmp #"@"
- beq octal
- cmp #"$"
+ lda $02
+ cmp #"h"
  beq hexaa
- cmp #"%"
+ cmp #"b"
  beq binary
-valued rts        ;assume zero value
+ cmp #"o"
+ beq octal
+ jmp SNERR
 ;
 newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
- sta $0d          ;Flag Type of Data (String or Numeric) to enforce data type
+ sta VALTYP       ;Flag Type of Data (String or Numeric) to enforce data type
  jsr CHRGET
  bcc xbcf3        ;numeric digit 0 to 9
  jsr $b113        ;Check If .A Register Holds Alphabetic ASCII Character
@@ -939,7 +968,7 @@ clrtime
 ; T$ = TIME$  get current time as string value
 ; T  = TIME   get current time as float number of seconds since start
 fntime
- jsr chrget   ;advance txtptr 1 position and get the char
+ jsr chrget   ;advance TXTPTR 1 position and get the char
  dec R6510
  cmp #"$"
  bne time2
@@ -954,17 +983,18 @@ fntime
 time2
  jsr dotime
  inc R6510
- lda $7a
+ lda TXTPTR
  pha
- lda $7b
+ lda TXTPTR+1
  pha
- stx $7a
- sty $7b
+ stx TXTPTR
+ sty TXTPTR+1
  jsr FRMNUM
+pultxtptr
  pla
- sta $7b
+ sta TXTPTR+1
  pla
- sta $7a
+ sta TXTPTR
  rts
 ;
 ;******************************************
@@ -1025,13 +1055,13 @@ condit
  jsr DATAN+5     ;scan for end of line terminator (byte 0) or ELSE token
  tax             ;a reg holds byte found, either 0 or ELSE token
  beq nxtline     ;end of line so go to next line
- tya             ;y holds num bytes to advance txtptr forward
- clc             ;add offset to txtptr
- adc $7a
- sta $7a
- lda $7b
+ tya             ;y holds num bytes to advance TXTPTR forward
+ clc             ;add offset to TXTPTR
+ adc TXTPTR
+ sta TXTPTR
+ lda TXTPTR+1
  adc #0
- sta $7b
+ sta TXTPTR+1
  jsr CHRGET      ;skip over ELSE token to next char or token
  bcc goto        ;ascii numerials indicate line number for GOTO
 endlin
@@ -1040,7 +1070,7 @@ istrue
  jsr CHRGOT      ;check current char is numeric digit
  bcs endlin
 goto jmp GOTO    ;preform goto
-nxtline jmp REM  ;perform REM to advance txtptr to next line
+nxtline jmp REM  ;perform REM to advance TXTPTR to next line
 ;
 vars dec R6510
  jmp varss
@@ -1167,13 +1197,14 @@ copystr
 getdskdev
  ldx #8         ;default device 8
  jsr comchk
- bne illdev-1
+ bne devdone
  jsr getvalg    ;get single byte value in x reg
  cmp #8
  bcc illdev
  tax
  cmp #12
  bcs illdev
+devdone
  rts
 illdev
  ldx #9         ;illegal device number error
@@ -1292,13 +1323,13 @@ nxtcol
  sta $fc
  dex
  bpl nxtc
- rts
+done4 rts
 ;
 tokopn
  dec R6510
  jsr openrs232
  inc R6510
- bcc tokopn-1 ;clear carry indicates success
+ bcc done4    ;clear carry indicates success
  jmp (IERROR) ;otherwise x reg has error number
 ;
 tokclse
@@ -1319,7 +1350,7 @@ tokprt
  ldx #126
  stx CHANNL   ;set current I/O channel (logical file) number
  jsr $e118    ;BASIC wrapper for CHKOUT with error handling
- jsr CHRGET   ;position txtptr on first char of expression
+ jsr CHRGET   ;position TXTPTR on first char of expression
  jsr PRINT    ;perform CBM BASIC PRINT
 waitout
  jsr STOP
@@ -1378,13 +1409,13 @@ tokread
  sta $49       ;variable address is returned in a (lo byte) and y (hi byte) registers
  sty $4a       ;every string variable is a pointer consisting of 3 bytes, 2 for ptr, 1 for length
 ;determine data type to read
- ldx $0d       ;0=numeric, 255=string
+ ldx VALTYP    ;0=numeric, 255=string
  inx
  stx $bb       ;0=string,1=float
  stx $fd       ;offset to store bytes
  beq rdstr     ;string read 255 bytes at a time
  stx $02       ;numeric binary read 1 byte at a time
- ldx $0e       ;0=float, 128=int
+ ldx INTFLG    ;0=float, 128=int
  beq rdnum     ;float stores 5 bytes
  inc $bb       ;2=int
 rdnum
@@ -1569,36 +1600,37 @@ dlay2 cmp $a2
 stopnow rts
 ;
 ;*******************
-; AUTO      :uses last used setting, default is 10
-; AUTO n    :where n=1 to 1023
-; AUTO OFF  :turn off auto numbering
+; AUTO            :uses last used increment setting, default is 10
+; AUTO increment  :valid increment values 0 to 1023 with 0 = AUTO OFF
+; AUTO OFF        :turn off auto numbering
 auto
  beq applyauto
- cmp #TOKEN_OFF
- beq autooff
+ ldy #1
  cmp #TOKEN_ON
- bne autoset
- lda #1
-.byte $2c
-autooff
- lda #0
- sta autoflag
- jmp CHRGET
-autoset jsr getvalue
- lda $15
- cmp #4       ;max auto-line number value is 1023
- bcc okauto
-badauto jmp FCERR
-okauto ora $14
- beq badauto  ;0 is also not allowed
- lda $15
- sta autonum+1
- lda $14
- sta autonum
-applyauto
- lda #1
+ beq autotok
+ dey
+ cmp #TOKEN_OFF
+ bne getinc
+autotok
+ jsr CHRGET   ;skip over token
+ tya          ;on/off flag
+setaflg
  sta autoflag
  rts
+getinc
+ jsr getvalue ;get increment param
+ cpy #4       ;max auto-line number value is 1023
+ bcs badauto
+ tya
+ ora $14
+ beq setaflg  ;0 increment same as AUTO OFF
+ stx autonum
+ sty autonum+1
+applyauto
+ lda #1
+ bne setaflg  ;always branches
+badauto
+ jmp FCERR
 ;
 ;******************
 ; MDBASIC immediate mode input via vector IMAIN ($0302)
@@ -1612,13 +1644,13 @@ immed
  jsr norm       ;restore normal display
 aline
  jsr INLIN      ;input a BASIC line into buffer
- stx $7a
- sty $7b
+ stx TXTPTR
+ sty TXTPTR+1
  jsr CHRGET     ;carry clear when numeral
  tax
  beq aline
  ldx #$ff       ;indicate immediate mode by setting
- stx $3a        ;line number hi byte to invalid value
+ stx CURLIN+1   ;line number hi byte to invalid value
  bcc doauto     ;input begins with numeric value
  jmp $a496      ;non-line number input, tokenize then execute
 doauto
@@ -1663,8 +1695,8 @@ trace
  jmp RUN
 ;**trace subroutine during prg execution
 trace1
- ldy $3a     ;when current line num hibyte is $FF (invalid)
- iny         ;then immediate mode
+ ldy CURLIN+1 ;when current line num hibyte is $FF (invalid)
+ iny          ;then immediate mode
  bne trace2
 ;turn off trace mode
 troff
@@ -1677,9 +1709,9 @@ settrace
  sty IGONE+1
  rts
 trace2
- lda $39
+ lda CURLIN
  sta $14
- lda $3a
+ lda CURLIN+1
  sta $15
 ;clear top 2 lines
  ldx #0
@@ -1755,11 +1787,11 @@ merge
  lda #$00
  sta $0a
  jsr $e1d4   ;set params for load, verify and save
- lda $2d
+ lda VARTAB
  sec
  sbc #$02
  tax
- lda $2e
+ lda VARTAB+1
  sbc #$00
  tay
  lda #$00
@@ -1769,9 +1801,9 @@ merge
  and #%10111111 ;did an error occur other than EOF/EOI (bit6)?
  beq okmerg  ;no error
  jmp LODERR  ;raise LOAD ERROR
-okmerg stx $2d
- sty $2e
- jsr $a659   ;reset txt ptr to beginning of prg then perform CLR
+okmerg stx VARTAB
+ sty VARTAB+1
+ jsr CLEAR-5 ;reset TXTPTR to beginning of prg then perform CLR
  jsr LINKPRG ;relink lines of tokenized prg text
  jmp READY   ;main basic loop
 ioerr jmp $e0f9 ;handle i/o error
@@ -1904,7 +1936,7 @@ bsave
  ldy #$00     ;default secondary 0
  jsr SETLFS   ;set logical file params, A=file#,X=device,Y=secondary
 ;check last expression evaluated data type
- lda $0d      ;numeric or string?
+ lda VALTYP   ;numeric or string?
  beq bsaver
 ;continue as if normal subroutine
  jsr $e25a    ;FRESTR and SETNAM
@@ -1953,21 +1985,22 @@ oldnew jmp NEW
 ;;*******************
 ; OLD takes no params
 old lda #$08
- sta $0802
+ ldy #1
+ sta (TXTTAB),y ;should be $0802
 old2
  jsr LINKPRG
  lda $22   ;apply calculated end-of-prg pointer
  ldx $23
  clc
  adc #$02
- sta $2d   ;Pointer to the Start of the BASIC Variable Storage Area
- sta $2f   ;Pointer to the Start of the BASIC Array Storage Area
- sta $31   ;Pointer to End of the BASIC Array Storage Area (+1), and the Start of Free RAM
+ sta VARTAB ;Pointer to the Start of the BASIC Variable Storage Area
+ sta ARYTAB ;Pointer to the Start of the BASIC Array Storage Area
+ sta STREND ;Pointer to End of the BASIC Array Storage Area (+1), and the Start of Free RAM
  bcc savex
  inx
-savex stx $2e
- stx $30
- stx $32
+savex stx VARTAB+1
+ stx ARYTAB+1
+ stx STREND+1
  rts
 ;
 ;*******************
@@ -1981,20 +2014,55 @@ delete
  lda $60
  sta $25
  jsr FINDLN
- dec R6510
- jsr deletee
- inc R6510
+ lda $5f
+ ldx $60
+ bcc noline
+ ldy #$01
+ lda ($5f),y
+ beq noline
+ tax
+ dey
+ lda ($5f),y
+noline
+ sta TXTPTR
+ stx TXTPTR+1
+ lda $24
+ sec
+ sbc TXTPTR
+ tax
+ lda $25
+ sbc TXTPTR+1
+ tay
+ bcs deldone
+ txa
+ clc
+ adc VARTAB
+ sta VARTAB
+ tya
+ adc VARTAB+1
+ sta VARTAB+1
+ ldy #$00
+copy lda (TXTPTR),y
+ sta ($24),y
+ iny
+ bne copy
+ inc TXTPTR+1
+ inc $25
+ lda VARTAB+1
+ cmp $25
+ bcs copy
+deldone
  jsr old2
 relink
- jsr $a659  ;reset txt ptr to beginning of prg then perform CLR
+ jsr CLEAR-5  ;reset TXTPTR to beginning of prg then perform CLR
  jmp endprg
 ;
 ;end of renum; list any go tokens with 65535 as line number (errors)
 erenum jsr old2
  lda #>BUF
- sta $7b
+ sta TXTPTR+1
  lda #<BUF
- sta $7a
+ sta TXTPTR
  ldy #$05
 ffff lda nolin,y
  sta BUF,y
@@ -2008,14 +2076,15 @@ ffff lda nolin,y
 ; RENUM start      :start line specified, default inc 10
 ; RENUM start, inc :use both start and inc specified
 renum
- bne renumm  ;param1 specified
- lda #10     ;no params, set default
- sta $35     ;start at line 10, inc by 10
+ bne renumm   ;param1 specified
+ lda #10      ;no params, set default
+ sta $35      ;start at line 10, inc by 10
  sta $33
  lda #0
  sta $36
  jmp hiinc
-renumm jsr LINGET  ;convert ascii to binary
+renumm
+ jsr LINGET   ;convert ascii to binary
  lda $14
  sta $35
  lda $15
@@ -2035,106 +2104,36 @@ gaiv jsr CHRGET
  jmp FCERR    ;increment of 0 not allowed
 okinc lda $15
 hiinc sta $34
- jsr RUNC     ;reset ptr to beginning of basic prg
-strt jsr chrget
- jsr chrget
- bne serch
- jsr tofac
-strnum jsr chrget
- jsr chrget
- beq erenum
- jsr chrget
- lda $63
- sta ($7a),y
- jsr chrget
- lda $62
- sta ($7a),y
- jsr addinc
- beq strnum
-serch jsr chrget
- jsr chrget
-nocrap jsr chrget
-craper cmp #"""
- bne tokgo
-;skip over expression in quotes
-crap jsr chrget
- beq strt
- cmp #"""
- bne crap
- beq nocrap
-tokgo tax
- beq strt
- bpl nocrap
-;check if token is a statement that use line numbers
- ldx #10     ;there are 10 tokens that reference a line number
-chktok
- cmp gotok-1,x
- beq sav7a
- dex
- bne chktok
- beq nocrap
-sav7a lda $7a
- sta $3b
- lda $7b
- sta $3c
- jsr CHRGET
- bcs craper
+ dec R6510
+ jsr renumer
+ inc R6510
+ jmp erenum
+;
+evalnum
+ inc R6510
  jsr FRMNUM
  jsr GETADR
- jsr replac
  dec R6510
- jsr worker
- cmp #","
- beq sav7a
- jmp craper
-;
-replac jsr tofac
-goagan jsr chrget
- jsr chrget
- bne isline
- lda #$ff
- sta $62
- sta $63
- bmi pnl
-isline jsr chrget
- cmp $14
- bne nexlin
- jsr chrget
- cmp $15
- bne nexlin+3
-pnl ldx #$90
- sec
- jsr $bc49    ;convert FAC1 to float
- jmp FOUT+2   ;convert FAC1 to string
-nexlin jsr chrget
- jsr addinc
- beq goagan
-inc2d jsr clrflg
- inc $97
- jsr bufer
- inc $2d
- bne gbwyc
- inc $2e
-gbwyc rts
-;
-clrflg lda $7a
- sta $22
- lda $7b
- sta $23
- lda $2d
- sta $24
- lda $2e
- sta $25
- ldy #$00
- sty $0b
- sty $97
  rts
 ;
-tofac lda $35
+fltstr
+ inc R6510
+ sec
+ jsr $bc49    ;convert FAC1 to float
+ jsr FOUT+2   ;convert FAC1 to string
+ dec R6510
+ rts
+;
+tofac
+ lda $35
  sta $63
  lda $36
  sta $62
- jmp RUNC       ;reset ptr to current basic text to beginning
+runcc
+ inc R6510
+ jsr RUNC     ;reset TXTPTR to beginning of program
+ dec R6510
+ rts
 ;
 addinc lda $63
  clc
@@ -2148,31 +2147,11 @@ necg jsr chrget
  rts
 ;
 chrget ldy #$00
- inc $7a
+ inc TXTPTR
  bne ne7a
- inc $7b
-ne7a lda ($7a),y
+ inc TXTPTR+1
+ne7a lda (TXTPTR),y
  rts
-;
-bufer ldy $0b
- lda ($24),y
- ldy $97
- sta ($24),y
- jsr pntreq
- bne pne2
- rts
-pne2 lda $24
- bne ne24
- dec $25
-ne24 dec $24
- jmp bufer
-;
-pntreq lda $22
- cmp $24
- bne gbhah
- lda $23
- cmp $25
-gbhah rts
 ;
 ;******************
 ; RESTORE       - set first data line as next DATA READ
@@ -2267,22 +2246,22 @@ swap
  jsr PTRGET    ;get param1
  sta $14
  sty $15
- lda $0d       ;data type string or numeric
+ lda VALTYP    ;data type string or numeric
  sta $fd       ;save param1 data type
- lda $0e       ;numeric type int or float
+ lda INTFLG    ;numeric type 128=int, 0=float
  sta $fe       ;save param1 numeric type
  jsr ckcom2    ;check for and skip over comma, misop err if missing
  jsr PTRGET    ;get param2
- lda $0e       ;param2 numeric type, int or float
+ lda INTFLG    ;param2 numeric type, int or float
  cmp $fe       ;does param2 have the same numeric type as param1?
  bne nomtch    ;mismatch
  ldx $fd       ;param1 numeric type, int or float
- cpx $0d       ;does param2 have the same num/string type as param1
+ cpx VALTYP    ;does param2 have the same num/string type as param1
  bne nomtch    ;mismatch
  lda #1
  inx           ;$FF=string so $FF+1 = 0
  beq isstr     ;string uses 3 bytes 0-2
- ldx $0e       ;int or float?
+ ldx INTFLG    ;int or float?
  bne isint     ;int uses 2 bytes 0-1
  asl           ;float uses 5 bytes 0-4
 isstr asl
@@ -2373,8 +2352,8 @@ onerres
  jsr seterrvec     ;and failed statement are skipped
  jmp CHRGET
 errgoto jsr getline
- stx txtptr        ;of the line# specified
- sty txtptr+1
+ stx errtxtptr     ;of the line# specified
+ sty errtxtptr+1
  lda $14
  sta errtrap
  lda $15
@@ -2409,13 +2388,13 @@ seterrvec
 resumenext
  txa
  bmi quitrun
- ldy $3a       ;when current line num hibyte is $FF (invalid)
+ ldy CURLIN+1  ;when current line num hibyte is $FF (invalid)
  iny           ;then immediate mode
  beq quitrun
  stx errnum    ;update last error number
- lda $3a       ;update last BASIC line# causing error
+ lda CURLIN+1  ;update last BASIC line# causing error
  sta errline+1
- lda $39
+ lda CURLIN
  sta errline
  jsr DATA      ;scan for start of next BASIC stmt
  jmp nxtstmt
@@ -2429,34 +2408,32 @@ quitrun
 trap
  txa           ;x holds the error num
  bmi quitrun   ;bit7, 0=error, 1=switch to immediate mode
- ldy $3a       ;when current line num hibyte is $FF (invalid)
+ ldy CURLIN+1  ;when current line num hibyte is $FF (invalid)
  iny           ;then immediate mode
  beq quitrun
  stx errnum    ;set current error number
  jsr detrap    ;disable error trapping
  lda #3        ;3 plus the 2 for this jsr is 5 bytes
  jsr GETSTK    ;ensure space on stack, out of mem err if not
- lda $3e       ;save the BASIC text ptr
+ lda OLDTXT+1  ;save the BASIC text ptr
  pha           ;of the beginning of the stmt
- lda $3d       ;that caused the error
+ lda OLDTXT    ;that caused the error
  pha           ;and save the BASIC
- lda $3a       ;line# for resume
+ lda CURLIN+1  ;line# for resume
  sta errline+1
  pha
- lda $39
+ lda CURLIN
  sta errline
  pha
  lda #TOKEN_ERROR
  pha
- lda txtptr
- sta $7a
- lda txtptr+1
- sta $7b
+ lda errtxtptr
+ sta TXTPTR
+ lda errtxtptr+1
+ sta TXTPTR+1
  lda errtrap
- sta $39
- lda errtrap+1
- sta $3a
- jmp NEWSTT   ;setup next statement for execution and continue BASIC main loop
+ ldy errtrap+1
+ jmp setline
 ;
 ;*******************
 ; RESUME
@@ -2481,25 +2458,25 @@ okresu
 ;perform RESUME NEXT - next statement after the one that caused the error
  pla          ;discard ERROR token
  pla
- sta $39      ;pull line number from stack and make current
+ sta CURLIN   ;pull line number from stack and make current
  pla
- sta $3a
+ sta CURLIN+1
  pla
- sta $7a      ;pull text ptr from stack and make current
+ sta TXTPTR   ;pull text ptr from stack and make current
  pla
- sta $7b
+ sta TXTPTR+1
  ldy #0       ;the first stmt on line will begin
- lda ($7a),y  ;at the end marker of previous line.
+ lda (TXTPTR),y  ;at the end marker of previous line.
  bne skpstmt  ;zero here indicates previous line
- lda $7a      ;preceded by the 4-byte line header
+ lda TXTPTR   ;preceded by the 4-byte line header
  clc          ;which will be skipped over so that
- adc #4       ;txtptr is on the byte that began
- sta $7a      ;the stmt that caused the error.
- lda $7b
+ adc #4       ;TXTPTR is on the byte that began
+ sta TXTPTR   ;the stmt that caused the error.
+ lda TXTPTR+1
  adc #0
- sta $7b
+ sta TXTPTR+1
 skpstmt
- jsr CHRGET   ;get current char at txtptr
+ jsr CHRGET   ;get current char at TXTPTR
  jsr DATA     ;scan for start of next BASIC stmt
  jmp nxtstmt0 ;setup next stmt for execution
 ;perform RESUME line#
@@ -2515,24 +2492,24 @@ nxtstmt0
  jsr entrap   ;re-enable error trapping
 nxtstmt       ;prepare next stmt for execution
  ldy #0
- lda ($7a),y
+ lda (TXTPTR),y
  bne _a807
  ldy #2
- lda ($7a),y
+ lda (TXTPTR),y
  clc
  bne _a7ce
  jmp endprg    ;return control to main BASIC loop
 _a7ce iny
- lda ($7a),y
- sta $39
+ lda (TXTPTR),y
+ sta CURLIN
  iny
- lda ($7a),y
- sta $3a
+ lda (TXTPTR),y
+ sta CURLIN+1
  tya
- adc $7a
- sta $7a
+ adc TXTPTR
+ sta TXTPTR
  bcc _a7e1
- inc $7b
+ inc TXTPTR+1
 _a7e1
 ;empty stack to where the base call was made
 pullit
@@ -2559,20 +2536,20 @@ _a807 cmp #$3a
 ;perform RESUME - with statement that caused the error
 resum pla     ;discard ERROR token
  pla          ;pull line number from stack and make current
- sta $39
+ sta CURLIN
  pla
- sta $3a
+ sta CURLIN+1
  pla          ;pull text ptr from stack and make current
- sta $7a
+ sta TXTPTR
  pla
- sta $7b
+ sta TXTPTR+1
 findstart
  jsr CHRGOT
  beq nxtstmt0
- lda $7a
+ lda TXTPTR
  bne bbbb
- dec $7b
-bbbb dec $7a
+ dec TXTPTR+1
+bbbb dec TXTPTR
  jmp findstart
 ;
 ;*******************
@@ -2687,23 +2664,54 @@ spriteon
  dey            ;0 dec to 255 for all sprites
 spriteoff
  sty SPENA
+ rts
+;
+sprexp
+ cmp #TOKEN_OFF
+ beq setxy
+ cmp #TOKEN_ON
+ bne badspr
+ dey
+setxy
+ sty XXPAND
+ sty YXPAND
  jmp CHRGET
 ;
-;*******************
-;SPRITE ON | OFF  - turns on or off all 8 sprites
-;SPRITE [sprite# 0-7], [0=on,1=off], [color 0-16], [0=normal,1=multicolor],
-;       [data pointer 0-255], [foreground priority 0=over,1=under]
-sprite
- beq dosprite
+sprtok
+ jsr CHRGET
  ldy #0
- cmp #TOKEN_OFF
+ cpx #TOKEN_EXP
+ beq sprexp
+ cpx #TOKEN_OFF
  beq spriteoff
- cmp #TOKEN_ON
+ cpx #TOKEN_ON
  beq spriteon
+badspr jmp SNERR
+;
+;*******************
+;SPRITE ON | OFF
+;SPRITE EXP ON | OFF
+;SPRITE sprite# EXP size
+;SPRITE sprite# DATA index
+;SPRITE sprite#, [visibile] [,color] [,colormode] [,index] [,priority] [,size]
+sprite
+ tax
+ bmi sprtok
 dosprite
 ;get sprite number
  jsr sprnum     ;sprite# returned in $be and 2^sprite# in $bf
- jsr ckcom2     ;check for and skip over comma, misop err if missing
+ jsr CHRGOT
+ tax
+ bpl sprvis
+ jsr CHRGET
+ cpx #TOKEN_DATA
+ beq spntr+3    ;get sprite data index
+ cpx #TOKEN_EXP
+ bne badspr
+ tax            ;clear zero flag
+ jmp sprsize+3  ;get sprite expansion size
+sprvis
+ jsr ckcom22
  cmp #","       ;get next char and compare to comma
  beq scr        ;another comma so skip param
 ;get sprite visibility 0=off, 1=on
@@ -2722,15 +2730,14 @@ scr jsr chkcomm
  beq smcr
 ;get sprite color 0 to 16
  jsr getval
- cmp #16
- bcc color15
- bne badspcol
- lda #%00001000
- jsr irqon
+ cmp #16        ;special color 16?
+ bcc color15    ;no, regular colors
+ bne illqty9    ;over 16 illegal
+ lda #%00001000 ;enable special color 16
+ jsr irqon      ;using IRQ
  lda $bf        ;2^sprite#
  ora sprcolopt
  jmp setspropt
-badspcol jmp FCERR
 color15
  ldy $be        ;sprite# 0-7
  sta SP0COL,y   ;sprite y's color
@@ -2740,6 +2747,7 @@ color15
 setspropt
  sta sprcolopt
 smcr jsr chkcomm ;stop now if no more params
+ cmp #","
  beq spntr
 ;get multicolor flag 0 or 1
  jsr getbool
@@ -2748,11 +2756,13 @@ smcr jsr chkcomm ;stop now if no more params
  eor #$ff       ;sprite# bit off
  and SPMC       ;sprite multicolor flags
  jmp skipmc
+illqty9 jmp FCERR
 setm lda SPMC
  ora $bf        ;2^sprite#
 skipmc sta SPMC
+spntr
  jsr chkcomm    ;if no more params, quit now otherwise check for and skip over comma
-spntr cmp #","  ;if another comma then omit param
+ cmp #","       ;if another comma then omit param
  beq prorty
 ;get sprite data ptr 0-255 (ptr*64)=start address
  jsr getval
@@ -2770,6 +2780,8 @@ spntr cmp #","  ;if another comma then omit param
 
 prorty
  jsr chkcomm    ;check for comma, if end of statement then do not return here
+ cmp #","       ;if another comma then omit param
+ beq sprsize
 ;get sprite to foreground graphics/text priority: 0=over, 1=under
  jsr getboolz
  bne okpri
@@ -2777,65 +2789,43 @@ prorty
  eor #$ff       ;prepare to turn off bit for sprite
  and SPBGPR     ;turn off bit for sprite
  sta SPBGPR     ;apply new value
- rts
+ jmp sprsize
 okpri lda $bf   ;2^sprite#
  ora SPBGPR     ;turn on bit for sprite
  sta SPBGPR     ;apply new value
- rts
+
+sprsize
+ jsr chkcomm    ;check for comma, if end of statement then do not return here
+ jsr getvalz    ;size 0-3
+ lsr
+ tax
+ bcs a1
+ jsr clrx       ;values 0,2
+ jmp a2
+a1 jsr magx     ;values 1,3
+a2 txa
+ lsr
+ bne illqty9    ;values more than 3
+ bcs a3
+ jmp clry       ;values 0,1
+a3 jmp magy     ;values 2,3
 ;
-xpon dey        ;0 dec to 255 for all sprites
-xpoff
- sty XXPAND
- sty YXPAND
- jmp CHRGET
-;
-;*******************
-; EXPAND ON | OFF          ;expand all sprites either ON or OFF
-; EXPAND sprite#           :expand both x and y axis of sprite#
-; EXPAND sprite#, [x], [y] :where x and y are 0=expand off, 1=expand on
-expand
- beq doexpand
- ldy #0
- cmp #TOKEN_OFF
- beq xpoff
- cmp #TOKEN_ON
- beq xpon
-doexpand
- jsr sprnum     ;get sprite# and store in $be and 2^sprite# in $bf
- jsr CHRGOT
- bne getexpxy
- lda XXPAND
- ora $bf        ;2^sprite#
- sta XXPAND
- lda YXPAND     ;y expand
- ora $bf        ;2^sprite#
- sta YXPAND
- rts
-getexpxy
- jsr CHRGET
- cmp #","
- beq magy
- jsr getbool    ;expand x param
- beq expx
- lda XXPAND
- ora $bf        ;2^sprite#
- bne setmagx    ;always branches
-expx lda $bf    ;2^sprite#
+magy ldy #0
+ .byte $2c
+magx ldy #6
+;load y reg with xpand reg offset 0=Y, 6=X
+ lda YXPAND,y
+ ora $bf
+ bne setmag ;always branches
+clry ldy #0
+ .byte $2c
+clrx ldy #6
+;load y reg with xpand reg offset 0=Y, 6=X
+ lda $bf
  eor #$ff
- and XXPAND     ;x expand off
-setmagx
- sta XXPAND     ;x expand on
-magy
- jsr chkcomm
- jsr getboolz   ;expand y param
- beq clry
- lda YXPAND     ;y expand
- ora $bf        ;2^sprite#
- bne setmagy    ;always branches
-clry lda $bf    ;2^sprite#
- eor #$ff       ;prepare to turn off target bit
- and YXPAND
-setmagy sta YXPAND
+ and YXPAND,y
+setmag
+ sta YXPAND,y
  rts
 ;
 ;*******************
@@ -2961,7 +2951,7 @@ noback jsr chkcomm
  sta EXTCOL     ;border color
  rts
 ;
-;*******************
+;*****************
 designon
  lda CI2PRA     ;bits 0-1 mem bank, 00=bank3, 01=bank2, 10=bank1, 11=bank0
  and #%11111100 ;select VIC-II 16K mem bank 3 ($C000-$FFFF)
@@ -3050,6 +3040,7 @@ clrbyt sta ($62),y
  bne clrbyt
  inc $63
  bne clrbyt
+;apply background color in screen RAM bytes
  lda mapcolc1c2     ;last set background color
 setbmcol
  ldy #0
@@ -3349,7 +3340,7 @@ memfac jsr MOVFM ;copy mem to FAC1 pointed by a & y
  sta FREHI1,y
  lda $14
  sta FRELO1,y    ;store result in data control reg for voice
- rts
+done5 rts
 ;
 ;*******************
 ; DRAW S$
@@ -3366,17 +3357,17 @@ memfac jsr MOVFM ;copy mem to FAC1 pointed by a & y
 ;
 draw
  jsr getstr0
- beq draw-1
+ beq done5
 ;save current txt ptr
- lda $7a
+ lda TXTPTR
  pha
- lda $7b
+ lda TXTPTR+1
  pha
 ;set txt ptr to string start
  lda $50
- sta $7a
+ sta TXTPTR
  lda $51
- sta $7b
+ sta TXTPTR+1
  jsr getpoint  ;get last plot coordinates
  jsr CHRGOT    ;get first char
 drawloop
@@ -3407,11 +3398,8 @@ baddraw jmp SNERR  ;syntax error in draw string
 nxtmov
  jsr comchk    ;another draw cmd?
  beq drawloop2
- pla
- sta $7b
- pla
- sta $7a
- jmp savepoint ;save final x and y coordinates plotted
+ jsr savepoint ;save final x and y coordinates plotted
+ jmp pultxtptr
 drawloop2
  jsr CHRGET
  jmp drawloop
@@ -3727,10 +3715,10 @@ key
  cmp #TOKEN_LIST
  beq keylist
  jsr FRMEVL     ;eval expression
- lda $0d        ;number or string?
+ lda VALTYP     ;number or string?
  beq keynum     ;number is key assign
  jsr getstr2    ;get source string as first param
- beq keywait-1
+ beq kdone
  ldy #0
 cpystr2
  lda ($50),y    ;source param str
@@ -3754,10 +3742,11 @@ keynum
  cmp #9           ;only func keys 1-8
  bcs illqty3
 ;assign function key
-okkey sta $02     ;save key#
+ pha              ;save key#
  jsr ckcom2       ;check for and skip over comma, misop err if missing
  jsr getstr0
  dec R6510
+ pla
  jmp keyy
 onkeyoff
  jsr CHRGET
@@ -3765,7 +3754,7 @@ keyoff
  lda #0
  sta keyflag
  sta keyentry
- rts
+kdone rts
 keywait
  lda NDX
  beq keywait
@@ -4102,7 +4091,7 @@ ptr3ref sta $07f8,x
 ; PLAY S$
 playyy
  jsr getstr0
- beq play-1     ;quit now if string is empty
+ beq playend    ;quit now if string is empty
  ldy #0
 cpystr lda ($50),y
  sta playbuf1,y
@@ -4126,7 +4115,7 @@ irqon
  sei
  jsr mdbirqon
  cli
- rts
+playend rts
 ;
 ;play notes in foreground
 pfgnd lda $a2
@@ -4164,6 +4153,7 @@ endplay
  lda playwave   ;select current waveform; start release cycle
  sta VCREG1,x   ;start decay cycle
  sec
+plydone
  rts
 
 initvoice
@@ -4195,20 +4185,21 @@ inivoc
  sta SUREL1,x   ;and release duration to 300ms (lo nybble)
 
  lda md418      ;all voices volume register mirror
- bne initvoice-1 ;if volume is 0 (off) turn it up!
+ bne plydone      ;if volume is 0 (off) turn it up!
  ora #%00001111 ;set volume to max
  jmp setvol
 ;
-;******************************************
-;* mdbasic functions instr(), ptr(), csr(), pen(), joy(), pot(), hex$() *
-;******************************************
+;*******************************************************************************
+;* mdbasic functions fix(), instr(), ptr(), csr(), pen(), joy(), pot(), hex$() *
+;*******************************************************************************
+;
 ; I = INSTR(offset,src$,find$)
 ;if first expression is int type then offset provided otherwise offset=1 (default)
 instr
  jsr CHRGET   ;process next cmd text
  jsr CHKOPN   ;Check for and Skip Opening Parentheses
  jsr FRMEVL   ;eval expression
- lda $0d      ;check if numeric (offset param) or string (source$ param)
+ lda VALTYP   ;check if numeric (offset param) or string (source$ param)
  beq getoffsetparam
  lda #0       ;default zero index
  sta $02
@@ -4272,15 +4263,43 @@ ptr
  jmp GIVAYF
 ;
 ;*******************
+; I = FIX(float)  truncate the fractional portion
+fix
+ jsr CHRGET
+ jsr PARCHK     ;get term inside parentheses
+ jsr TESTNUM    ;ensure expression was numeric, error if not
+ jmp trunc      ;truncate fractional portion
+;
+
+;round FAC1 to the nearest whole number by adding .5 to absolute value then truncate
+doround
+ lda $66        ;FAC1 sign 0=positive, 255=negative
+ pha            ;save sign
+ jsr ABS        ;ensure positive number
+ jsr FADDH      ;add .5 to value in FAC1
+ jmp trunca
+trunc
+ lda $66        ;FAC1 sign 0=positive, 255=negative
+ pha            ;save sign
+ jsr ABS        ;ensure positive number
+trunca
+ jsr INT        ;convert FAC1 value to its smallest integer value
+ pla            ;what was the original sign
+ bpl done3      ;if positive then done
+ jmp NEGOP      ;otherwise make negative again
+
+;*******************
 ; V = ROUND(n)   where n=num to round to nearest whole number
 ; V = ROUND(n,d) where n=num to round, d(-9 to +9) = num of places left (-) or right (+) of decimal point
 round
  jsr CHRGET
- jsr CHKOPN     ;Check for and Skip Opening Parentheses
+ jsr CHKOPN     ;check for and skip opening parentheses
  jsr FRMNUM     ;get numeric param1 - number to round
 ;save param1
- jsr MOV2F      ;move a 5-byte floating point number from FAC1 to memory $57-$5B BASIC numeric work area
-;get param2
+ ldx #<BUF+$54
+ ldy #>BUF
+ jsr MOV2F+16   ;copy a 5-byte floating point number from FAC1 to memory
+;prepare param2 default values
  lda #0
  sta $14        ;default 0 decimal places (round to whole number)
  sta $15        ;default first direction right
@@ -4291,7 +4310,7 @@ round
  jsr FRMNUM
  jsr AYINT      ;convert FAC1 to a signed integer in FAC1
  lda $66        ;sign, $00=Positive, $FF=Negative
- sta $15
+ sta $15        ;negative move left, positive move right
  beq round2
  jsr NEGFAC     ;replace FAC1 with its 2's complement
 round2
@@ -4300,40 +4319,49 @@ round2
  lda $65        ;lo byte
  cmp #10
  bcs illqty7    ;range is -9 to +9
- sta $14
+ sta $14        ;decimal places to round
 round1
  jsr CHKCLS     ;check for and skip closing parentheses
 ;restore param1 to FAC1
- lda #$57
- ldy #$00
- jsr MOVFM      ;move a 5-byte floating point number from memory to FAC1 A=lo, Y=hi
- ldx $14
- beq addhalf
+ lda #<BUF+$54
+ ldy #>BUF
+ jsr MOVFM      ;copy a 5-byte floating point number from memory to FAC1 A=lo, Y=hi
+ lda $14        ;decimal places to round
+ beq doround    ;zero will round to nearest whole number
 ;move decimal point to the right or left based on sign of num places
- jsr movedec
+ jsr movedec1   ;move decimal to left or right based on sign of param2
  lda $15
  eor #$ff       ;toggle move direction for 2nd call
  sta $15
-addhalf
  jsr doround    ;round FAC1 to nearest whole number
 ;move decimal point to the left
- ldx $14
- beq nomul
+ jsr movedec
+done3 rts
+
 ;move decimal point
 movedec
- txa
- beq nomul
- pha
- lda $15          ;direction: 0=right else left
+ lda $14        ;decimal places to round
+ beq done3
+movedec1
+ sta COUNT
+ lda $66        ;save FAC1 sign flag
+ pha            ;before moving decimal
+movdec
+ lda $15        ;direction: 0=right else left
  beq xmul10
- jsr DIV10        ;divide FAC1 by 10
- jmp xmul10+3
-xmul10 jsr MUL10  ;multiply FAC1 by 10
- pla
- tax
- dex
- bne movedec
-nomul rts
+xdiv10
+ jsr DIV10      ;divide FAC1 by 10
+ dec COUNT
+ bne xdiv10
+ beq mvdec
+xmul10
+ jsr MUL10      ;multiply FAC1 by 10
+ dec COUNT
+ bne xmul10     ;keep moving till done
+mvdec
+ pla            ;restore FAC1 sign flag
+ sta $66        ;as it was before moving decimal
+ rts
 ;
 ;*******************
 ; J = JOY(n) where n=joystick number 1 or 2
@@ -4342,10 +4370,27 @@ joy
  beq illqty7
  cmp #3
  bcs illqty7
- dec R6510
- jsr joyy
- inc R6510
+ lsr             ;joy 1 or 2 becomes index 0 or 1
+ eor #%00000001  ;index 0 or 1 becomes 1 or 0
+ tay             ;CIAPRB has joy 1
+ lda CIAPRA,y    ;CIAPRA has joy 2
+ tay             ;remember full value
+ and #%00001111  ;lower nybble holds position value
+ sta $14
+ tya             ;restore full value
+ and #%00010000  ;bit 4 is button
+ sta $15
+ lda #$0f
+ sec
+ sbc $14
+ ldx $15
+ cpx #$10
+ beq nofire
+ ora #%10000000  ;button flag
+nofire tay       ;lowbyte
  jmp nobutt
+;
+illqty7 jmp FCERR ;display illegal qty error
 ;
 ;*******************
 ; K = KEY   - used with ON KEY GOSUB to indicate key causing event
@@ -4353,8 +4398,6 @@ keyfn
  jsr CHRGET
  ldy keyentry
  jmp nobutt
-;
-illqty7 jmp FCERR ;display illegal qty error
 ;
 ;*******************
 ; E = ERROR(n) where n=0 Error Number, n=1 Error Line Number
@@ -4370,18 +4413,6 @@ err
 errorno
  ldy errnum  ;y=lobyte
  jmp nobutt
-;
-;*******************
-; P = POT(n) where n=potentiometer number (1-4)
-pot
- jsr getfnparam
- beq illqty7
- cmp #5         ;valid values 1 to 4
- bcs illqty7
- dec R6510
- jsr pott
- inc R6510
- jmp GIVAYF     ;convert binary int to FAC then return
 ;
 ;*******************
 ; P = PEN(n) where (n=0:x, n=1:y) to read $D013 (X) and $D014 (Y) Light Pen Registers.
@@ -4407,18 +4438,7 @@ butt lda #$01 ;hibyte 1 to indicate button pressed
 nobutt lda #0 ;hibyte 0 to indicate button not pressed
  jmp GIVAYF   ;convert binary int to FAC then return
 ;
-;H$ = HEX$(n) where n is a signed 32-bit signed integer
-hex
- jsr CHRGET   ;process next cmd text
- jsr PARCHK   ;get term inside parentheses
- jsr TESTNUM  ;ensure expression was numeric, error if not
- jsr QINT     ;convert FAC1 into a signed 32-bit int in FAC1
- dec R6510
- jsr hexx
- inc R6510
- jmp STRLIT
 ;*******************
-;
 ; V = INF(n) where n = 0 to 15 to select info
 inf
  jsr getfnparam
@@ -4429,9 +4449,64 @@ inf
  inc R6510
  jmp $b8d7   ;convert unsigned 4-byte int in FAC1 to a 5-byte float in FAC1
 ;
-;********************
+;*******************
+; P = POT(n) where n=potentiometer number (1-4)
+pot
+ jsr getfnparam
+ beq illqty7
+ cmp #5         ;valid values 1 to 4
+ bcs illqty7
+ pha            ;save pot num
+ ldx #%11000000 ;bits 0=input, 1=output, set bits 6 and 7 to output
+ sei
+ stx CIDDRA     ;data direction reg A
+ cmp #$03       ;pot 3 and 4 are on port 2
+ bcs port2
+ ldy CIAPRB     ;data port reg B
+ ldx #$40
+ bne setprt     ;always branches
+port2 lsr
+ ldx #$80       ;bit 7 set to read paddles on Port A or B
+ ldy CIAPRA
+setprt stx CIAPRA
+ sty $02
+ ldy #$80       ;wait for latch to fully engage
+waitl dey
+ bpl waitl
+ lsr
+ tay
+ lda POTX,y
+ ldx #$ff       ;set data direction to output
+ stx CIDDRA
+ cli
+ tay            ;lobyte value
+ pla            ;restore pot num 1-4
+ lsr            ;carry set if odd pot num
+ lda #%00000100 ;odd port nums should check bit 2 for button
+ bcs and02      ;odd port num
+ asl            ;even port nums should check bit 3 for button
+and02 bit $02   ;button pressed?
+ bne nobutt2
+ lda #$01       ;hibyte 1 to indicate button pressed
+.byte $2c       ;defeats LDA #0 by making it BIT $00A9
+nobutt2 lda #0  ;hibyte 0 to indicate button not pressed
+ jmp GIVAYF     ;convert binary int to FAC then return
+;
+;*******************
+;H$ = HEX$(n) where n is a signed 32-bit signed integer
+hex
+ jsr CHRGET   ;process next cmd text
+ jsr PARCHK   ;get term inside parentheses
+ jsr TESTNUM  ;ensure expression was numeric, error if not
+ jsr QINT     ;convert FAC1 into a signed 32-bit int in FAC1
+ dec R6510
+ jsr hexx
+ inc R6510
+ jmp STRLIT
+;
+;**********************************************
 ;* new reset subroutine set by cartridge header
-;********************
+;**********************************************
 resvec
  ldx #$ff    ;highest stack ptr offset (empty stack)
  sei         ;disable interrupts
@@ -4459,9 +4534,10 @@ resvec
  jsr REASON  ;check free mem
  jsr $e430   ;prints the BYTES FREE message
  jmp $e39d   ;to basic main loop
-;***********************
+;
+;*********************************************************
 ;* new RUN-STOP IRQ-driven routine set by cartridge header
-;***********************
+;*********************************************************
 runstp
  lda #$7f
  sta CI2ICR
@@ -4470,9 +4546,9 @@ runstp
  jsr $f6bc       ;scan keyboard for STOP key with result in $91
  jsr STOP        ;determine if STOP key was pressed
  bne nothin      ;if not, continue with NMI handler
-;********************
+;***************************************************************
 ;* BREAK Instruction IRQ-driven routine via vector CBINV ($0316)
-;********************
+;***************************************************************
 brkirq
  jsr norm
  jsr IOINIT
@@ -4492,10 +4568,10 @@ brkirq
  jmp ($a002)     ;warm start vector
 nothin jmp $fe72 ;NMI RS-232 Handler
 ;
-;*************************
+;*******************************************************
 ;* MDBASIC ERROR HANDLER
 ;* BASIC Error Handler Routine via vector IERROR ($0300)
-;*************************
+;*******************************************************
 errors txa
  bpl doerr    ;bit 7 off means error condition
 redy
@@ -4505,7 +4581,7 @@ doerr
  jsr $a67a    ;empty system and temp string stacks
  jsr clsmdb   ;close mdb file handles 126 & 127 and set default I/O channels
  jsr norm     ;set text mode normal display and ensure BASIC ROM enabled
- ldy $3a      ;when current line num hibyte is $FF (invalid)
+ ldy CURLIN+1 ;when current line num hibyte is $FF (invalid)
  iny          ;then immediate mode
  bne prgmode  ;otherwise program mode
  lda #13      ;cr
@@ -4539,13 +4615,13 @@ hibyer
  lda #$69     ;address of the zero-terminated string ($a369) = "  ERROR"
  ldy #$a3
  jsr STROUT   ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
- ldy $3a      ;hibyte of txtptr of beginning of line where error occured
+ ldy CURLIN+1 ;hibyte of TXTPTR of beginning of line where error occured
  iny          ;a value of $ff indicates immediate mode
  beq redy     ;otherwise program mode
  jsr INPRT    ;display text IN {line#}
- lda $39      ;put the current BASIC line number
+ lda CURLIN   ;put the current BASIC line number
  sta $14      ;where FINDLN expect to see it
- lda $3a
+ lda CURLIN+1
  sta $15
  jsr FINDLN   ;set position to line num causing error
  jsr printcr
@@ -4557,29 +4633,39 @@ hibyer
  jsr PLOT
  jmp (IMAIN)  ;main BASIC loop
 ;
-;*************************
+;*********************************************************
 ; Keyboard Table Setup Routine via vector KEYLOG ($028F)
 ; IRQ driven key decode overriden to support function keys
-;*************************
+;*********************************************************
 keychk
+ ldy SHFLAG     ;0=none, 1=shift key, 2=logo key, 4=ctrl key
+ cpy #%00000110 ;ctrl and logo key combo exactly?
+ bne keychk2
+ lda #0         ;turn off editor quote/edit/rvs mode
+ sta QTSW       ;quote mode flag
+ sta INSRT      ;insert char count
+ sta RVS        ;reverse char flag
+ beq nokey      ;always branches
+;start of the original mdbasic routine
+keychk2
  lda $9d        ;control messages enabled?
  beq nokey      ;no, use original routine
- lda $d4        ;editor in quote mode?
+ lda QTSW       ;editor in quote mode?
  bne nokey      ;yes, use original routine
  lda #%00000100 ;keypump irq flag
  bit MDBIRQ     ;is keypump irq already enabled?
  bne nokey      ;yes, use normal decode routine
- lda #$81       ;standard keyboard matrix decode table $eb81
- ldy SHFLAG     ;0=none, 1=shift key, 2=logo key, 4=ctrl key
+ ldx #$81       ;standard keyboard matrix decode table $eb81
+ tya            ;SHFLAG: 0=none, 1=shift key, 2=logo key, 4=ctrl key
  beq stdkey
  dey            ;zero flag set if only shift key pressed
  bne nokey      ;unsupported key combo for function keys
- lda #$c2       ;shifted keyboard matrix decode table $ebc2
-stdkey sta $f5
+ ldx #$c2       ;shifted keyboard matrix decode table $ebc2
+stdkey stx KEYTAB
  lda #$eb
- sta $f6
- ldy $cb        ;matrix coordinate of current key pressed
- lda ($f5),y
+ sta KEYTAB+1
+ ldy SFDX       ;matrix coordinate of current key pressed
+ lda (KEYTAB),y
  tax
  cpy LSTX       ;matrix coordinate of last key pressed, 64=None Pressed
  bne norep      ;not a repeat keypress
@@ -4603,9 +4689,9 @@ fkey
  ldx #$ff
  jmp $eae9      ;continue regular key decode func
 ;
-;*************************
+;*****************************************
 ; IRQ driven key pump into keyboard buffer
-;*************************
+;*****************************************
 keypump
  ldx NDX        ;if keyboard buffer is empty then put next char
  bne irqdone2   ;otherwise forward to original IRQ vector
@@ -4663,9 +4749,9 @@ mdbirqoff2
  jsr mdbirqoff
  jmp (irqtmp)   ;orgininal irq vector
 ;
-;*************************
+;****************************
 ;Sprite animation IRQ routine
-;*************************
+;****************************
 sprani
  lda aniopt
  beq anioff     ;all flags off so turn off irq
@@ -4677,13 +4763,15 @@ chkani asl      ;bit7 to carry
  tay            ;preserve bit pattern
  lda aniwait,x  ;reset ani wait time for sprite x
  sta anidly,x
-ptr1ref lda $07f8,x
+ptr1ref         ;this ptr ref is used to change
+ lda $07f8,x    ;the sprite ptr base address
  cmp ptrend,x
  bcc setptr
  lda ptrbegin,x ;reset ani img to first
 .byte $2c       ;prevent adc #1
 setptr adc #1
-ptr2ref sta $07f8,x
+ptr2ref         ;this ptr ref is used to change
+ sta $07f8,x    ;the sprite ptr base address
  tya            ;restore bit pattern
 nxtani
  dex
@@ -4771,7 +4859,7 @@ opget2 bcc okopge  ;text found (not a token)
 sytxer jmp SNERR   ;print syntax error
 okopge jsr LINGET  ;convert asci decimal number to a 2-byte binary line number
  jsr FINDLN        ;search for start line number
- jsr CHRGOT        ;get current char on line pointed ($7a-$7b) CHRGOT
+ jsr CHRGOT        ;get current char on line
  beq linnul
  cmp #$ab          ;subtract token? (- is a token)
  beq okopg2
@@ -4785,37 +4873,38 @@ linnul lda $14     ;if no line num given
  sta $14
  sta $15
 opgot rts
-;******************
+;*******************
 peekop ldy #1
-peekoper lda ($7a),y
+peekoper lda (TXTPTR),y
  beq peekdone
  iny
  cmp #" "
  beq peekoper
 peekdone rts
-;******************
+;*******************
 comchk
  ldy #0            ;quickly check
- lda ($7a),y       ;if current txtptr
+ lda (TXTPTR),y    ;if current TXTPTR
  cmp #","          ;is on a comma
  rts
 ;*******************
 chkcomm
  ldy #0            ;quickly check
- lda ($7a),y       ;if current txtptr
+ lda (TXTPTR),y    ;if current TXTPTR
  cmp #","          ;is on a comma
- beq comma         ;if comma exists skip over it
- pla               ;if not don't return to caller
- pla
+ beq comma         ;if so skip over it
+ pla               ;otherwise do not
+ pla               ;return to caller
  rts
 ;*******************
 ;check for and skip over comma, misop err if missing
 ckcom2
- ldy #0
- lda ($7a),y
- cmp #","
- bne missop
-comma jmp CHRGET
+ ldy #0            ;quickly check
+ lda (TXTPTR),y    ;if current TXTPTR
+ckcom22
+ cmp #","          ;is on a comma
+ bne missop        ;error if not
+comma jmp CHRGET   ;advance TXTPTR
 missop ldx #31     ;missing operand error
  jmp (IERROR)      ;vector to print basic error message
 ;*******************
@@ -4827,7 +4916,7 @@ getstr2 jsr FRESTR ;discard temp string
  sty $51           ;hibyte
  sta $52           ;length
  rts
-;******************
+;*******************
 ;get charset parameter 0-3
 ;0=Upper-case and symbols, 1=Reverse of set 0
 ;2=Lower-case and symbols  3=Reverse of set 2
@@ -4842,7 +4931,7 @@ getchrset
  adc $26      ;carry is already clear
  sta $26      ;charset 0=$d000,1=$d400,2=$d800,3=$dc00
  rts
-;******************
+;*******************
 getboolg jsr CHRGET
 getboolz beq missop
 getbool  jsr getval
@@ -4850,7 +4939,7 @@ getbool  jsr getval
  bcs illqty4
  tax               ;sets zero flag if a reg is zero
  rts               ;result is in both a and x reg
-;******************
+;*******************
 getval15g jsr CHRGET
 getval15z beq missop
 getval15  jsr getval
@@ -4911,7 +5000,7 @@ mcplot
  asl
  sta mapcolbits  ;offset = index * 8 where index in (1,2,3)
  rts
-;*****************
+;*******************
 sprnum
  jsr getvalz
  cmp #8          ;valid sprite numbers 0-7
@@ -4939,13 +5028,13 @@ ptrhi           ;determine hibyte for address of sprite pointers
  lsr            ;zero shifted into carry by lsr so it is clear
  adc $62        ;base+offset
  adc #3         ;the end of screen RAM is 1K more
- rts
+doneee rts
 ;*******************
 getvoc
  jsr getvalz
  beq iverr
  cmp #4
- bcc getvoc-1
+ bcc doneee
 iverr ldx #32    ;illegal voice number
  jmp (IERROR)
 ;*******************
@@ -4976,12 +5065,7 @@ rom4
  jsr LINPRT+4   ;print 2-byte binary number in FAC1
  dec R6510
  rts
-;
-;round FAC1 to the nearest whole number by adding .5 then truncate
-doround
- jsr FADDH       ;add .5 to value in FAC1
- jmp INT         ;perform INT
-;
+;*******************
 ;print string that ends with either a zero-byte or an ascii > 127
 printstr
  sta $22
@@ -5014,11 +5098,6 @@ bitweights .byte 1,2,4,8,16,32,64,128
 ;SID voice register offsets
 sidoff .byte 0,7,14
 ;
-;10 tokens use line numbers that need to be renumbered when using renum
-gotok
-.byte TOKEN_GOTO,TOKEN_GOSUB,TOKEN_RETURN,TOKEN_THEN,TOKEN_ELSE
-.byte TOKEN_RESUME,TOKEN_TRACE,TOKEN_DELETE,TOKEN_RUN,TOKEN_RESTORE
-;
 ;VOICE command use VOICE voc#, frequency
 ;REGVAL=FREQ/(CLOCK/16777216)
 ;FREQ=REGVAL*(CLOCK/16777216)Hz
@@ -5049,7 +5128,7 @@ keyentry   .byte 0 ;scan code of the last key captured with ON KEY statement ena
 errnum     .byte 0 ;last error number that occured, default 0 (no error)
 errline    .word $FFFF ;last line number causing error, default -1 (not applicable)
 errtrap    .word 0 ;error handler line number
-txtptr     .word 0 ;basic txt ptr of statement causing error
+errtxtptr  .word 0 ;basic txt ptr of statement causing error
 oldtrap    .word errors ;temp storage of original error trap routine in use
 keyptr     .word 0 ;basic txt ptr of statement for ON KEY GOSUB line#
 keyline    .word $FFFF ;line number for ON KEY subroutine
@@ -5102,59 +5181,6 @@ paintbuf2 .repeat 256,0
 paintbuf3 .repeat 256,0
 
 playbuf1 .repeat 256,0
-
-;table for converting ascii to screen code
-;except for ascii 64 which is screen code 0
-;codes 192-223 same as 96-127
-;codes 224-254 same as 160-190
-;code  255 same as 126
-asc2scr
-;codes 64 to 127
-.byte 64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95
-;codes 160 to 255
-.byte 32,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117
-.byte 118,119,120,121,122,123,124,125,126,127,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78
-.byte 79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,32,97,98,99,100,101,102,103,104,105
-.byte 106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,94
-
-ascctrl
-.byte 5,13,14,17,18,19,20,28
-.byte 29,30,31,129,141,142,144,145
-.byte 146,147,149,150,151,152,153,154
-.byte 155,156,157,158,159
-ascctlfn
-.rta txtclr,txtcr,txtlc,txtdwn,txtrvson,txthome,txtbs,txtclr
-.rta txtright,txtclr,txtclr,txtclr,txtcr,txtuc,txtclr,txtcsrup
-.rta txtrvsoff,txtbitclr,txtclr,txtclr,txtclr,txtclr,txtclr,txtclr
-.rta txtclr,txtclr,txtleft,txtclr,txtclr
-
-;INF() memory locations
-infbytes
-.byte PNTR      ;csr logical column
-.byte TBLX      ;csr physical line
-.byte BLNSW     ;csr blink enabled
-.byte LNMX      ;csr max columns on current line (39 or 79)
-.byte GDBLN     ;ASCII value of char under csr (when blinking)
-.byte TMPASC    ;ASCII value of last character printed to screen
-.byte CHANNL    ;current i/o file number (set by CMD)
-.byte LDTND     ;num open files
-.byte NDX       ;num chars in keyboard buffer
-infwords
-.word SHFLAG    ;shift flag
-.word COLOR     ;current foreground color for text
-.word GDCOL     ;color under cursor
-.word $02a6     ;PAL or NTSC
-.word $ff80     ;Kernal version/system id
-.word playindex ;index of next note to play in play string
-.word playoct   ;current play octave
-.word lastplotx ;last plotted x coordinate
-.word lastploty ;last plotted y coordinate
-
-;scroll direction vectors up,down,left,right
-scrolls .rta scroll0,scroll1,scroll2,scroll3
-
-;string for keylist
-addchr .shift "+chr$("
 
 ;function key assignments, 8 keys, 16 bytes each
 keybuf
@@ -5252,11 +5278,65 @@ snotes .word 3824,4051,4547,5104,5407,6069,6813
 .word        3536
 .word        3969,4205,4720,5298,5613,6300,7072
 
+;INF() memory locations
+infbytes
+.byte PNTR      ;csr logical column
+.byte TBLX      ;csr physical line
+.byte BLNSW     ;csr blink enabled
+.byte LNMX      ;csr max columns on current line (39 or 79)
+.byte GDBLN     ;ASCII value of char under csr (when blinking)
+.byte TMPASC    ;ASCII value of last character printed to screen
+.byte CHANNL    ;current i/o file number (set by CMD)
+.byte LDTND     ;num open files
+.byte NDX       ;num chars in keyboard buffer
+infwords
+.word SHFLAG    ;shift flag
+.word COLOR     ;current foreground color for text
+.word GDCOL     ;color under cursor
+.word PALNTSC   ;PAL or NTSC
+.word $ff80     ;Kernal version/system id
+.word playindex ;index of next note to play in play string
+.word playoct   ;current play octave
+.word lastplotx ;last plotted x coordinate
+.word lastploty ;last plotted y coordinate
+
+ascctrl
+.byte 5,13,14,17,18,19,20,28
+.byte 29,30,31,129,141,142,144,145
+.byte 146,147,149,150,151,152,153,154
+.byte 155,156,157,158,159
+ascctlfn
+.rta txtclr,txtcr,txtlc,txtdwn,txtrvson,txthome,txtbs,txtclr
+.rta txtright,txtclr,txtclr,txtclr,txtcr,txtuc,txtclr,txtcsrup
+.rta txtrvsoff,txtbitclr,txtclr,txtclr,txtclr,txtclr,txtclr,txtclr
+.rta txtclr,txtclr,txtleft,txtclr,txtclr
+
+;table for converting ascii to screen code
+;except for ascii 64 which is screen code 0
+;codes 192-223 same as 96-127
+;codes 224-254 same as 160-190
+;code  255 same as 126
+asc2scr
+;codes 160 to 255
+.byte 32,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127
+.byte 64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95
+.byte 32,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,94
+
+;scroll direction vectors up,down,left,right
+scrolls .rta scroll0,scroll1,scroll2,scroll3
+
+;10 tokens use line numbers that need to be renumbered when using renum
+gotok
+.byte TOKEN_GOTO,TOKEN_GOSUB,TOKEN_RETURN,TOKEN_THEN,TOKEN_ELSE
+.byte TOKEN_RESUME,TOKEN_TRACE,TOKEN_DELETE,TOKEN_RUN,TOKEN_RESTORE
+
+;string for keylist
+addchr .shift "+chr$("
+
 ;KEY (continued)
 keyy
  ldx #0        ;even/odd key string offset
- lda $02       ;key# 1 to 8
- lsr           ;index 0 to 4
+ lsr           ;key# 1-8 converted to index 0-4
  bcs oddkey    ;carry set for odd key nums
  sec
  sbc #1        ;convert 1-4 as index 0-3
@@ -5267,7 +5347,7 @@ oddkey
  asl
  asl
  asl
- clc
+; clc carry is already clear from asl of a value 0 to 3
  adc $61
  tax
  lda $52
@@ -5283,28 +5363,30 @@ nextc lda ($50),y
  iny
  cpy $52      ;end of new string?
  bne nextc
-endass lda #0 ;terminate string with zero-byte
+endass
+ lda #0 ;terminate string with zero-byte
+setchr
  sta keybuf,x
  inx
  iny
  cpy #16      ;fill remaining bytes with 0
- bcc endass+2
+ bcc setchr
  jmp memnorm  ;switch LORAM back to LOROM
 ;
+;**************************
 ;KEY LIST (continued)
-;
 keylistt
  jsr printcr
  lda #"1"
- sta $02      ;current key#
+ sta $fd      ;current key#
  lda #0
  sta $fb      ;string offset in buffer
 nextke
  jsr kprnt
- lda $02
+ lda $fd
  cmp #"8"
  beq stpkeylst
- inc $02
+ inc $fd       ;key#
  lda $fb      ;bit6=0 is odd key# else even key#
  eor #%01000000 ;bit7 is always 0
  sta $fb
@@ -5318,17 +5400,17 @@ stpkeylst
  jmp memnorm  ;switch LORAM back to LOROM
 ;--------
 kprnt
- lda #<keystr
+ lda #<keystr ;print the keyword KEY
  ldy #>keystr
  jsr printstr
- lda $02      ;key#
- jsr CHROUT
- lda #","
+ lda $fd      ;key#
+ jsr CHROUT   ;print key number
+ lda #","     ;followed by comma
  jsr CHROUT
  lda $fb      ;index offset
  sta $fc      ;current index
 pkstr
- jsr printqt
+ jsr printqt  ;print opening quote
 nextlt
  ldy $fc
  lda keybuf,y
@@ -5549,6 +5631,7 @@ mowait dex
  bne movewait
 linedon rts
 ;
+;**************************
 setdot jsr ydiv8
  lda R6510
  pha
@@ -5640,6 +5723,7 @@ ydiv8 lda $fd  ;y coordinate
 ydiv8x ldy #0
  rts
 ;
+;**************************
 ;find index of ascii value in color code table
 txtclr
  txa             ;ASCII value
@@ -5723,15 +5807,15 @@ txtleft
  lda lastplotx+1
  sbc #0
  clc         ;flag indicating x not set
- bmi txtbs-1 ;not enough space so abort
+ bmi done2  ;not enough space so abort
 oktxtx
  sta lastplotx+1
  stx lastplotx
  sec         ;flag indicating x set
- rts
+done2 rts
 txtbs
  jsr txtleft
- bcc txtbs-1
+ bcc done2
  lda #32     ;print space
  jmp txtprint
 ;
@@ -5829,10 +5913,14 @@ nextchar lda #0
 ;convert ascii to screen code
  tay
  bpl cd0to127
- cmp #128+32
- bcc nonprt
- and #%01111111
- bcs convert    ;always branches
+ sec
+ sbc #128+32
+ bcc nonprt0
+ tay
+ lda asc2scr,y
+ jmp dotptr
+nonprt0
+ tya            ;restore original ascii value
 nonprt
  ldy #28        ;29 ascii values have funcs
 fndctrl
@@ -5847,11 +5935,6 @@ cd0to127
  cmp #64
  bcc dotptr
  sbc #64
- cmp #32
- bcc dotptr
-convert
- tay
- lda asc2scr,y
 ;determine mem ptr of dot data
 dotptr
  jsr txtprint
@@ -6014,6 +6097,7 @@ buffit ldy $57
  lda $fd
  sta paintbuf1,y
  inc $57
+donee
  rts
 ;
 ;process radial line options
@@ -6058,7 +6142,7 @@ okopt3 sta $fd
  jsr linedraw
 copt4
  asl $2a
- bcc ciropts-1
+ bcc donee
  jsr getpoint ;get last plot coordinates
  lda $fb
  clc
@@ -6647,14 +6731,16 @@ x59 lda $59,x
  jsr curve
  lda $6c
  beq zero6c
-loopy jmp loops2
+loopy
+ jmp loops2
 zero6c ldx #2
+loopy2
  lda $59,x
  cmp $69,x
  bcc loopy
  bne nencs
  dex
- bpl zero6c+2
+ bpl loopy2
 nencs lda $fb
  sta $67
  lda $fc
@@ -6706,6 +6792,7 @@ loadd
  cmp #2      ;2=screen
  bne sdnot2
 lodsrn jsr param ;prepare text and color mem pointers
+lodfile
  jsr CHRIN   ;get border color
  sta EXTCOL  ;set border color
  jsr CHRIN   ;get background color
@@ -6750,7 +6837,7 @@ lodbm jsr CHRIN
  jsr param     ;prepare pointers for text and color mem
  lda #$c8      ;override hibyte to point at bitmap mem $C800
  sta $c4
- jmp lodsrn+3  ;finish by loading the remainder of the file
+ jmp lodfile   ;finish by loading the remainder of the file
 ;
 ;*********************
 ;save command re-write
@@ -6767,6 +6854,7 @@ savee
  bne sdvn2
 ;save screen
 savscr jsr param
+savscr2
  lda $c4
  clc
  adc #3
@@ -6833,21 +6921,21 @@ savbtm sei
  jsr param      ;prepare pointers for text and color mem
  lda #$c8       ;override hibyte to correct for bitmap mem at $C800
  sta $c4
- jmp savscr+3   ;finish by saving the screen mem bytes
+ jmp savscr2    ;finish by saving the screen mem bytes
 ;
 lodsav          ;real secondary device in x reg
  lda $b9        ;secondary address
  sta $02        ;save fake secondary device # (2,3,4)
  stx $b9        ;replace secondary device with desired real value
  jsr OPEN       ;perform OPEN
- bcc status-1   ;return if ok, close and fail if error
+ bcc loded      ;return if ok, close and fail if error
  jmp err127
 ;
- rts
+loded rts
 status jsr STOP
  beq stopls
  lda $90
- beq status-1
+ beq loded
 stopls pla
  pla
  jmp romin
@@ -6873,12 +6961,12 @@ param3 ldy #0 ;ptr to BITMAP
 ;
 ;*********************
 varss
- lda $2d      ;vector ($2d,$2e) beginning of non-array variable storage
- ldy $2e
+ lda VARTAB   ;pointer of beginning of non-array variable storage
+ ldy VARTAB+1
 chk2d
- cmp $2f      ;vector ($2f,$30) beginning of array variable storage
+ cmp ARYTAB   ;pointer of beginning of array variable storage
  bne copy2d   ;if both vectors point at same mem loc then no vars defined
- cpy $30
+ cpy ARYTAB+1
  bne copy2d
 evar
  jmp memnorm  ;switch LORAM back to LOROM
@@ -6888,19 +6976,19 @@ copy2d
  jsr STOP     ;was STOP key pressed
  beq evar     ;yes, abort processing
  ldy #0
- sty $0d      ;set default type to 0=float
+ sty VALTYP   ;set default type to 0=numeric
  lda ($fb),y  ;first 2 bytes is variable name
  sta $45      ;first char of var name
  and #$80     ;last char has bit 7 set
  beq bitoff
  lda #2
- sta $0d      ;set to type 2 fn
+ sta VALTYP   ;set to type 2 fn
 bitoff iny
  lda ($fb),y
  sta $46      ;second char of var name (or space if not needed)
  and #$80     ;check bit 7 flag for int type
  beq type
- inc $0d      ;set to type 3 int
+ inc VALTYP   ;set to type 3 int
 type lda $fb  ;skip over 2 byte name
  clc
  adc #2
@@ -6908,14 +6996,14 @@ type lda $fb  ;skip over 2 byte name
  lda $fc
  adc #0
  sta $fc
- lda $0d     ;type 0=float, 1=string, 2=fn, 3=int
+ lda VALTYP  ;type 0=float, 1=string, 2=fn, 3=int
  cmp #2      ;fn
  beq nxtvar+5 ;skip fn types
  lda $45     ;get first char of name
  jsr prtchr  ;output first char of name
  lda $46     ;get second char of name
  jsr prtchr  ;output second char of name
- lda $0d     ;var type?
+ lda VALTYP  ;var type?
  beq float   ;type 0 is float
  cmp #1      ;type 1 is string
  beq string  ;otherwise int
@@ -7317,18 +7405,6 @@ shiftchar
  sbc HIBASE
  jmp wwww
 ;--------------
-wrapit
- lda $02
- beq wdone
- ldy $be         ;columns to scroll
-cpybuf lda ($fb),y
- sta paintbuf1,y ;char mem buffer
- lda ($fd),y
- sta paintbuf2,y ;color mem buffer
- dey
- bpl cpybuf
-wdone
- rts
 ;calculate text and color RAM mem pointers
 calcptr
  ldy $bf     ;line number
@@ -7348,13 +7424,28 @@ wwww
  adc #$d8    ;offset from current text ptr hibyte
  sta $fe     ;apply hibyte of color RAM ptr
  rts
-;
+;--------------
+;store column to be wrapped
+wrapit
+ lda $02
+ beq wdone
+ ldy $be         ;columns to scroll
+cpybuf lda ($fb),y
+ sta paintbuf1,y ;char mem buffer
+ lda ($fd),y
+ sta paintbuf2,y ;color mem buffer
+ dey
+ bpl cpybuf
+wdone
+ rts
+;--------------
+;play next note
 nextn0       ;start over from beginning
  lda #0
  sta playindex
 nextn2
  jsr notegot
- beq nextn2-1
+ beq wdone
 nextn
  cmp #"h"       ;notes A-G only
  bcc goodnote
@@ -7495,12 +7586,13 @@ skipnote jmp nextn2
 
 getdigitval     ;get 2-digit value 0-99
  jsr noteget
- beq digit9-1   ;end of string, assume 0 value
+ beq donedig    ;end of string, assume 0 value
  sec            ;convert ascii digit to binary value
  sbc #"0"       ;first char must be digit between 0 and 9
  bpl digit9
 nondigit
  lda #$ff       ;flag for non numeric digit
+donedig
  rts
 digit9
  cmp #10
@@ -7577,7 +7669,8 @@ octmax
  lda #$ff ;max regval reached starting at
  tay      ;octave 8 note B for PAL
  rts      ;octave 8 note C for NTSC
-;
+;--------------
+;process DRAW string
 godraww
  cmp #"u"
  bne chkdwn
@@ -7697,7 +7790,8 @@ drwrap
  stx $fc
  stx $fb
 drdone rts
-;
+;--------------
+;perform BITMAP FILL
 bitfil
  ldy #$01    ;signed y inc value
 ;calc number of lines to fill
@@ -8012,7 +8106,8 @@ xf45c lda RIDBE ;index to end of receive buffer
  ldx #0         ;success code
  clc            ;flag to calling subroutine that open was successful
  rts
-;
+;--------------
+;perform POKE in specified range
 pokee
 ;make sure start is less than or equal to end
  lda $14
@@ -8059,7 +8154,8 @@ nxtpg
  inc $fc
  bne poker
 poked jmp memnorm
-;
+;--------------
+;perform HEX$(s$)
 hexx
  ldy #$00
  lda $62
@@ -8108,25 +8204,27 @@ noadd7 clc
  adc #48
  sta BAD,y
  iny
+doneit
  rts
-;
+;--------------
+;perform FIND
 findd
  ldy #0
- lda (TXTTAB),y ;should be $0801
+ lda (TXTTAB),y
  sta $fb
  iny
- lda (TXTTAB),y ;should be $0802
+ lda (TXTTAB),y
  sta $fc
  ora $fb
- beq findd-1
+ beq doneit
  iny
- lda (TXTTAB),y ;should be $0803
- sta $39
+ lda (TXTTAB),y
+ sta CURLIN
  iny
- lda (TXTTAB),y ;should be $0804
- sta $3a
+ lda (TXTTAB),y
+ sta CURLIN+1
  jsr CHRGOT
- beq findd-1 ;nothing to find
+ beq doneit     ;nothing to find
  cmp #"""
  bne noquo
  jsr CHRGET
@@ -8138,7 +8236,7 @@ noquo lda TXTTAB
  adc #0
  sta $fe
 check ldy #$00
- lda ($7a),y
+ lda (TXTPTR),y
  beq linend
  tax
  lda ($fd),y
@@ -8151,7 +8249,7 @@ check ldy #$00
  inc $fe
  jmp check
 search iny
- lda ($7a),y
+ lda (TXTPTR),y
  beq founit
  cmp ($fd),y
  beq search
@@ -8163,9 +8261,9 @@ search iny
  adc #$00
  sta $fe
  jmp check
-founit lda $39
+founit lda CURLIN
  sta $14
- lda $3a
+ lda CURLIN+1
  sta $15
  jsr lstrap
  jsr findlnr  ;search for line#
@@ -8185,10 +8283,10 @@ linend lda $fb
  sta $fc
  iny
  lda ($fd),y
- sta $39
+ sta CURLIN
  iny
  lda ($fd),y
- sta $3a
+ sta CURLIN+1
  iny
  tya
  clc
@@ -8202,7 +8300,8 @@ linend lda $fb
  bne check
 prgend
  rts
-;
+;--------------
+
 ;get 8-byte time string into string buffer
 getimstr
  lda TO2HRS      ;reading pauses capture of time to these registers
@@ -8233,7 +8332,7 @@ getime
  rts
 ;get time digit
 timedig
- pha
+ tax
  lsr
  lsr
  lsr
@@ -8242,7 +8341,7 @@ timedig
  adc #"0"
  sta BAD,y
  iny
- pla
+ txa
  and #15
  clc
  adc #"0"
@@ -8691,51 +8790,70 @@ infcolor
  and #%00001111  ;hi nybble is not used for all color registers
  jmp goinf
 ;
-deletee
- lda $5f
- ldx $60
- bcc noline
- ldy #$01
- lda ($5f),y
- beq noline
- tax
- dey
- lda ($5f),y
-noline
- sta $7a
- stx $7b
- lda $24
- sec
- sbc $7a
- tax
- lda $25
- sbc $7b
- tay
- bcs deldone
- txa
- clc
- adc $2d
- sta $2d
- tya
- adc $2e
- sta $2e
+clrflg lda TXTPTR
+ sta $22
+ lda TXTPTR+1
+ sta $23
+ lda VARTAB
+ sta $24
+ lda VARTAB+1
+ sta $25
  ldy #$00
-copy lda ($7a),y
- sta ($24),y
- iny
- bne copy
- inc $7b
- inc $25
- lda $2e
- cmp $25
- bcs copy
-deldone rts
+ sty COUNT
+ sty $97
+donenow rts
 ;
-worker
- lda $3c
- sta $7b
- lda $3b
- sta $7a
+renumer
+ jsr runcc
+strt jsr chrget
+ jsr chrget
+ bne serch
+ jsr tofac
+strnum jsr chrget
+ jsr chrget
+ beq donenow  ;end of renum process
+ jsr chrget
+ lda $63
+ sta (TXTPTR),y
+ jsr chrget
+ lda $62
+ sta (TXTPTR),y
+ jsr addinc
+ beq strnum
+serch jsr chrget
+ jsr chrget
+nocrap jsr chrget
+craper cmp #"""
+ bne tokgo
+;skip over expression in quotes
+crap jsr chrget
+ beq strt    ;end of line
+ cmp #"""
+ bne crap
+ beq nocrap
+tokgo tax
+ beq strt
+ bpl nocrap
+;check if token is a statement that use line numbers
+ ldx #10     ;there are 10 tokens that reference a line number
+chktok
+ cmp gotok-1,x
+ beq sav7a
+ dex
+ bne chktok
+ beq nocrap
+sav7a lda TXTPTR
+ sta OLDLIN
+ lda TXTPTR+1
+ sta OLDLIN+1
+ jsr CHRGET
+ bcs craper
+ jsr evalnum
+ jsr replac
+ lda OLDLIN+1
+ sta TXTPTR+1
+ lda OLDLIN
+ sta TXTPTR
  ldy #$00
  ldx #$00
 numchr lda BAD,x
@@ -8747,92 +8865,83 @@ numchr lda BAD,x
  jsr inc2d
 skp2d pla
  ldy #$00
- sta ($7a),y
+ sta (TXTPTR),y
  inx
  bne numchr
 less0 jsr CHRGET
  bcs workdone
 dec2d jsr clrflg
  dec $97
-work ldy $0b
+work ldy COUNT
  iny
  lda ($22),y
  ldy $97
  iny
  sta ($22),y
  jsr pntreq
- beq zzzz
+ beq crush1
  inc $22
  bne work
  inc $23
  bne work
  jsr bufer
-zzzz
- lda $2d
+crush1
+ lda VARTAB
  bne ne2d
- dec $2e
-ne2d dec $2d
+ dec VARTAB+1
+ne2d dec VARTAB
  jsr CHRGOT
  bcc dec2d
 workdone
- jmp memnorm
+ cmp #","
+ beq sav7a
+ jmp craper
 ;
-pott
- pha            ;save pot num
- ldx #%11000000 ;bits 0=input, 1=output, set bits 6 and 7 to output
- sei
- stx CIDDRA     ;data direction reg A
- cmp #$03       ;pot 3 and 4 are on port 2
- bcs port2
- ldy CIAPRB     ;data port reg B
- ldx #$40
- bne setprt     ;always branches
-port2 lsr
- ldx #$80       ;bit 7 set to read paddles on Port A or B
- ldy CIAPRA
-setprt stx CIAPRA
- sty $02
- ldy #$80       ;wait for latch to fully engage
-waitl dey
- bpl waitl
- lsr
- tay
- lda POTX,y
- ldx #$ff       ;set data direction to output
- stx CIDDRA
- cli
- tay            ;lobyte value
- pla            ;restore pot num 1-4
- lsr            ;carry set if odd pot num
- lda #%00000100 ;odd port nums should check bit 2 for button
- bcs and02      ;odd port num
- asl            ;even port nums should check bit 3 for button
-and02 bit $02   ;button pressed?
- bne nobutt2
- lda #$01       ;hibyte 1 to indicate button pressed
-.byte $2c       ;defeats LDA #0 by making it BIT $00A9
-nobutt2 lda #0  ;hibyte 0 to indicate button not pressed
- rts
+replac jsr tofac
+goagan jsr chrget
+ jsr chrget
+ bne isline
+ lda #$ff
+ sta $62
+ sta $63
+ bmi pnl
+isline jsr chrget
+ cmp $14
+ bne nexlin
+ jsr chrget
+ cmp $15
+ bne nexlin+3
+pnl ldx #$90
+ jmp fltstr     ;convert FAC1 to float then to string
+nexlin jsr chrget
+ jsr addinc
+ beq goagan
+inc2d jsr clrflg
+ inc $97
+ jsr bufer
+ inc VARTAB
+ bne gbwyc
+ inc VARTAB+1
+gbwyc rts
 ;
-joyy
- lsr             ;joy 1 or 2 becomes index 0 or 1
- eor #%00000001  ;index 0 or 1 becomes 1 or 0
- tay             ;CIAPRB has joy 1
- lda CIAPRA,y    ;CIAPRA has joy 2
- tay             ;remember full value
- and #%00001111  ;lower nybble holds position value
- sta $14
- tya             ;restore full value
- and #%00010000  ;bit 4 is button
- sta $15
- lda #$0f
- sec
- sbc $14
- ldx $15
- cpx #$10
- beq nofire
- ora #%10000000  ;button flag
-nofire tay       ;lowbyte
+bufer ldy COUNT
+ lda ($24),y
+ ldy $97
+ sta ($24),y
+ jsr pntreq
+ bne pne2
  rts
+pne2 lda $24
+ bne ne24
+ dec $25
+ne24 dec $24
+ jmp bufer
+;
+pntreq lda $22
+ cmp $24
+ bne gbhah
+ lda $23
+ cmp $25
+gbhah rts
 ;
 .end
