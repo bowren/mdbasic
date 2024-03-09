@@ -813,10 +813,16 @@ back1
  dex
  stx TXTPTR
  sty TXTPTR+1
-;push onto stack the return address $e1b8-1 to restore TXTPTR
+;push byte after string onto stack
+ ldy #0
+ lda ($24),y
+ pha
+ tya
+ sta ($24),y
+;push return address $b7dd-1 to restore byte and TXTPTR onto stack
  lda #$b7
  pha
- lda #$e1
+ lda #$dc
  pha
  lda $02
  cmp #"h"
