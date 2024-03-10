@@ -7,6 +7,7 @@ R6510  = $01 ;LORAM/HIRAM/CHAREN RAM/ROM selection and cassette control register
 COUNT  = $0b ;Index into the Text Input Buffer/Number of Array Subscripts/General Counter
 VALTYP = $0d ;Type of Data (255=String, 0=Numeric)
 INTFLG = $0e ;Type of Numeric Data (128=Integer, 0=Floating Point)
+GARBFL = $0f ;Flag for LIST, Garbage Collection, and Program Tokenization
 CHANNL = $13 ;Current I/O Channel (CMD Logical File) Number
 VARTAB = $2d ;Pointer to the Start of the BASIC Variable Storage Area
 TXTTAB = $2b ;Pointer to the Start of BASIC Program Text
@@ -358,7 +359,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.03.08"
+.text "mdbasic 24.03.09"
 .byte 13
 .text "(c)1985-2014 mark bowren"
 .byte 13,0
@@ -610,7 +611,7 @@ erradd .word misop, ilvne, illspr, ilcoor, cantre, usrerr
 ;
 toknew ldx TXTPTR
  ldy #$04
- sty $0f
+ sty GARBFL
 nxtchr lda BUF,x
  bpl norma      ;bit 7 indicates a token value
  cmp #TOKEN_PI  ;pi token?
@@ -622,7 +623,7 @@ norma cmp #" "  ;space character?
  sta $08        ;search char for statement terminator or quote
  cmp #"""
  beq getchr
- bit $0f        ;variable used by Program Tokenization process
+ bit GARBFL     ;variable used by Program Tokenization process
  bvs takchr
  cmp #"?"
  bne skip
@@ -661,11 +662,11 @@ takchr inx
  beq endln
  sbc #":"       ;ascii $3a
  beq skip2
- cmp #$49       ;data token $83 minus $3a
+ cmp #TOKEN_DATA-":" ;data token $83 minus $3a equals $49
  bne skip3
-skip2 sta $0f
+skip2 sta GARBFL
 skip3 sec
- sbc #$55       ;rem token $8f minus $3a minus $55
+ sbc #$55       ;rem token $8f minus $3a equals $55
  bne nxtchr
 rem
  sta $08
@@ -774,7 +775,6 @@ remm jmp REM
 let cmp #"'"-$80
  beq remm
  jmp LET        ;perform LET
-badtok jmp SNERR
 tstcmd
  sbc #$80
  bcc let
@@ -791,48 +791,52 @@ oldcmd
  lda cmdtab,x   ;lobyte
  pha
  jmp CHRGET
+badtok
+ jmp SNERR
 ;
-;Evalutate functions via vector IEVAL ($030A) originally pointing to EVAL $AE86
 vall
  jsr CHRGET
 valll
- jsr PARCHK        ;PARCHK Evaluate Expression Within Parentheses
- jmp VAL           ;perform VAL
+ jsr PARCHK       ;PARCHK Evaluate Expression Within Parentheses
+ jmp VAL          ;perform VAL
 ;
 valfn
- jsr chrget        ;advance TXTPTR one byte
+ jsr chrget       ;advance TXTPTR one byte
  cmp #"b"
  bcc valll
  sta $02
- jsr vall          ;use VAL to determine TXTPTR
- ldy $23           ;result of VAL is not used
- ldx $22           ;set TXTPTR to first char in string
- bne back1         ;backup 1 char to prepare for CHRGET
+ jsr vall         ;use VAL to determine TXTPTR
+ ldy $23          ;result of VAL is not used
+ ldx $22          ;set TXTPTR to first char in string
+ bne back1        ;backup 1 char to prepare for CHRGET
  dey
 back1
  dex
  stx TXTPTR
  sty TXTPTR+1
-;push byte after string onto stack
+;push onto stack the byte after the string
  ldy #0
  lda ($24),y
  pha
+;null-terminate the string for val calculation
  tya
  sta ($24),y
-;push return address $b7dd-1 to restore byte and TXTPTR onto stack
+;push onto stack the return address $b7dd-1 to restore byte and TXTPTR
  lda #$b7
  pha
  lda #$dc
  pha
  lda $02
- cmp #"h"
+;determine VAL function
+ cmp #"h"         ;hexadecimal
  beq hexaa
- cmp #"b"
+ cmp #"b"         ;binary
  beq binary
- cmp #"o"
+ cmp #"o"         ;octal
  beq octal
- jmp SNERR
+ bne badtok
 ;
+;Evalutate functions via vector IEVAL ($030A) originally pointing to EVAL $AE86
 newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
  sta VALTYP       ;Flag Type of Data (String or Numeric) to enforce data type
  jsr CHRGET
@@ -1008,41 +1012,42 @@ pultxtptr
 ;Supports freezing the listing while holding down the shift key.
 ;This routine is called repeatedly until the entire list range is complete.
 ;******************************************
-list pha      ;save a reg from CHRGET
- tya          ;also 
- pha          ;save y reg from CHRGET
-shift lda #$01 ;check mem ctrl reg
- bit SHFLAG   ;0=none, 1=shift key, 2=logo key, 4=ctrl key
- bne shift    ;bit pattern 001=shift, 010=commodore, 100=ctrl (any combo)
- pla          ;restore y reg
+list pha        ;save a reg from CHRGET
+ tya            ;also
+ pha            ;save current y reg
+shift lda #$01  ;check mem ctrl reg
+ bit SHFLAG     ;0=none, 1=shift key, 2=logo key, 4=ctrl key
+ bne shift      ;bit pattern 001=shift, 010=commodore, 100=ctrl (any combo)
+ pla            ;restore y reg
  tay
- pla          ;restore a reg
- bpl out      ;less than 128 is non token so just output char as-is
- bit $0f      ;quote mode enabled?
- bmi out      ;bit7 set means yes so just output char as-is
+ pla            ;restore a reg
+ bpl out        ;less than 128 is non token so just output char as-is
+ bit GARBFL     ;quote mode enabled?
+ bmi out        ;bit7 set means yes so just output char as-is
  cmp #TOKEN_PI  ;pi token?
  beq out        ;just output pi symbol as-is
  cmp #FIRST_CMD_TOK ;first MDBASIC command token?
  bcs newlst     ;greater or equal to first MDBASIC token so decode the command text
  jmp $a724      ;perform part of CLR cmd. done here.
-out jmp $a6f3  ;output byte as it is on cmd line
+out jmp $a6f3   ;output byte as it is on cmd line
 newlst
- sbc #FIRST_CMD_TOK-1  ;calc index
- tax          ;index to x reg soon to subtract 1 so 0-based index
- sty $49      ;store y reg value from CHRGET
+ sbc #FIRST_CMD_TOK-1
+ tax            ;index to x reg soon to subtract 1 so 0-based index
+ sty $49        ;store y reg value from CHRGET
  ldy #$ff
-nextt dex     ;next token index
- beq found    ;if we are on first token index then it must be a match
+nextt dex       ;next token index
+ beq found      ;if we are on first token index then it must be a match
 loop1 iny
- lda newcmd,y ;get command's next text char from table
- bpl loop1    ;the last character has bit 7 on as a flag of end-of-string
- bmi nextt    ;reached end of string with no match so try next command
-found iny     ;found a command match for every chr in string
- lda newcmd,y ;get current char in command string
- bmi oldend   ;if on last chr of command then continue with old list function
+ lda newcmd,y   ;get command's next text char from table
+ bpl loop1      ;the last character has bit 7 on as a flag of end-of-string
+ bmi nextt      ;reached end of string with no match so try next command
+found iny       ;found a command match for every chr in string
+ lda newcmd,y   ;get current char in command string
+ bmi oldend     ;if on last chr of command then continue with old list function
  jsr CHROUT
- jmp found    ;next char
-oldend jmp $a6ef ;list old
+ jmp found      ;next char
+oldend
+ jmp $a6ef      ;original LIST for CBM-BASIC tokens
 ;
 ;**************************************
 ; IF statement re-write to support ELSE
@@ -1091,48 +1096,48 @@ vars dec R6510
 ;"R0:newfileName=oldfileName"    - rename a file
 ;"V0:"                           - validate (defragment) disk
 disk
- jsr getstr0     ;get DOS string
+ jsr getstr0    ;get DOS string
  jsr SETNAM
- jsr getdskdev   ;get disk device num in x reg
- lda #$7e        ;file handle 126
- ldy #$0f        ;secondary channel 15 = DOS channel
+ jsr getdskdev  ;get disk device num in x reg
+ lda #$7e       ;file handle 126
+ ldy #$0f       ;secondary channel 15 = DOS channel
  jsr SETLFS
- jsr OPEN        ;performs OPEN 126,8,15, "string"
+ jsr OPEN       ;performs OPEN 126,8,15, "string"
  bcs err126
 ;read line from current channel and device
  ldx #126
 inpstr
  dec R6510
- lda $9d         ;display message if not in prg mode
- jsr bufio       ;read response and print if needed
+ lda $9d        ;display message if not in prg mode
+ jsr bufio      ;read response and print if needed
  inc R6510
- bcs err126      ;carry indicates i/o error
+ bcs err126     ;carry indicates i/o error
  jsr clse7e
- jsr CHRGOT      ;check another param exists
- beq donehere    ;if not stop now, otherwise
+ jsr CHRGOT     ;check another param exists
+ beq donehere   ;if not stop now, otherwise
 ;copy output to specified string var
 outstr
- tya             ;y reg holds bytes to allocate
+ tya            ;y reg holds bytes to allocate
  sta $fd
  beq gstr
- jsr GETSPA      ;alloc space in mem for string returning address ptr in $35,$36
- sta $fd         ;actual length allocated
+ jsr GETSPA     ;alloc space in mem for string returning address ptr in $35,$36
+ sta $fd        ;actual length allocated
  jsr buf2str
 gstr
  jsr CHRGET
- jsr PTRGET   ;search for a var & setup if not found
- sta $49      ;variable address is returned in a (lo byte) and y (hi byte) registers
+ jsr PTRGET     ;search for a var & setup if not found
+ sta $49        ;variable address is returned in a (lo byte) and y (hi byte) registers
  sty $4a
- lda $fd      ;length
+ lda $fd        ;string length
 setstrptr
  ldy #0
- sta ($49),y  ;save it to the variable's string length byte
+ sta ($49),y    ;save it to the variable's string length byte
  iny
- lda $35      ;get lo byte of str ptr
- sta ($49),y  ;save it to variable's str ptr info
+ lda $35        ;get lo byte of str ptr
+ sta ($49),y    ;save it to variable's str ptr info
  iny
- lda $36      ;get hi byte of str ptr
- sta ($49),y  ;save it to variable's str ptr info
+ lda $36        ;get hi byte of str ptr
+ sta ($49),y    ;save it to variable's str ptr info
 donehere rts
 ;
 err126
@@ -1145,10 +1150,11 @@ err126
 buf2str
  ldy $fd
  dec R6510
+;copy input buffer to string variable
 copyer
- lda paintbuf1-1,y ;copy input buffer
+ lda paintbuf1-1,y
  dey
- sta ($35),y     ;to string variable
+ sta ($35),y
  bne copyer
  inc R6510
  rts
@@ -1312,10 +1318,10 @@ srncol
  stx $fb
  sty $fc
 filler
- sta $02
+ sta GARBFL
  ldx $bf        ;line count
 nxtc ldy $be    ;column count
- lda $02        ;poke code
+ lda GARBFL     ;poke code
 nxtcol
  sta ($fb),y
  dey
@@ -1365,10 +1371,10 @@ waitout
  and #1
  bne waitout
 end232
- lda CHANNL    ;current I/O channel (logical file) number for UNLSN and UNTALK
- jsr CLRCHN    ;restore default i/o devices and send UNLSN and UNTALK to serial device
- ldx #$00      ;logical file number 0=none
- stx CHANNL    ;set current I/O channel (logical file) number
+ lda CHANNL   ;current I/O channel (logical file) number for UNLSN and UNTALK
+ jsr CLRCHN   ;restore default i/o devices and send UNLSN and UNTALK to serial device
+ ldx #$00     ;logical file number 0=none
+ stx CHANNL   ;set current I/O channel (logical file) number
  rts
 ;
 ;*******************
@@ -1760,12 +1766,13 @@ endprg
 initmdb
  lda #0         ;clear all MDBASIC IRQ flags
  sta MDBIRQ     ;if MDBASIC IRQ is active it will restore original irq
-; sta SPENA      ;turn off all sprites
+ sta SPENA      ;turn off all sprites
  jsr troff
  jsr detrap     ;turn off error trapping in case it was enabled in previous run
  jsr clearerr   ;clear last error info
  jsr keyoff     ;ensure key trapping is off
  jmp sidclr     ;clear SID registers
+;
 ;*******************
 ; RUN
 ; RUN linenum
@@ -2577,12 +2584,12 @@ move
  jsr sprnum    ;get sprite# and 2^sprite# ($bf)
  tya           ;sprite number 0-7
  asl           ;convert to 2-byte index for registers
- sta $0f       ;sprite# * 2
+ sta GARBFL    ;sprite# * 2
  jsr CHRGOT
  cmp #TOKEN_TO
  bne getfrom
 ;get current x and y coordiates for move starting point
- ldy $0f       ;sprite# * 2
+ ldy GARBFL    ;sprite# * 2
  lda SP0Y,y    ;get current y coord for sprite
  sta $fd
  lda SP0X,y    ;get current x coord for sprite
@@ -2609,7 +2616,7 @@ bitof lda $bf  ;sprite register offset 2^sprite#
  eor #$ff
  and MSIGX
 msb sta MSIGX  ;x coord hibyte
- ldy $0f       ;sprite# * 2
+ ldy GARBFL    ;sprite# * 2
  lda $14
  sta SP0X,y    ;sprite x coord
  sta $fb
@@ -2618,7 +2625,7 @@ gety
  jsr getvalue  ;y2 coord
  bne badxy     ;hibyte must be 0
  txa
- ldy $0f       ;sprite# * 2
+ ldy GARBFL    ;sprite# * 2
  sta SP0Y,y    ;sprite y coord
  sta $fd
  jsr CHRGOT
@@ -2821,8 +2828,8 @@ magy ldy #0
 magx ldy #6
 ;load y reg with xpand reg offset 0=Y, 6=X
  lda YXPAND,y
- ora $bf
- bne setmag ;always branches
+ ora $bf        ;2^sprite#
+ bne setmag     ;always branches
 clry ldy #0
  .byte $2c
 clrx ldy #6
@@ -3023,10 +3030,10 @@ dodesign
  sta $bf
  ldy #$00      ;loop for all 8 bytes of data
 gtdata
- sty $02
+ sty GARBFL
  jsr ckcom2    ;check for and skip over comma, misop err if missing
  jsr getval
- ldy $02
+ ldy GARBFL
  sta ($be),y
  iny
  cpy #8
@@ -3040,7 +3047,7 @@ bitmapclr
  sta $63
  lda #$00
  sta $62
- ldy #0
+ tay
 clrbyt sta ($62),y
  iny
  bne clrbyt
@@ -5615,7 +5622,7 @@ nod010 lda $07
  and MSIGX
 std010 sta MSIGX
  lda $fb
- ldy $0f        ;temp var of sprite reg index
+ ldy GARBFL     ;temp var of sprite reg index
  sta SP0X,y
  lda $fd
  sta SP0Y,y
