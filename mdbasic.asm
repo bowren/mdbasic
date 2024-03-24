@@ -359,7 +359,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.03.09"
+.text "mdbasic 24.03.23"
 .byte 13
 .text "(c)1985-2014 mark bowren"
 .byte 13,0
@@ -6989,36 +6989,41 @@ copy2d
  jsr STOP     ;was STOP key pressed
  beq evar     ;yes, abort processing
  ldy #0
- sty VALTYP   ;set default type to 0=numeric
- lda ($fb),y  ;first 2 bytes is variable name
- sta $45      ;first char of var name
- and #$80     ;last char has bit 7 set
- beq bitoff
- lda #2
- sta VALTYP   ;set to type 2 fn
-bitoff iny
- lda ($fb),y
- sta $46      ;second char of var name (or space if not needed)
- and #$80     ;check bit 7 flag for int type
- beq type
- inc VALTYP   ;set to type 3 int
-type lda $fb  ;skip over 2 byte name
+;get 2 byte variable name
+;if both bytes have bit 7 clear then float
+;if bit 7 of only the first byte is set then fn
+;if bit 7 of only the second byte is set then string
+;if bit 7 of both bytes is set then int
+;bit patterns: 00=float, 01=string, 10=fn, 11=int
+ sty VALTYP   ;set default type to float
+ lda ($fb),y  ;first byte
+ sta $45      ;save for later
+ asl          ;shift bit 7 into carry
+ rol VALTYP   ;then roll carry into VALTYPE
+ iny
+ lda ($fb),y  ;second byte of var name
+ sta $46      ;second char of var name (space if not needed)
+ asl          ;shift bit 7 into carry
+ rol VALTYP   ;then roll carry into VALTYPE
+;skip over 2 byte name
+ lda $fb
  clc
  adc #2
  sta $fb
  lda $fc
  adc #0
  sta $fc
+;
  lda VALTYP  ;type 0=float, 1=string, 2=fn, 3=int
  cmp #2      ;fn
- beq nxtvar+5 ;skip fn types
+ beq sft     ;skip fn types
  lda $45     ;get first char of name
  jsr prtchr  ;output first char of name
  lda $46     ;get second char of name
  jsr prtchr  ;output second char of name
- lda VALTYP  ;var type?
+ ldy VALTYP  ;var type?
  beq float   ;type 0 is float
- cmp #1      ;type 1 is string
+ dey         ;type 1 string
  beq string  ;otherwise int
  lda #"%"    ;display integer symbol
  jsr CHROUT
@@ -7042,7 +7047,7 @@ string lda #"$"
  jsr CHROUT
  jsr printeq
  jsr printqt
- ldy #0
+; ldy #0
  lda ($fb),y
  beq endquote
  sta $52
@@ -7062,9 +7067,11 @@ endquote
  jsr printqt
 nxtvar
  jsr printcr
+;if holding shift key then pause
 sft lda SHFLAG
  cmp #1
  beq sft
+;calc position for next variable
  lda $fb
  clc
  adc #5
