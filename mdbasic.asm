@@ -359,7 +359,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.03.23"
+.text "mdbasic 24.03.28"
 .byte 13
 .text "(c)1985-2014 mark bowren"
 .byte 13,0
@@ -1012,16 +1012,12 @@ pultxtptr
 ;Supports freezing the listing while holding down the shift key.
 ;This routine is called repeatedly until the entire list range is complete.
 ;******************************************
-list pha        ;save a reg from CHRGET
- tya            ;also
- pha            ;save current y reg
-shift lda #$01  ;check mem ctrl reg
- bit SHFLAG     ;0=none, 1=shift key, 2=logo key, 4=ctrl key
- bne shift      ;bit pattern 001=shift, 010=commodore, 100=ctrl (any combo)
- pla            ;restore y reg
- tay
- pla            ;restore a reg
+list
  bpl out        ;less than 128 is non token so just output char as-is
+ ldx #$01       ;only shift key flag
+lstpause
+ cpx SHFLAG     ;0=none, 1=shift key, 2=logo key, 4=ctrl key
+ beq lstpause   ;bit pattern 001=shift, 010=commodore, 100=ctrl (any combo)
  bit GARBFL     ;quote mode enabled?
  bmi out        ;bit7 set means yes so just output char as-is
  cmp #TOKEN_PI  ;pi token?
@@ -1033,7 +1029,7 @@ out jmp $a6f3   ;output byte as it is on cmd line
 newlst
  sbc #FIRST_CMD_TOK-1
  tax            ;index to x reg soon to subtract 1 so 0-based index
- sty $49        ;store y reg value from CHRGET
+ sty $49
  ldy #$ff
 nextt dex       ;next token index
  beq found      ;if we are on first token index then it must be a match
@@ -1679,20 +1675,23 @@ doauto
  lda $15
  adc autonum+1
  sta $62
- ldx #$90   ;FAC1 exponent
- sec
- jsr $bc49  ;convert FAC1 to float
- jsr FOUT+2 ;convert FAC1 to ASCII String at $0100
- ldy #1
-getnum lda BAD-1,y ;Work Area for Floating Point to String Conversions
- beq endnum
+;convert binary value of line number to string
+ ldx #$90       ;FAC1 exponent
+ sec            ;flag for unsigned int
+ jsr $bc49      ;convert 2-byte int in FAC1 to float
+ jsr FOUT       ;convert FAC1 to ASCII String at BAD ($0100)
+;put line number in keyboard buffer
+ ldy #1         ;start at 1 to skip sign char (space)
+bad2buf
+ lda BAD,y      ;get each digit in the
+ beq endnum     ;zero-byte terminated string
  sta KEYD-1,y   ;put char in keyboard buffer
- iny
- bne getnum
-endnum lda #32  ;space char
- sta KEYD-1,y
- sty NDX        ;num chars in keyboard buffer
-eauto jmp $a49f ;main loop for direct mode
+ iny            ;max number would be 5 digits
+ bne bad2buf    ;so this will always branch
+endnum lda #32  ;a space char
+ sta KEYD-1,y   ;is the last char
+ sty NDX        ;set num chars in keyboard buffer
+eauto jmp $a49f ;continue with main loop for direct mode
 ;
 ;*******************
 ; TRACE line#
@@ -2070,20 +2069,6 @@ relink
  jsr CLEAR-5  ;reset TXTPTR to beginning of prg then perform CLR
  jmp endprg
 ;
-;end of renum; list any go tokens with 65535 as line number (errors)
-erenum jsr old2
- lda #>BUF
- sta TXTPTR+1
- lda #<BUF
- sta TXTPTR
- ldy #$05
-ffff lda nolin,y
- sta BUF,y
- dey
- bpl ffff
- jsr find ;find all 65535
- jmp relink
-;
 ;*******************
 ; RENUM            :use defaults, start at 10 inc by 10
 ; RENUM start      :start line specified, default inc 10
@@ -2117,10 +2102,23 @@ gaiv jsr CHRGET
  jmp FCERR    ;increment of 0 not allowed
 okinc lda $15
 hiinc sta $34
+ JSR RUNC
  dec R6510
  jsr renumer
  inc R6510
- jmp erenum
+;end of renum; list any go tokens with 65535 as line number (errors)
+erenum jsr old2
+ lda #>BUF
+ sta TXTPTR+1
+ lda #<BUF
+ sta TXTPTR
+ ldy #$05
+ffff lda nolin,y
+ sta BUF,y
+ dey
+ bpl ffff
+ jsr find ;find all 65535
+ jmp relink
 ;
 evalnum
  inc R6510
@@ -2131,9 +2129,10 @@ evalnum
 ;
 fltstr
  inc R6510
- sec
- jsr $bc49    ;convert FAC1 to float
- jsr FOUT+2   ;convert FAC1 to string
+ ldx #$90
+ sec          ;flag for unsinged int
+ jsr $bc49    ;convert 2-byte int in FAC1 to float
+ jsr FOUT+2   ;convert FAC1 to string without leading space
  dec R6510
  rts
 ;
@@ -4455,7 +4454,7 @@ nobutt lda #0 ;hibyte 0 to indicate button not pressed
 ; V = INF(n) where n = 0 to 15 to select info
 inf
  jsr getfnparam
- cmp #52
+ cmp #67
  bcs illqty7
  dec R6510
  jsr inff
@@ -5462,6 +5461,57 @@ noquot inc $fc
 stoppr
  jsr printqt
 chrprs jmp printcr
+;
+;**************************
+;initialize BASIC vectors
+newvec
+;set colors customizable by POKEing the lda value
+ lda #14        ;light blue
+ sta COLOR      ;current text color
+ lda #0         ;black
+ sta BGCOL0     ;background color black
+ lda #0         ;black
+ sta EXTCOL     ;border color black
+ jsr initmdb    ;initialize MDBASIC
+ lda #$80       ;all keys to repeat
+ sta RPTFLAG
+ lda #<immed
+ sta IMAIN
+ lda #>immed
+ sta IMAIN+1
+ lda #<toknew
+ sta ICRNCH
+ lda #>toknew
+ sta ICRNCH+1
+ lda #<newfun
+ sta IEVAL
+ lda #>newfun
+ sta IEVAL+1
+ lda #<list
+ sta IQPLOP
+ lda #>list
+ sta IQPLOP+1
+ lda #<brkirq
+ sta CBINV
+ lda #>brkirq
+ sta CBINV+1
+ lda #<keychk
+ sta KEYLOG
+ lda #>keychk
+ sta KEYLOG+1
+ lda #<newload
+ sta ILOAD
+ lda #>newload
+ sta ILOAD+1
+ lda #<newsave
+ sta ISAVE
+ lda #>newsave
+ sta ISAVE+1
+ lda #$ff   ;MDBASIC takes 8k of the BASIC RAM area
+ sta $37    ;the highest address is now $7FFF (32767)
+ lda #$7f   ;$37-$38 holds value of highest address used by BASIC, originally $9FFF (40959)
+ sta $38
+ rts
 ;
 ;**************************
 linedraw
@@ -6986,15 +7036,16 @@ evar
 copy2d
  sta $fb
  sty $fc
- jsr STOP     ;was STOP key pressed
- beq evar     ;yes, abort processing
- ldy #0
+;check shift and stop keys
+ jsr chkpause
+ beq evar   ;stop key pressed
 ;get 2 byte variable name
 ;if both bytes have bit 7 clear then float
 ;if bit 7 of only the first byte is set then fn
 ;if bit 7 of only the second byte is set then string
 ;if bit 7 of both bytes is set then int
 ;bit patterns: 00=float, 01=string, 10=fn, 11=int
+ ldy #0
  sty VALTYP   ;set default type to float
  lda ($fb),y  ;first byte
  sta $45      ;save for later
@@ -7016,7 +7067,7 @@ copy2d
 ;
  lda VALTYP  ;type 0=float, 1=string, 2=fn, 3=int
  cmp #2      ;fn
- beq sft     ;skip fn types
+ beq nxtvar+3 ;skip fn types
  lda $45     ;get first char of name
  jsr prtchr  ;output first char of name
  lda $46     ;get second char of name
@@ -7067,10 +7118,6 @@ endquote
  jsr printqt
 nxtvar
  jsr printcr
-;if holding shift key then pause
-sft lda SHFLAG
- cmp #1
- beq sft
 ;calc position for next variable
  lda $fb
  clc
@@ -8542,56 +8589,6 @@ setclk
  stx CIACRA       ;apply to TOD #1
  rts
 ;
-;initialize BASIC vectors
-newvec
-;set colors customizable by POKEing the lda value
- lda #14        ;light blue
- sta COLOR      ;current text color
- lda #0         ;black
- sta BGCOL0     ;background color black
- lda #0         ;black
- sta EXTCOL     ;border color black
- jsr initmdb    ;initialize MDBASIC
- lda #$80       ;all keys to repeat
- sta RPTFLAG
- lda #<immed
- sta IMAIN
- lda #>immed
- sta IMAIN+1
- lda #<toknew
- sta ICRNCH
- lda #>toknew
- sta ICRNCH+1
- lda #<newfun
- sta IEVAL
- lda #>newfun
- sta IEVAL+1
- lda #<list
- sta IQPLOP
- lda #>list
- sta IQPLOP+1
- lda #<brkirq
- sta CBINV
- lda #>brkirq
- sta CBINV+1
- lda #<keychk
- sta KEYLOG
- lda #>keychk
- sta KEYLOG+1
- lda #<newload
- sta ILOAD
- lda #>newload
- sta ILOAD+1
- lda #<newsave
- sta ISAVE
- lda #>newsave
- sta ISAVE+1
- lda #$ff   ;MDBASIC takes 8k of the BASIC RAM area
- sta $37    ;the highest address is now $7FFF (32767)
- lda #$7f   ;$37-$38 holds value of highest address used by BASIC, originally $9FFF (40959)
- sta $38
- rts
-;
 ;begin processing input stream
 filess
  ldx #$fe       ;start file count at -2
@@ -8607,23 +8604,21 @@ filess
 blocks
  jsr prtlin
  bcs err7e
- beq chkshft
+ beq nxtfile
 chkeof
  and #%01000000 ;bit6=EOF/EOI, bit7=device not present, bits0-1 indicate device timeout
  bne filecnt    ;bit6=1? EOF, print file count
  lda #5         ;DEVICE NOT PRESENT
  sec
 err7e rts
-chkshft lda #$01
-shift2
- bit SHFLAG     ;shift key?
- bne shift2     ;wait till released
- inc $50        ;increment file count
- bne nxtfile
- inc $51
 nxtfile
- jsr STOP       ;stop key?
+ inc $50        ;increment file count
+ bne chkps
+ inc $51
+chkps
+ jsr chkpause
  bmi blocks     ;zero means stop, carry set
+;
  inc $50
  bne filecnt
  inc $51
@@ -8632,6 +8627,13 @@ filecnt
  lda $51
  clc
  rts
+;
+chkpause
+ lda #$01
+chkpauser
+ bit SHFLAG     ;shift key?
+ bne chkpauser  ;wait till released
+ jmp STOP       ;stop key?
 ;
 prtlin
  ldx #126
@@ -8738,7 +8740,7 @@ inff
  beq csraddr
  cmp #20
  beq getdot
- bcs membank
+ bcs fstart
  sec
  sbc #11        ;first infoword index
  asl            ;double byte ptr index
@@ -8778,15 +8780,8 @@ int4
  lda #$a0
  sta $61
  rts
-membank
- cmp #22
- bcs fstart
- lda CI2PRA
- and #%00000011
- eor #%00000011
- jmp goinf
 fstart
- cmp #23
+ cmp #22
  beq fend
  bcs infptrs
  ldx #19     ;$ae,$af holds load end address
@@ -8796,7 +8791,7 @@ fend ldx #0  ;$c1,$c2 holds load start address
  ldy $af,x
  jmp int4
 infptrs
- sbc #24
+ sbc #23
  cmp #13
  bcs infcolor
  asl
@@ -8805,10 +8800,30 @@ infptrs
  ldy TXTTAB+1,x
  jmp int4
 infcolor
+ sbc #13
+ cmp #15
+ bcs spritexy
  tax
- lda EXTCOL-13,x
+ lda EXTCOL,x
  and #%00001111  ;hi nybble is not used for all color registers
  jmp goinf
+spritexy
+ sbc #15
+ tax         ;register offset (0-15)
+ lsr         ;odd or even index check
+ bcc xcoord  ;even is x coordinate
+ lda SP0X,x  ;odd is y coordinate
+ bcs goinf   ;always branches
+xcoord
+ tay         ;sprite number (0-7)
+ lda bitweights,y
+ ldy #0      ;hibyte for result
+ and MSIGX   ;is bit y is set
+ beq nomsb   ;no, then x coord <= 255
+ iny         ;yes, x coord > 255
+nomsb
+ lda SP0X,x  ;lobyte for x coord
+ jmp int4
 ;
 clrflg lda TXTPTR
  sta $22
@@ -8824,8 +8839,7 @@ clrflg lda TXTPTR
 donenow rts
 ;
 renumer
- jsr runcc
-strt jsr chrget
+ jsr chrget
  jsr chrget
  bne serch
  jsr tofac
@@ -8847,12 +8861,12 @@ craper cmp #"""
  bne tokgo
 ;skip over expression in quotes
 crap jsr chrget
- beq strt    ;end of line
+ beq renumer  ;end of line
  cmp #"""
  bne crap
  beq nocrap
 tokgo tax
- beq strt
+ beq renumer
  bpl nocrap
 ;check if token is a statement that use line numbers
  ldx #10     ;there are 10 tokens that reference a line number
@@ -8874,6 +8888,7 @@ sav7a lda TXTPTR
  sta TXTPTR+1
  lda OLDLIN
  sta TXTPTR
+;apply new line number
  ldy #$00
  ldx #$00
 numchr lda BAD,x
@@ -8931,8 +8946,8 @@ isline jsr chrget
  jsr chrget
  cmp $15
  bne nexlin+3
-pnl ldx #$90
- jmp fltstr     ;convert FAC1 to float then to string
+pnl jmp fltstr
+;
 nexlin jsr chrget
  jsr addinc
  beq goagan
@@ -8944,6 +8959,10 @@ inc2d jsr clrflg
  inc VARTAB+1
 gbwyc rts
 ;
+pne2 lda $24
+ bne ne24
+ dec $25
+ne24 dec $24
 bufer ldy COUNT
  lda ($24),y
  ldy $97
@@ -8951,11 +8970,6 @@ bufer ldy COUNT
  jsr pntreq
  bne pne2
  rts
-pne2 lda $24
- bne ne24
- dec $25
-ne24 dec $24
- jmp bufer
 ;
 pntreq lda $22
  cmp $24
