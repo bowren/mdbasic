@@ -361,7 +361,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 mesge .byte 147
 .text "mdbasic 24.03.28"
 .byte 13
-.text "(c)1985-2014 mark bowren"
+.text "(c)1985-2024 mark bowren"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -4454,11 +4454,13 @@ nobutt lda #0 ;hibyte 0 to indicate button not pressed
 ; V = INF(n) where n = 0 to 15 to select info
 inf
  jsr getfnparam
- cmp #67
+ cmp #68
  bcs illqty7
  dec R6510
  jsr inff
  inc R6510
+ sta $65     ;lobyte
+ sty $64     ;hibyte
  jmp $b8d7   ;convert unsigned 4-byte int in FAC1 to a 5-byte float in FAC1
 ;
 ;*******************
@@ -8721,18 +8723,27 @@ getdot
  sei            ;disable IRQ since kernal HIROM is switching to HIRAM
  sta R6510
  lda ($c3),y
- and ptab2,x    ;only desired bits, multicolor uses 2
- beq rtndot     ;pixel not set
- lda #1         ;pixel set
-rtndot
  tay
  pla
  sta R6510
  cli
  tya
- jmp goinf
+ and ptab2,x    ;only desired bits, multicolor uses 2
+ beq rtndot     ;pixel not set
+ lda #1         ;pixel set
+rtndot
+ ldy #0
+ rts
 ;
 inff
+;prepare FAC1 for 4-byte int return value
+ ldx #0
+ stx $70
+ stx $63
+ stx $62
+ ldx #$a0
+ stx $61
+;process INF parameter in accumulator
  tax
  beq phycol
  cmp #10
@@ -8740,19 +8751,18 @@ inff
  beq csraddr
  cmp #20
  beq getdot
- bcs fstart
+ bcs membank
  sec
  sbc #11        ;first infoword index
  asl            ;double byte ptr index
  tax
- lda infwords+1,x
- tay
+ ldy infwords+1,x
  lda infwords,x
  jmp goodinf1
 csraddr         ;get text address of current line
  ldy $d2        ;hibyte
  lda $d1        ;lobyte
- jmp int4
+ rts
 phycol
 ;physical line = (logicalCol > maxCols) ? logicalCol-maxCols : logicalCol
  lda PNTR       ;logical column
@@ -8768,37 +8778,35 @@ goodinf1 sta $14
  sty $15
  ldy #0
  lda ($14),y
-goinf
+ rts
+membank
+ cmp #22
+ bcs fstart
+ lda CI2PRA
+ and #%00000011
+ eor #%00000011
  ldy #0
-int4
- sta $65   ;lobyte
- sty $64   ;hibyte
- lda #0
- sta $70
- sta $63
- sta $62
- lda #$a0
- sta $61
  rts
 fstart
- cmp #22
+ cmp #23
  beq fend
  bcs infptrs
- ldx #19     ;$ae,$af holds load end address
-.byte $2c
-fend ldx #0  ;$c1,$c2 holds load start address
- lda $ae,x
- ldy $af,x
- jmp int4
+ lda $c1     ;last load start address
+ ldy $c2
+ rts
+fend
+ lda $ae     ;last load end address
+ ldy $af
+ rts
 infptrs
- sbc #23
+ sbc #24
  cmp #13
  bcs infcolor
  asl
  tax
  lda TXTTAB,x
  ldy TXTTAB+1,x
- jmp int4
+ rts
 infcolor
  sbc #13
  cmp #15
@@ -8806,7 +8814,9 @@ infcolor
  tax
  lda EXTCOL,x
  and #%00001111  ;hi nybble is not used for all color registers
- jmp goinf
+goinf
+ ldy #0
+ rts
 spritexy
  sbc #15
  tax         ;register offset (0-15)
@@ -8823,7 +8833,7 @@ xcoord
  iny         ;yes, x coord > 255
 nomsb
  lda SP0X,x  ;lobyte for x coord
- jmp int4
+ rts
 ;
 clrflg lda TXTPTR
  sta $22
