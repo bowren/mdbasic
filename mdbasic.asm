@@ -316,7 +316,6 @@ TOKEN_RUN     = $8a
 TOKEN_RESTORE = $8c
 TOKEN_GOSUB   = $8d
 TOKEN_RETURN  = $8e
-TOKEN_STOP    = $90
 TOKEN_ON      = $91
 TOKEN_WAIT    = $92
 TOKEN_OPEN    = $9f
@@ -4044,12 +4043,12 @@ settype
 ;
 ;*******************
 ; PLAY S$
-; PLAY STOP
+; PLAY OFF
 ; PLAY SPRITE sprite#, startPtr, endPtr, speed
 ; PLAY SPRITE [sprite#] OFF
 play
  beq mop2
- cmp #TOKEN_STOP
+ cmp #TOKEN_OFF
  bne playy
  jsr endplay
  jmp CHRGET
