@@ -1,6 +1,6 @@
 # MDBASIC
 MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
-MDBASIC version 24.03.28<br>
+MDBASIC version 24.04.22<br>
 <br>
 Download the documentation file <b>mdbasic.pdf</b> for details.<br>
 <br>
@@ -124,8 +124,8 @@ TRACE                     :' RUN PROGRAM WITH TRACE ENABLED
 <i>Other Features:</i><br>
 MDBASIC supports numeric constants of base 2 (binary %), 8 (octal @) or 16 (hexadecimal $).<br>
 The functions VALB, VALO and VALH (respectively) convert strings of these number bases.
-The NOT expression short-hand is the exclamation point. REM (remark) short-hand<br>
-is the apostrophe. See examples below:<br>
+The NOT expression short-hand is the exclamation point. REM (remark) short-hand is the 
+apostrophe. See examples below:<br>
 <pre style="font-family:'Courier New'">
 B1 = %00001111     :'DECIMAL VALUE OF 15 FROM BINARY CONSTANT %00001111
 B2 = VALB("1111")  :'DECIMAL VALUE OF 15 FROM BINARY STRING "1111"
@@ -134,6 +134,23 @@ H = VALH("C000")   :'DECIMAL VALUE OF 49152 FROM HEX STRING "C000"
 O = @20            :'DECIMAL VALUE 16 FROM OCTAL CONSTANT @20
 O = VALO("10")     :'DECIMAL VALUE 8 FROM OCTAL STRING "10"
 X = !X             :'SAME AS X = NOT X
+</pre>
+<br>
+<i>LOAD/SAVE Text Screen, Charset or Bitmap</i><br>
+MDBASIC has a predefined binary format for storing the text screen, redefined character set 
+and bitmap graphics. For text and bitmap screens all color settings are included in the 
+saved file. On load of a text or bitmap screen the change will automatically be displayed. 
+After loading a character set the new font is shown by using the DESIGN ON command which then 
+should be followed by SCREEN CLR since it is a different page that may not have been initialized. 
+See examples below:<br>
+<pre style="font-family:'Courier New'">
+SAVE"SCREEN",8,16   :'SAVES ALL TEXT WITH COLOR FROM CURRENT TEXT SCREEN
+SAVE"CHRSET",8,17   :'SAVES THE CURRENT DESIGN OF CHARACTERS ASSUMING DESIGN IS APPLIED
+SAVE"BITMAP",8,18   :'SAVES CURRENT BITMAP IMAGE WITH COLOR MODE
+<br>
+LOAD"SCREEN",8,16   :'LOADS SAVED SCREEN TEXT AND COLOR INTO CURRENT SCREEN
+LOAD"CHRSET",8,17   :'LOADS CUSTOM DEFINED CHARSET, NEEDS DESIGN ON TO SEE
+LOAD"BITMAP",8,18   :'LOADS BITMAP IMAGE AND DISPLAYS IT
 </pre>
 <br>
 <br>
