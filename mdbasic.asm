@@ -317,6 +317,7 @@ TOKEN_DIM     = $86
 TOKEN_READ    = $87
 TOKEN_GOTO    = $89
 TOKEN_RUN     = $8a
+TOKEN_IF      = $8b
 TOKEN_RESTORE = $8c
 TOKEN_GOSUB   = $8d
 TOKEN_RETURN  = $8e
@@ -362,7 +363,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.04.22"
+.text "mdbasic 24.04.28"
 .byte 13
 .text "(c)1985-2024 mark bowren"
 .byte 13,0
@@ -1060,27 +1061,36 @@ if
  jsr CHKCOM+2    ;check for and skip over THEN, error if not there
 condit
  lda $61         ;expression result 0=false, otherwise true
- bne istrue      ;non-zero means expression is true
+ beq isfalse     ;non-zero means expression is true
+ jsr CHRGOT      ;check current char is numeric digit
+ bcs endlin      ;clear carry means ASCII numerials
+dogoto
+ jmp GOTO        ;preform goto
+isfalse
  ldx #TOKEN_ELSE
  jsr DATAN+5     ;scan for end of line terminator (byte 0) or ELSE token
  tax             ;a reg holds byte found, either 0 or ELSE token
- beq nxtline     ;end of line so go to next line
- tya             ;y holds num bytes to advance TXTPTR forward
- clc             ;add offset to TXTPTR
- adc TXTPTR
- sta TXTPTR
- lda TXTPTR+1
- adc #0
- sta TXTPTR+1
+ beq nxtline     ;end of line so go IF statement finished, go to next line
+ sty XSAV        ;save current offset for ELSE token
+ ldx #TOKEN_IF
+ jsr DATAN+5     ;scan for end of line terminator (byte 0) or IF token
+ tax
+ beq doelse      ;nested IF not found, use ELSE
+ cpy XSAV        ;ELSE before IF?
+ bcs doelse      ;yes, found nearest ELSE for IF
+ ldy XSAV        ;no, scan for next ELSE
+ iny             ;skip over ELSE token
+ jsr DATA+3      ;add y reg num bytes to advance TXTPTR
+ jmp isfalse     ;scan for ELSE again
+doelse
+ ldy XSAV        ;get offset for ELSE token
+ jsr DATA+3      ;add y reg num bytes to advance TXTPTR
  jsr CHRGET      ;skip over ELSE token to next char or token
- bcc goto        ;ascii numerials indicate line number for GOTO
+ bcc dogoto      ;ascii numerials indicate line number for GOTO
 endlin
  jmp tstcmd      ;process statements on the rest of current line
-istrue
- jsr CHRGOT      ;check current char is numeric digit
- bcs endlin
-goto jmp GOTO    ;preform goto
-nxtline jmp REM  ;perform REM to advance TXTPTR to next line
+nxtline
+ jmp REM         ;perform REM to advance TXTPTR to next line
 ;
 vars dec R6510
  jmp varss
@@ -2467,14 +2477,9 @@ okresu
  sta TXTPTR+1
  ldy #0       ;the first stmt on line will begin
  lda (TXTPTR),y  ;at the end marker of previous line.
- bne skpstmt  ;zero here indicates previous line
- lda TXTPTR   ;preceded by the 4-byte line header
- clc          ;which will be skipped over so that
- adc #4       ;TXTPTR is on the byte that began
- sta TXTPTR   ;the stmt that caused the error.
- lda TXTPTR+1
- adc #0
- sta TXTPTR+1
+ bne skpstmt  ;zero here indicates previous line is preceded by the 4-byte
+ lda #4       ;line header which will be skipped over so that TXTPTR is on
+ jsr DATA+4   ;the byte that began the stmt that caused the error
 skpstmt
  jsr CHRGET   ;get current char at TXTPTR
  jsr DATA     ;scan for start of next BASIC stmt
@@ -2496,21 +2501,15 @@ nxtstmt       ;prepare next stmt for execution
  bne _a807
  ldy #2
  lda (TXTPTR),y
- clc
- bne _a7ce
+ bne setlin
  jmp endprg    ;return control to main BASIC loop
-_a7ce iny
+setlin iny
  lda (TXTPTR),y
  sta CURLIN
  iny
  lda (TXTPTR),y
  sta CURLIN+1
- tya
- adc TXTPTR
- sta TXTPTR
- bcc _a7e1
- inc TXTPTR+1
-_a7e1
+ jsr DATA+3   ;advance TXTPTR using offset in y reg
 ;empty stack to where the base call was made
 pullit
  pla
@@ -2530,7 +2529,7 @@ stoppull
  sta $10      ;SUBFLG Subscript Reference to an Array or User-Defined Function Call (FN)
  jmp (IGONE)  ;read and execute the next statement
 _a807 cmp #$3a
- beq _a7e1
+ beq pullit
  jmp REM
 ;
 ;perform RESUME - with statement that caused the error
@@ -2954,7 +2953,6 @@ noback jsr chkcomm
 ;*****************
 designon
  jsr CHRGET
-dsignon
  lda CI2PRA     ;bits 0-1 mem bank, 00=bank3, 01=bank2, 10=bank1, 11=bank0
  and #%11111100 ;select VIC-II 16K mem bank 3 ($C000-$FFFF)
  sta CI2PRA     ;base address is now $C000
@@ -2969,9 +2967,7 @@ dsignon
  and #%11011111 ;turn off bitmap mode
  sta SCROLY
  rts
-;*****************
-designoff jsr norm
- jmp CHRGET
+
 ;*****************
 ; DESIGN ON
 ; DESIGN OFF
@@ -3028,7 +3024,10 @@ gtdata
  cpy #8
  bne gtdata
  rts
-;
+
+designoff jsr norm
+ jmp CHRGET
+
 ;*******************
 ;
 bitmapclr
@@ -3079,7 +3078,7 @@ bitmap
  cmp #TOKEN_CLR
  beq bmclr
  cmp #TOKEN_OFF
- beq bmoff
+ beq designoff
  cmp #TOKEN_ON
  beq bmon
  cmp #TOKEN_FILL
@@ -3092,14 +3091,12 @@ bitmap
  dec R6510
  jmp bitfil         ;perform FILL on rect; put code under ROM
 ;
-mop7 jmp missop
-;
 bmon jsr bitmapon
- bne bmclr+3        ;always branches
-bmoff jsr norm
- bne bmclr+3        ;always branches
+ jmp CHRGET
 bmclr jsr bitmapclr
  jmp CHRGET
+;
+mop7 jmp missop
 ;
 ;BITMAP [colorMode], [bkgndColor], [clear]
 bitscr
@@ -4537,9 +4534,7 @@ nobutt2          ;reg y holds the lobyte
 ;*******************
 ;H$ = HEX$(n) where n is a signed 32-bit signed integer
 hex
- jsr CHRGET   ;process next cmd text
- jsr PARCHK   ;get term inside parentheses
- jsr TESTNUM  ;ensure expression was numeric, error if not
+ jsr fix      ;get fn param as 5-byte float truncated
  jsr QINT     ;convert FAC1 into a signed 32-bit int in FAC1
  dec R6510
  jsr hexx
@@ -4614,7 +4609,8 @@ nothin jmp $fe72 ;NMI RS-232 Handler
 ;* MDBASIC ERROR HANDLER
 ;* BASIC Error Handler Routine via vector IERROR ($0300)
 ;*******************************************************
-errors txa
+errors
+ txa
  bpl doerr    ;bit 7 off means error condition
 redy
  jmp READY    ;print READY. then continue with BASIC main loop
@@ -5004,9 +5000,7 @@ fac2int jsr GETADR ;convert FAC1 to unsigned 2 byte int in $14,$15
 ;*******************
 ;get a single-byte numeric parameter (0-255) inside parentheses
 getfnparam
- jsr CHRGET        ;process next cmd text
- jsr PARCHK        ;get term inside parentheses
- jsr TESTNUM       ;ensure expression was numeric, error if not
+ jsr fix
  jmp fac2int
 ;*******************
 ;get a 2-byte int parameter (0-65535)
