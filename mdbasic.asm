@@ -19,10 +19,13 @@ OLDLIN = $3b ;Previous BASIC Line Number (lobyte)
 OLDTXT = $3d ;Pointer to the Address of the Current BASIC Statement
 DATPTR = $41 ;Pointer to the Address of the Current DATA Item
 TXTPTR = $7a ;Pointer to the Address of the Current BASIC text char currently being scanned
+STATUS = $90 ;Kernal I/O Status Word (ST)
 XSAV   = $97 ;Temporary .X Register Save Area
 LDTND  = $98 ;Number of Open I/O Files/Index to the End of File Tables
+FNLEN  = $b7 ;Length of Current Filename
 LA     = $b8 ;Current Logical File Number
 SA     = $b9 ;Current Secondary Address
+FA     = $ba ;Current Device Number: 0=keybrd,1=tape,2=rs232,3=screen,4-5=printer,8=11=disk
 LSTX   = $c5 ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
 NDX    = $c6 ;number of keys in keyboard buffer
 RVS    = $c7 ;Flag: Print Reverse Characters? 0=No
@@ -186,8 +189,11 @@ CBINV  = $0316 ;BRK Instruction Interrupt
 ILOAD  = $0330 ;Kernal LOAD Routine
 ISAVE  = $0332 ;Kernal SAVE Routine
 
-;MDBASIC IRQ Control Flags
+;MDBASIC IRQ management
 MDBIRQ = $0313 ;MDBASIC IRQ Control Register bit0=play,bit1=playsprite,bit2=key,bit3=spritecol16
+TMPIRQ = $0334 ;temp storage for original IRQ vector
+
+TMPERR = $0336 ;temp storage for original error handling vector
 
 ;CBM BASIC subroutines
 GETSTK = $a3fb ;check for space on stack
@@ -225,7 +231,7 @@ INPUT  = $abbf ;perform INPUT
 READ   = $ac06 ;perform READ
 NEXT   = $ad1e ;perform NEXT
 FRMNUM = $ad8a ;evaluate a numeric expression and/or check for data type mismatch, store result in FAC1
-TESTNUM= $ad8d ;test if last expression was numeric, error if not
+TESTNUM= $ad8d ;test if last expression was numeric, if not, type mismatch error
 FRMEVL = $ad9e ;evaluate expression
 PARCHK = $aef1 ;eval expr inside parentheses
 CHKCLS = $aef7 ;check for and skip closing parentheses
@@ -363,7 +369,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.04.28"
+.text "mdbasic 24.05.31"
 .byte 13
 .text "(c)1985-2024 mark bowren"
 .byte 13,0
@@ -1070,7 +1076,7 @@ isfalse
  ldx #TOKEN_ELSE
  jsr DATAN+5     ;scan for end of line terminator (byte 0) or ELSE token
  tax             ;a reg holds byte found, either 0 or ELSE token
- beq nxtline     ;end of line so go IF statement finished, go to next line
+ beq nxtline     ;end of line, IF statement finished, go to next line
  sty XSAV        ;save current offset for ELSE token
  ldx #TOKEN_IF
  jsr DATAN+5     ;scan for end of line terminator (byte 0) or IF token
@@ -1095,6 +1101,18 @@ nxtline
 vars dec R6510
  jmp varss
 ;
+buf2str
+ ldy $fd
+ dec R6510
+;copy input buffer to string variable
+copyer
+ lda paintbuf1-1,y
+ dey
+ sta ($35),y
+ bne copyer
+ inc R6510
+ rts
+;
 ;*******************
 ;DISK dos$ [,device] [,out$]]
 ;"S0:myfile.bas"                 - delete a file
@@ -1108,20 +1126,21 @@ disk
  jsr getstr0    ;get DOS string
  jsr SETNAM
  jsr getdskdev  ;get disk device num in x reg
- lda #$7e       ;file handle 126
+ jsr getfilnum  ;get file num
+ sta mdbin
  ldy #$0f       ;secondary channel 15 = DOS channel
  jsr SETLFS
- jsr OPEN       ;performs OPEN 126,8,15, "string"
- bcs err126
+ jsr OPEN       ;perform OPEN
+ bcs errmdb
 ;read line from current channel and device
- ldx #126
+ ldx mdbin
 inpstr
  dec R6510
  lda $9d        ;display message if not in prg mode
  jsr bufio      ;read response and print if needed
  inc R6510
- bcs err126     ;carry indicates i/o error
- jsr clse7e
+ bcs errmdb     ;carry indicates i/o error
+ jsr clsmdb
  jsr CHRGOT     ;check another param exists
  beq donehere   ;if not stop now, otherwise
 ;copy output to specified string var
@@ -1149,24 +1168,14 @@ setstrptr
  sta ($49),y    ;save it to variable's str ptr info
 donehere rts
 ;
-err126
+filemax
+ lda #1         ;TOO MANY FILES error
+errmdb
  pha
- jsr clse7e
+ jsr clsmdb
  pla
  tax
  jmp (IERROR)
-;
-buf2str
- ldy $fd
- dec R6510
-;copy input buffer to string variable
-copyer
- lda paintbuf1-1,y
- dey
- sta ($35),y
- bne copyer
- inc R6510
- rts
 ;
 ;*******************
 ;FILES [volume$], [device]
@@ -1185,7 +1194,7 @@ files
 .byte $2c       ;ignore next lda
 onechar lda #1
 prepstr
- sta $63        ;actual length allocated
+ sta $63        ;save length of string
  lda #"$"
  ldy #$ff
 copystr
@@ -1200,20 +1209,42 @@ copystr
  ldy #>BAD
  jsr SETNAM
  jsr getdskdev  ;get disk device num in x reg
- lda #$7e       ;file handle 126
- ldy #$00       ;secondary 0
+ jsr getfilnum  ;get file num in accumulator
+ sta mdbin      ;current mdbasic input channel
+ ldy #$00       ;secondary 0 in y reg
  jsr SETLFS
- jsr OPEN       ;perform OPEN 126,8,0,S$
- bcs err126     ;handle error
+ jsr OPEN       ;perform OPEN
+ bcs errmdb     ;handle error
  dec R6510
  jsr filess
  inc R6510
- bcs err126
+ bcs errmdb
  jsr LINPRT     ;print 2-byte binary number in x and y regs
  lda #$a6       ;$a1a6 ROM value for string " FILES"
  ldy #$a1
  jsr printstr   ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
- jmp clse7e
+ jmp clsmdb
+;
+;get an unused (not open) file number, start with 127 down to 0
+;file number is returned in accumulator, preserves x and y regs
+getfilnum
+;enforce max open file handles
+ lda LDTND      ;number of open i/o files/index to the end of file tables
+ cmp #10        ;limit 10
+ bcs filemax
+;determine available file number
+ stx $14
+ sty $15
+ ldy #128
+nextf
+ dey
+ tya
+ jsr $f314      ;check if file num is in use
+ beq nextf      ;file is in use, try next
+ ldx $14
+ ldy $15
+ rts
+;
 ;get and validate the disk device number 8-11, default 8
 getdskdev
  ldx #8         ;default device 8
@@ -1235,23 +1266,20 @@ illdev
 opnprt0
  ldy #$00       ;secondary parameter $FF=not used, 5=binary graphic
 opnprt          ;7=upper/lower case chars, 0=Upper case and symbol chars
- lda #$7f       ;file handle 127
+ jsr getfilnum  ;get file num in accumulator
+ sta mdbout     ;current mdbasic input channel
  ldx #$04       ;device 4
- jsr SETLFS     ;set logical file parameters BASIC eq open 127,4,0
+ jsr SETLFS     ;set current logical file
  lda #$00       ;zero byte file name length (no name)
  jsr SETNAM     ;set file name
  jsr OPEN       ;perform OPEN 127,4,0,""
  bcc prtopen    ;clear carry flag means success
-err127
- pha
- jsr clse7f
- pla
- tax
- jmp (IERROR)
+errout
+ jmp errmdb
 prtopen
- ldx #$7f     ;pass file handle param into CHKOUT via x reg
- jsr CHKOUT   ;make 127 the current I/O file number
- bcs err127
+ ldx mdbout     ;current MDBASIC output channel
+ jsr CHKOUT     ;set as the current I/O file number
+ bcs errout
  rts
 ;
 ;*******************
@@ -1273,42 +1301,53 @@ dump
  beq dumpvars
  cmp #TOKEN_FILES
  beq dumpfiles
-dumpexpr jsr opnprt0
+dumpexpr
+ jsr opnprt0
  jsr $aa9d   ;perform print of expression
- jmp clse7f
-dumpvars jsr opnprt0
+ jmp clsmdb
+dumpvars
+ jsr opnprt0
  jsr vars
  jmp closer+2
-dumplist jsr opnprt0
+dumplist
+ jsr opnprt0
  jsr lstrap
  jsr opget   ;get LIST parameters
  jsr $a6c9   ;perform list
  jsr printcr ;print carriage return
- jmp clse7f
-dumpscreen dec R6510 ;switch to LORAM ($a000-$bfff)
+ jmp clsmdb
+dumpscreen
+ dec R6510
  jsr dumpscreen2
-closer inc R6510     ;switch to LOROM ($a000-$bfff)
- jsr clse7f
+closer
+ inc R6510
+ jsr clsmdb
  jmp CHRGET
-dumpbitmap dec R6510 ;switch LOROM to LORAM
+dumpbitmap
+ dec R6510
  jsr dumpbitmap2
  jmp closer
-dumpfiles jsr opnprt0
- ldx #$7f
- stx CHANNL ;redirect std output to device on file 127
- jsr CHRGET ;skip over FILES token
+dumpfiles
+ jsr opnprt0
+ lda mdbout  ;current mdbasic output channel
+ sta CHANNL  ;redirect stdout
+ jsr CHRGET  ;skip over FILES token
  jsr files
-;close MDBASIC file handles and restore std io channels
+;ensure MDBASIC file handles are closed and restore std io channels
 clsmdb
+ lda mdbin
+ beq zzz
+ jsr CLOSE
+zzz
+ lda mdbout
+ beq clsclr
+ jsr CLOSE
  lda #0
  sta CHANNL
-clse7e
- lda #$7e
- jsr CLOSE
-clse7f
- lda #$7f
- jsr CLOSE
- jmp CLRCHN     ;restore default devices as current I/O channels
+ sta mdbout
+clsclr
+ sta mdbin
+ jmp CLRCHN  ;restore default devices as current I/O channels
 ;
 ;*******************
 ; FILL x1,y1 TO x2,y2, [scanCode], [color]
@@ -1343,27 +1382,29 @@ done4 rts
 ;
 tokopn
  dec R6510
+ jsr getfilnum ;get available file number
  jsr openrs232
  inc R6510
- bcc done4    ;clear carry indicates success
- jmp (IERROR) ;otherwise x reg has error number
+ bcc done4     ;clear carry indicates success
+ jmp (IERROR)  ;otherwise x reg has error number
 ;
 tokclse
- lda #126     ;logical file number
+ lda mdbio    ;logical file number
  jsr $f314    ;find the index of an opened logical file number to X reg
  bne clsd232  ;zero flag indicates not found
  jsr $f31f    ;set current logical file, current device, and current seconday address
  txa
  jsr $f2f2    ;remove from table of open files
  jsr $f483    ;Initialize IRQ Timers and data direction registers
+clsd232
  lda #0       ;clear hibytes of I/O buffers for RS-232 to indicate not used
  sta $f8      ;hibyte ptr to RS-232 input buffer
  sta $fa      ;hibyte ptr to RS-232 output buffer
-clsd232
+ sta mdbio    ;clear filenum used by RS-232
  jmp CHRGET   ;finally, skip over token
 ;
 tokprt
- ldx #126
+ ldx mdbio
  stx CHANNL   ;set current I/O channel (logical file) number
  jsr $e118    ;BASIC wrapper for CHKOUT with error handling
  jsr CHRGET   ;position TXTPTR on first char of expression
@@ -1375,11 +1416,7 @@ waitout
  and #1
  bne waitout
 end232
- lda CHANNL   ;current I/O channel (logical file) number for UNLSN and UNTALK
- jsr CLRCHN   ;restore default i/o devices and send UNLSN and UNTALK to serial device
- ldx #$00     ;logical file number 0=none
- stx CHANNL   ;set current I/O channel (logical file) number
- rts
+ jmp $abb5    ;send UNLSN and UNTALK to serial device and restore default devices
 ;
 ;*******************
 ;SERIAL OPEN [baud],[databits],[stopbits],[duplex],[parity],[handshake]
@@ -1417,7 +1454,7 @@ serial
 tokread
  lda #TOKEN_READ
  jsr CHKCOM+2  ;skip over READ token otherwise SYNTAX ERROR
- ldx #126      ;file number 126
+ ldx mdbio     ;file number
  stx CHANNL    ;current I/O channel (cmd logical file) number
  jsr $e11e     ;BASIC wrapper for CHKIN with error error handling
 ;get or create pointer to string pointer provided as param
@@ -1653,11 +1690,13 @@ badauto
 ;******************
 immed
  jsr detrap     ;ensure error trapping is off
+;if screen is off or in bitmap mode then switch to normal text
  lda SCROLY
  eor #%00010000
  and #%00110000 ;is screen off or bitmap mode on?
  beq aline
  jsr norm       ;restore normal display
+;input a BASIC line of text
 aline
  jsr INLIN      ;input a BASIC line into buffer
  stx TXTPTR
@@ -1774,7 +1813,7 @@ initmdb
  lda #0         ;clear all MDBASIC IRQ flags
  sta MDBIRQ     ;if MDBASIC IRQ is active it will restore original irq
  sta SPENA      ;turn off all sprites
- jsr troff
+ jsr troff      ;turn off tracing
  jsr detrap     ;turn off error trapping in case it was enabled in previous run
  jsr clearerr   ;clear last error info
  jsr keyoff     ;ensure key trapping is off
@@ -1838,12 +1877,10 @@ newlod
  dec R6510      ;switch out BASIC ROM for RAM ($a000-$bfff)
  jmp loadd      ;continue under rom with the rest of the new load routine
 romin
- lda R6510
- ora #%00000111 ;ensure BASIC, KERNAL and I/O available
- sta R6510
- jsr CLRCHN     ;restore default I/O devices
+ jsr norm2
  lda LA         ;close current open file
- jmp CLOSE
+ jsr CLOSE
+ jmp CLRCHN     ;restore default I/O devices
 ;
 ; Vector to Kernal LOAD Routine ILOAD ($0330)
 newload
@@ -1855,34 +1892,40 @@ newload
 oldload
 ;CBM code from original vector location $f4a5 to perform load
  lda #0
- sta $90    ;kernal I/O status
- lda $ba    ;get current device number
+ sta STATUS ;kernal I/O status
+ lda FA     ;get current device number
  bne xf4b2  ;0=keyboard
-xf4af jmp $f713 ;load from keyboard or screen
-xf4b2 cmp #3
+xf4af
+ jmp $f713  ;load from keyboard or screen
+xf4b2
+ cmp #3
  beq xf4af  ;3=screen
  bcs xf4b8  ;4=printer,8-9=disk
- jmp $f533  ;1=dataset, 2=rs-232
-xf4b8 ldy $b7 ;length of current filename
+ jsr $f533  ;1=dataset or 2=User Port RS-232 (illegal device)
+ bcs lodfin ;error
+ bcc oklod2 ;success
+xf4b8
+ ldy FNLEN  ;length of current filename
  bne xf4bf
  jmp $f710  ;handle error #8 - MISSING FILE NAME ERROR
-xf4bf ldx SA ;current secondary address
- jsr $f5af  ;print SEARCHING
- lda #$60
+xf4bf
+ ldx SA     ;current secondary address
+ jsr $f5af  ;print SEARCHING FOR filename
+ lda #$60   ;DOS secondary device NCTE: SA = $60 + N
  sta SA     ;current secondary address
- jsr $f3d5  ;open file
- lda $ba    ;current device number
+ jsr $f3d5  ;send filename to device using kernal LISTEN, CIOUT and UNLSN
+ lda FA     ;current device number
  jsr TALK   ;send talk to a device on the serial bus
  lda SA     ;current secondary address
  jsr TKSA   ;send a secondary address to a device on the serial bus after talk
  jsr ACPTR  ;receive a byte of data from a device on the serial bus
  sta $ae    ;low byte of address for load which will increment to the end address
  sta $c1    ;remember start address
- lda $90    ;kernal I/O status
- lsr        ;bit 1 = serial read timeout
- lsr        ;shift right into carry to detect timeout
- bcc oklod
- jmp $f704  ;handle error #4 - FILE NOT FOUND
+ lda STATUS ;kernal I/O status
+ lsr        ;shift bit 1 (serial read timeout)
+ lsr        ;right into carry
+ bcc oklod  ;timeout? no, read byte
+ jmp $f704  ;yes, handle error #4 - FILE NOT FOUND
 oklod
  jsr ACPTR  ;receive a byte of data from a device on the serial bus
  sta $c2    ;remember start address
@@ -1890,11 +1933,7 @@ oklod
  bcc oklod2 ;carry set indicates error
  jmp $e0f9  ;handle i/o error
 oklod2
- jsr READST ;read the I/O status
- and #%10111111 ;did an error occur other than EOF/EOI (bit6)?
- beq oklod3 ;no error
- jmp LODERR ;raise LOAD ERROR
-oklod3
+ jsr chkio  ;check the I/O status
  lda $9d    ;display message if not in prg mode, #$C0=kernal & ctrl, #$80=ctrl only
  bpl lodone ;don't display load addresses
  jsr $ab3f  ;print space
@@ -1915,11 +1954,12 @@ lodone
  lda VERCK  ;load=0 or 1=verify
  bne lodbas
  lda $fe    ;secondary address
- bne lodbin
+ bne lodbin ;binary load does not need to adjust BASIC mem ptrs
 lodbas
  ldx $ae    ;restore x,y ptr to end of prg from load subroutine
  ldy $af
  clc        ;no error
+lodfin
  rts
 lodbin
  lda TXTTAB+1 ;check if binary load was actually a BASIC prg
@@ -1933,6 +1973,13 @@ isbin         ;otherwise do not return to calling subroutine
  pla          ;this way no corruption of BASIC mem will occur
  rts          ;and the running BASIC program can continue
 ;
+chkio
+ jsr READST     ;read the I/O status
+ and #%10111111 ;did an error occur other than EOF/EOI (bit6)?
+ beq lodfin     ;no error
+ jsr romin      ;ensure BASIC ROM is available
+ jmp LODERR     ;raise LOAD ERROR
+
 ;*******************
 ; Vector to Kernal SAVE Routine ISAVE ($0332)
 ;secondary address 16=SCREEN, 17=CHAREN, 18=BITMAP
@@ -2116,7 +2163,7 @@ newpoke
  sta $fd         ;set default poke type 0=SET,1=AND,2=OR,3=EOR
  jsr comchk      ;poke type param?
  bne gopoke
- jsr GETBYTC
+ jsr GETBYTC     ;get poke operation
  stx $fd
  cpx #4
  bcs baderr2
@@ -2189,15 +2236,6 @@ hiinc sta $34
  inc R6510
 ;end of renum; list any go tokens with 65535 as line number (errors)
  jsr old2
- lda #>BUF
- sta TXTPTR+1
- lda #<BUF
- sta TXTPTR
- ldy #$05
-ffff lda nolin,y
- sta BUF,y
- dey
- bpl ffff
  jsr find ;find all 65535
  jmp relink
 ;
@@ -2361,14 +2399,14 @@ entrap         ;enable error trapping
 lstrap
  ldx IERROR
  ldy IERROR+1
- stx oldtrap
- sty oldtrap+1
+ stx TMPERR
+ sty TMPERR+1
  ldx #<retrap
  ldy #>retrap
  bne seterrvec ;hibyte of vector will always be non-zero
 retrap
- ldx oldtrap
- ldy oldtrap+1
+ ldx TMPERR
+ ldy TMPERR+1
  bne seterrvec
 detrap         ;disable error trapping
  ldx #<errors
@@ -2620,25 +2658,17 @@ gety
  rts
 badxy jmp hellno
 moveto
-;save last plot used by graphics commands
- ldx #2
-backuppoint
- lda lastplotx,x
- sta $50,x
- dex
- bpl backuppoint
-;
  lda $bf       ;temp var holding 2^sprite# value
  sta $07       ;temp var for moving sprite on a line
  jsr getvalueg ;get x2 coordinate
  cpy #2        ;must be between 0 and 511
  bcs badxy     ;illegal coordinate error
- stx lastplotx
- sty lastplotx+1
+ stx $50       ;point2 x coordinate lobyte
+ sty $51       ;point2 x coordinate hibyte
  jsr ckcom2    ;check for and skip over comma, misop err if missing
  jsr getvalue  ;get y2 coordinate
  bne badxy     ;hibyte must be 0
- stx lastploty
+ stx $52       ;point2 y coordinate
 ;getspeed
  lda #20
  sta $fe       ;default speed is 20
@@ -2646,18 +2676,8 @@ backuppoint
  bne nosped    ;no move speed specified?
  jsr getvalg   ;get the speed param 0-255
  sta $fe       ;temp storage for move speed
-nosped lda #$01
- sta moveflag  ;flag to tell LINE cmd to move a sprite instead of plot line
- jsr strtln    ;calculate line and move sprite along that line at given speed
- dec moveflag  ;reset flag back to 0 for LINE cmd
-;restore last plot coordinate
- ldx #2
-restorepoint
- lda $50,x
- sta lastplotx,x
- dex
- bpl restorepoint
- rts
+nosped lda #1  ;0=draw line, 1=move sprite
+ jmp strtln    ;calculate line and move sprite along that line at given speed
 ;
 spriteon
  dey            ;0 dec to 255 for all sprites
@@ -2937,7 +2957,7 @@ color
  beq mop6
  cmp #","
  beq nochar
- jsr getval
+ jsr getval15
  sta COLOR      ;current cursor foreground color
 nochar
  jsr chkcomm    ;if no more params then stop now, otherwise get next char
@@ -3085,9 +3105,9 @@ bitmap
  bne bitscr
 ; BITMAP FILL x1,y1 TO x2, y2, plotType, color
  jsr CHRGET
- jsr getpnt
- jsr point2
- jsr types
+ jsr getxy          ;get point1
+ jsr point2         ;get point2
+ jsr types          ;get plot type and color
  dec R6510
  jmp bitfil         ;perform FILL on rect; put code under ROM
 ;
@@ -3463,15 +3483,17 @@ lnin
 mop3 jmp missop
 ;
 ; LINE x1,y1 TO x2, y2, plotType, color
-liner jsr getpnt
+liner
+ jsr getxy
  jsr point2
  jsr types
-;entry point for MOVE sprite command
-strtln
- dec R6510
- jsr linedraw
- inc R6510
-;fall through savepoint subroutine
+ lda #0          ;0=draw line, 1=move sprite move
+ jsr strtln
+ jmp savepoint   ;save last plotted point
+;
+;entry point for commands PLOT,CIRCLE,PAINT,TEXT
+getpnt
+ jsr getxy      ;get x,y, plot type
 savepoint
  ldx #2
  lda $fb,x
@@ -3479,6 +3501,15 @@ savepoint
  dex
  bpl savepoint+2
  rts
+;
+;draw line or move sprite on line
+strtln
+ sta XSAV  ;0=draw line, 1=move sprite move
+ dec R6510
+ jsr linedraw
+ inc R6510
+ rts
+;
 getpoint
  ldx #2
  lda lastplotx,x
@@ -3486,28 +3517,37 @@ getpoint
  dex
  bpl getpoint+2
  rts
-swappoint
- ldx #2
- lda $fb,x
- pha
- lda lastplotx,x
- sta $fb,x
- pla
- sta lastplotx,x
- dex
- bpl swappoint+2
- rts
 ;
 point2
- jsr savepoint  ;copy point 1 to last plot point acting as point 2
+ jsr savepoint  ;save point1
  lda #TOKEN_TO
  jsr CHKCOM+2   ;skip over TO token, syntax error if not there
- jsr pntweg     ;get the coordinates
- jmp swappoint  ;swap point1 and point2
+ jsr getxy      ;get point2
+;set point1 and point2
+ ldx #2
+pntswp
+ lda $fb,x
+ sta $50,x      ;point2
+ lda lastplotx,x
+ sta $fb,x      ;point1
+ dex
+ bpl pntswp
+ rts
+;
 ;get x,y coordinates
-pntweg beq mop3
+getxy
+ beq mop3
  jsr getvalue   ;get x coordinate, returns lobyte in x, hibyte in y
- jsr xytim2
+ lda SCROLX
+ and #%00010000 ;check if multicolor mode on or off
+ beq chkpnt     ;hires mode
+ txa            ;adjust offset to read ptab2/ptab3 for multicolor plot bits
+ asl            ;multiply x coordinate by 2
+ tax
+ tya
+ rol
+ tay
+chkpnt          ;validate the x coordinate
  tya
  beq okvalu
  cpy #2         ;valid value is 0 or 1 for x coord hibyte
@@ -3523,17 +3563,6 @@ okvalu stx $fb
  bcs hellno
  stx $fd        ;y coordinate
  rts
-xytim2 
- lda SCROLX
- and #%00010000 ;check if multicolor mode on or off
- beq theend     ;hires mode
- txa            ;adjust offset to read ptab2/ptab3 for multicolor plot bits
- asl            ;multiply x coordinate by 2
- tax
- tya
- rol
- tay
-theend rts
 hellno ldx #34  ;illegal coordinate error
  jmp (IERROR)
 ;
@@ -3600,6 +3629,7 @@ norm
  sta SCROLX      ;40 columns, 0 horizontal scroll scan lines
  lda #%00011011  ;extended color text mode off, bitmap mode off
  sta SCROLY      ;display on, 25 rows, 3 vertical scroll scan lines
+norm2
  lda R6510
  ora #%00000111  ;switch mem banks to normal
  sta R6510       ;mem mapped I/O RAM ($d000-$dfff)
@@ -3721,7 +3751,7 @@ key
  lda VALTYP     ;number or string?
  beq keynum     ;number is key assign
  jsr getstr2    ;get source string as first param
- beq kdone
+ beq kdone      ;do nothing if zero-length string
  ldy #0
 cpystr2
  lda ($50),y    ;source param str
@@ -3872,7 +3902,7 @@ adsr
 ;
 ;******************
 ;FILTER cutoff, [resonance], [type]
-;FILTER VOICE voice#, [boolean] 
+;FILTER VOICE voice#, [boolean]
 ;
 ;The cutoff frequency has an 11-bit range (which corresponds to the
 ;numbers 0 to 2047).  This is made up of a high-byte and three low
@@ -3900,30 +3930,29 @@ filter
  beq mop2
  cmp #TOKEN_VOICE
  bne getfreq1
-;FILTER VOICE voice#, boolean
+;FILTER VOICE voice# [,boolean]
  jsr getvalg    ;get voice 1-4
  beq novoice
- cmp #5         ;4=external input via pin 5 of audio/video port
+ cpy #5         ;4=external input via pin 5 of audio/video port
  bcs novoice
- tay            ;voice 1 to 4
- dey            ;index 0 to 3
+ dey            ;voice 1 to 4 -> index 0 to 3
  lda bitweights,y ;bit pattern for RESON register
- sta $fe        ;remember for later
+ sta XSAV       ;remember for later
  jsr comchk     ;check if they supplied a boolean?
  bne filteron   ;missing boolean assumes on, syntax FILTER VOICE voice#
  jsr getboolg   ;get on/off expression, 0=off, 1=on
  bne filteron
- eor $fe        ;flip all bits to turn off voice# bit
+ eor XSAV       ;flip all bits to turn off voice# bit
  and md417      ;all other bits will remain as they were
  jmp setfilter
 filteron
- lda $fe
+ lda XSAV
  ora md417      ;affect only bit for voice
 setfilter
  sta md417      ;remember this new setting for this register
  sta RESON      ;make setting active in SID register
  rts
-; FILTER cutoff, [resonance], [type]
+; FILTER cutoff [,resonance [,type]]
 getfreq1
  cmp #","
  beq reson
@@ -3932,52 +3961,52 @@ getfreq1
  lda #<five8
  ldy #>five8
  jsr MOVFM      ;copy mem to FAC1 pointed by a & y
- jsr FDIVT      ;fac1 = (FAC2/FAC1)
+ jsr FDIVT      ;FAC1 = (FAC2/FAC1)
  jsr doround    ;round FAC1 to nearest whole number
  jsr GETADR     ;convert FAC1 to unsigned 16-bit int
 ;now subtract 30/5.8 = 5.172...or just 5 (close enough)
- lda $14
- sec
- sbc #5
- sta $14
- lda $15
+ tax            ;hibyte
+ tya            ;lobyte
+ sec            ;subtract 5 from 2-byte binary value
+ sbc #5         ;to complete freq conversion formula
+ tay            ;save lobyte
+ txa            ;hibyte
  sbc #0
  bmi illqty5    ;if bit 7 in hibyte set then we rolled over from 0
- sta $15
 ;range check register value max from 0-2047 allowed
- cmp #8           ;2048 or larger is above SID's range
+ cmp #8         ;2048 or larger is above SID's range
  bcc okfilt
 illqty5 jmp FCERR ;illegal qty err
 mop2 jmp missop
-okfilt
-;11-bit value stored in a wacky way in filter registers
-;   $15       $14     Source binary number
+;
+;the SID filter frequency register is an 11-bit value stored in a wacky way
+;  hibyte    lobyte   Frequency binary value from parameter
 ; *****111  11111111  Possible bits used, *=not used since out of range
 ;  $d416     $d415    Target Filter frequency registers
-; 11111111  XXXXX111  Target bits to map from bits above, X=not used
-;put bits 0-2 from $14 into $D415
+; 11111111  XXXXX111  Target bits to map from parameter value, X=not used
+;
 ;shift hibyte left 5 times to promote lower 3 bits to highest 3 bits, fill with 0
+okfilt
+ asl
+ asl
+ asl
+ asl
+ asl
+ sta XSAV   ;save hibyte
 ;store lobyte in SID lower byte register (bits 3-7 will be ignored by SID)
+ tya        ;lobyte
+ sta CUTLO  ;since upper 5 bits are not used by SID, no need to set them to 0
 ;shift lobyte right 3 times to demote upper 5 bits
+ lsr
+ lsr
+ lsr
 ;merge upper and lower bits as hibyte and store in SID upper byte register
- asl
- asl
- asl
- asl
- asl
- sta $fe
- lda $14
- sta CUTLO  ;since upper 5 bits are not used by SID, no need to set them 0
- lsr
- lsr
- lsr
- ora $fe    ;merge upper and lower bits to make a full byte for SID upper byte
+ ora XSAV
  sta CUTHI
 ;
-;now get resonance parameter if present
-;the filter resonance control register $d417 
-;Bits 4-7  Set filter resonance 0-15 0=none, 15=max
-;
+;get the resonance parameter (if present)
+;set the filter resonance control register $d417
+;bits 4-7 set filter resonance 0-15, 0=none, 15=max
 reson
  jsr chkcomm  ;if no more params then quit otherwise continue
  jsr getval15 ;get resonance param
@@ -4028,10 +4057,10 @@ settype
  asl          ;ie 00000111 becomes 01110000
  asl
  asl
- sta $fe      ;temp storage
+ sta XSAV     ;temp storage
  lda md418    ;current value using SID mock register
  and #%10001111 ;clear bits 4-6, keep the rest
- ora $fe      ;apply new value
+ ora XSAV     ;apply new value
  jmp setvol
 ;
 ;*******************
@@ -4179,9 +4208,9 @@ inivoc
  lda #0
  sta FRELO1,x
  sta FREHI1,x
- sta PWLO1,x    ;in case user select pulse waveform
- lda #$08       ;set the pulse duty cycle to 50% (12-bit reg val 0-4095, 25%=2048)
- sta PWHI1,x    ;lower nybble only, upper nybble is unused (12-bit value)
+ sta PWLO1,x    ;set pulse waveform to 50%
+ lda #$08       ;duty cycle is a 12-bit value 0-4095, 50%=2048
+ sta PWHI1,x    ;lower nybble only, upper nybble is not used
 
  lda #$10       ;set attack duraction to 8ms (hi nybble)
  sta ATDCY1,x   ;and decay duration to 6ms (lo nybble)
@@ -4189,12 +4218,12 @@ inivoc
  sta SUREL1,x   ;and release duration to 300ms (lo nybble)
 
  lda md418      ;all voices volume register mirror
- bne plydone      ;if volume is 0 (off) turn it up!
+ bne plydone    ;if volume is 0 (off) turn it up!
  ora #%00001111 ;set volume to max
  jmp setvol
 ;
 ;*******************************************************************************
-;* mdbasic functions fix(), instr(), ptr(), csr(), pen(), joy(), pot(), hex$() *
+;* MDBASIC Functions
 ;*******************************************************************************
 ;
 ; I = INSTR(offset,src$,find$)
@@ -4204,21 +4233,21 @@ instr
  jsr CHKOPN   ;Check for and Skip Opening Parentheses
  jsr FRMEVL   ;eval expression
  lda VALTYP   ;check if numeric (offset param) or string (source$ param)
- beq getoffsetparam
+ beq getoff
  lda #0       ;default zero index
  sta $fe
  jsr getstr2  ;get source string as first param
- jmp getsrcparam
+ jmp getsrc
 badidx
  jmp BSERR    ;BAD SUBSCRIPT ERROR
-getoffsetparam
+getoff
  jsr GETBYTC+6 ;convert FAC1 to an unsigned byte value 0-255 into X reg
  txa
  beq badidx   ;BASIC string indexes are based at 1 (not 0)
  sta $fe      ;start index
  jsr ckcom2   ;check for and skip over comma, misop err if missing
  jsr getstr0  ;get source string as second param
-getsrcparam
+getsrc
  stx $fb
  sty $fc
  sta $fd      ;len of src str
@@ -4388,8 +4417,8 @@ joy
  bcs nofire      ;bit4 must be 1 if carry set
  ora #%10000000  ;add button flag
 nofire tay       ;y=lowbyte
-nobutt lda #0   ;hibyte 0
- jmp GIVAYF     ;convert binary int to FAC then return
+nobutt lda #0    ;hibyte 0
+ jmp GIVAYF      ;convert binary int to FAC then return
 ;
 illqty7 jmp FCERR ;display illegal qty error
 ;
@@ -4559,10 +4588,10 @@ resvec
  jsr INIT    ;initialize BASIC
  lda R6510
  and #%11111110
- sta R6510   ;switch LOROM to LORAM
+ sta R6510   ;switch out 8K BASIC ROM for 8K RAM
  jsr newvec  ;set new vectors to MDBASIC routines
  jsr initclk ;init TOD clocks
- inc R6510   ;switch LORAM to LOROM
+ inc R6510   ;restore 8K BASIC ROM
  lda #<mesge
  ldy #>mesge
  jsr STROUT  ;display MDBASIC banner
@@ -4617,7 +4646,7 @@ redy
 doerr
  sta XSAV
  jsr $a67a    ;empty system and temp string stacks
- jsr clsmdb   ;close mdb file handles 126 & 127 and set default I/O channels
+ jsr clsmdb   ;close mdb file handles and set default I/O channels
  jsr norm     ;set text mode normal display and ensure BASIC ROM enabled
  ldy CURLIN+1 ;when current line num hibyte is $FF (invalid)
  iny          ;then immediate mode
@@ -4782,10 +4811,10 @@ irq3
  beq irqnorm
  jsr sprcolchg
 irqnorm
- jmp (irqtmp)   ;orgininal irq vector
+ jmp (TMPIRQ)   ;orgininal irq vector
 mdbirqoff2
  jsr mdbirqoff
- jmp (irqtmp)   ;orgininal irq vector
+ jmp (TMPIRQ)   ;orgininal irq vector
 ;
 ;****************************
 ;Sprite animation IRQ routine
@@ -4803,9 +4832,9 @@ chkani asl      ;bit7 to carry
  sta anidly,x
 ptr1ref         ;this ptr ref is used to change
  lda $07f8,x    ;the sprite ptr base address
- cmp ptrend,x
- bcc setptr
- lda ptrbegin,x ;reset ani img to first
+ cmp ptrend,x   ;did we reach the last image index?
+ bcc setptr     ;no, advance image index
+ lda ptrbegin,x ;yes, reset to first image index
 .byte $2c       ;prevent adc #1
 setptr adc #1
 ptr2ref         ;this ptr ref is used to change
@@ -4846,8 +4875,8 @@ mdbirqon
  cpy #>mdbirqhdl
  beq irqset
  ldx CINV
- stx irqtmp
- sty irqtmp+1
+ stx TMPIRQ
+ sty TMPIRQ+1
  ldx #<mdbirqhdl
  ldy #>mdbirqhdl
 setirq
@@ -4855,8 +4884,8 @@ setirq
  sty CINV+1
 irqset rts
 mdbirqoff
- ldx irqtmp   ;restore IRQ vector
- ldy irqtmp+1 ;back to original $EA31 or user-defined address
+ ldx TMPIRQ   ;restore IRQ vector
+ ldy TMPIRQ+1 ;back to original $EA31 or user-defined address
  jmp setirq
 ;
 ;*******************************
@@ -5071,20 +5100,15 @@ ptrhi           ;determine hibyte for address of sprite pointers
 getvoc
  jsr getvalz
  beq illvoc
- cmp #4
+ cmp #4         ;valid voice numbers 1,2,3
  bcs illvoc
 getvoff
  tax
- dex            ;1,2,3
- lda sidoff,x   ;0,1,2
+ dex            ;voice index 0,1,2
+ lda sidoff,x   ;register offset 0,7,14
  rts
 illvoc ldx #32  ;illegal voice number
  jmp (IERROR)
-;*******************
-;this function entry point is called by commands PLOT,LINE,CIRCLE,PAINT
-getpnt
- jsr pntweg      ;get x,y, plot type
- jmp savepoint
 ;*******************
 ;these routines are used while BASIC ROM is switched out
 rom1 inc R6510   ;switch to rom (a000-bfff)
@@ -5105,7 +5129,7 @@ rom3 inc R6510
  rts
 rom4
  inc R6510
- jsr LINPRT+4   ;print 2-byte binary number in FAC1
+ jsr LINPRT+4    ;print 2-byte binary number in FAC1
  dec R6510
  rts
 ;*******************
@@ -5133,8 +5157,6 @@ prtchr and #$7f
 ;* Global Constant Storage
 ;********************************************************************
 ;
-nolin .null "65535"
-
 ;table for calculating 2^n where n=0-7
 bitweights .byte 1,2,4,8,16,32,64,128
 
@@ -5164,52 +5186,54 @@ five8 .byte $83,$39,$99,$99,$9a  ;FAC binary representation of 5.8
 ;* Global Variable Storage
 ;********************************************************************
 
-autoflag   .byte 0 ;auto line numbering flag: 0=off, 1=on
-traceflag  .byte 0 ;trace flag: 0=off, 1=on
-keyflag    .byte 0 ;key capture mode 0=disabled, 1=enabled, 2=paused
-keyentry   .byte 0 ;scan code of the last key captured with ON KEY statement enabled
-errnum     .byte 0 ;last error number that occured, default 0 (no error)
-errline    .word $ffff ;last line number causing error, default -1 (not applicable)
-errtrap    .word 0 ;error handler line number
-errtxtptr  .word 0 ;basic txt ptr of statement causing error
-oldtrap    .word errors ;temp storage of original error trap routine in use
-keyptr     .word 0 ;basic txt ptr of statement for ON KEY GOSUB line#
-keyline    .word $ffff ;line number for ON KEY subroutine
-keyidx     .byte 0 ;current index of char to put in keyboard buffer via IRQ
-keystrflg  .byte 0 ;flag to indicate key string from KEY cmd
+autonum    .word 10     ;last auto line numbering increment
+autoflag   .byte 0      ;auto line numbering flag: 0=off, 1=on
+
+traceflag  .byte 0      ;trace flag: 0=off, 1=on
+
+;MDBASIC file handles
+mdbin      .byte 0      ;current mdbasic input channel/file num
+mdbout     .byte 0      ;current mdbasic output channel/file num
+mdbio      .byte 0      ;current mdbasic i/o channel (used by SERIAL command)
 
 ;SID mock registers
-md417      .byte 0   ;holds current filter control and resonance
-md418      .byte 0   ;holds current volume (lo nybble) and filter type (hi nybble)
+md417      .byte 0      ;current filter control and resonance
+md418      .byte 0      ;current volume (lo nybble) and filter type (hi nybble)
 
-irqtmp     .word $ea31 ;temp IRQ vector storage
+errnum     .byte 0      ;last error number that occured, default 0 (no error)
+errline    .word $ffff  ;last line number causing error, default -1 (not applicable)
+errtrap    .word 0      ;error handler line number
+errtxtptr  .word 0      ;basic txt ptr of statement causing error
+
+keyflag    .byte 0      ;key capture mode 0=disabled, 1=enabled, 2=paused
+keyentry   .byte 0      ;scan code of the last key captured with ON KEY statement enabled
+keyptr     .word 0      ;basic txt ptr of statement for ON KEY GOSUB line#
+keyline    .word $ffff  ;line number for ON KEY subroutine
+keyidx     .byte 0      ;current index of char to put in keyboard buffer via IRQ
+keystrflg  .byte 0      ;flag to indicate key string from KEY cmd
 
 ;sprite animation
-aniopt     .byte 0     ;enables animation for 8 sprites with 8 bit flags
-anidly     .repeat 8,0 ;IRQ driven count-down timer for each sprite
-aniwait    .repeat 8,0 ;cmd param for each sprite for count-down begin
-ptrbegin   .repeat 8,0 ;param for each sprite starting data pointer
-ptrend     .repeat 8,0 ;param for each sprite ending data pointer
+aniopt     .byte 0      ;enables animation for 8 sprites with 8 bit flags
+anidly     .repeat 8,0  ;IRQ driven count-down timer for each sprite
+aniwait    .repeat 8,0  ;cmd param for each sprite for count-down begin
+ptrbegin   .repeat 8,0  ;param for each sprite starting data pointer
+ptrend     .repeat 8,0  ;param for each sprite ending data pointer
 
 ;sprite color 16
-sprcolopt  .byte 0    ;bit flags for which sprites to change color
+sprcolopt  .byte 0      ;bit flags for which sprites to change color
 
 ;GENERAL GRAPHICS COMMANDS (Shared):
-lastplotx  .word 0   ;last plotted dot's x coord
-lastploty  .byte 0   ;last plotted dot's y coord
-lastplott  .byte 1   ;last plot type used
-mapcolc1c2 .byte $15 ;current plot color; hi nybble = c1 (white), lo nybble = c2 (green)
-mapcolc3   .byte 7   ;c3 (1-3) multicolor mode color for bit pattern 11 (default yellow)
-mapcolbits .byte 8   ;(values 8,16,24) used for plotting a dot on a multi-color bitmap
-
-moveflag   .byte 0   ;flag for LINE function for which cmd is executing; 0=LINE, otherwise MOVE
-
-autonum    .word 10  ;hold 2-byte value of auto line numbering setting
+lastplotx  .word 0      ;last plot x coord
+lastploty  .byte 0      ;last plot y coord
+lastplott  .byte 1      ;last plot type used
+mapcolc1c2 .byte $15    ;current plot color; hi nybble = c1 (white), lo nybble = c2 (green)
+mapcolc3   .byte 7      ;c3 (1-3) multicolor mode color for bit pattern 11 (default yellow)
+mapcolbits .byte 8      ;(values 8,16,24) used for plotting a dot on a multi-color bitmap
 
 ;PLAY command use only - used during IRQ
-playtime   .byte 0   ;current jiffies till next note
-playvoice  .byte 0   ;SID register offset for play voice
-playwave   .byte 0   ;waveform for play notes
+playtime   .byte 0      ;current jiffies till next note
+playvoice  .byte 0      ;SID register offset for play voice
+playwave   .byte 0      ;waveform for play notes
 
 
 ;********************************************************************
@@ -5307,19 +5331,19 @@ playindex .byte 0  ;index of current char in play string for each voice
 ;There are 8 octaves each with 12 notes 8*12 = 96 total notes
 ;The notes here are octave 4 on NTSC clock. The others are derived from these.
 ;
-;             A    B    C    D    E    F    G
-notes  .word 3609,4051,4292,4817,5407,5729,6431
+notes ;A    B    C    D    E    F    G
+.word 3609,4051,4292,4817,5407,5729,6431
 ;flats(-) are derived from sharps(#). A- is in previous octave (G#)
-;for invalid notes C-/B# = B and F-/E# = E
-;             A-
-fnotes .word 3406
-;             B-  *C-   D-   E-  *F-   G-
-;             A#  *B#   C#   D#  *E#   F#   G#
-snotes .word 3824,4051,4547,5104,5407,6069,6813
+;*for invalid notes C-/B# = B and F-/E# = E
+;      A-
+.word 3406
+;      B-  *C-   D-   E-  *F-   G-
+;      A#  *B#   C#   D#  *E#   F#   G#
+.word 3824,4051,4547,5104,5407,6069,6813
 ;these are the same notes above but for PAL systems (30 byte offset)
-.word        3746,4205,4455,5001,5613,5947,6675
-.word        3536
-.word        3969,4205,4720,5298,5613,6300,7072
+.word 3746,4205,4455,5001,5613,5947,6675
+.word 3536
+.word 3969,4205,4720,5298,5613,6300,7072
 
 ;INF() memory locations
 infbytes
@@ -5373,8 +5397,9 @@ gotok
 .byte TOKEN_GOTO,TOKEN_GOSUB,TOKEN_RETURN,TOKEN_THEN,TOKEN_ELSE
 .byte TOKEN_RESUME,TOKEN_TRACE,TOKEN_DELETE,TOKEN_RUN,TOKEN_RESTORE
 
-;string for keylist
-addchr .shift "+chr$("
+;strings
+addchr .shift "+chr$("  ;used by keylist to display non-printable chars
+nolin  .null "65535"    ;used by renum to find bad GO statements
 
 ;KEY (continued)
 keyy
@@ -5546,17 +5571,14 @@ newvec
 ;
 ;**************************
 linedraw
- lda lastplotx
- sta $50  ;x2 lobyte
+ lda $50   ;x2 lobyte
  sec
  sbc $fb
  sta $57
- lda lastplotx+1
- sta $51  ;x2 hibyte
+ lda $51   ;x2 hibyte
  sbc $fc
  sta $58
- lda lastploty
- sta $52  ;y2
+ lda $52   ;y2
  sec
  sbc $fd  ;destination y coord
  sta $6b  ;temp var for distance = y1-y2
@@ -5686,11 +5708,11 @@ b7no6e lda $59
 jmpout1 sta $fd ;y coordinate
 jmpout jmp starts
 linedone
- ldy moveflag   ;sprites can have a y coord to 255
+ ldy XSAV       ;sprites can have a y coord to 255
  bne jmpout1    ;moving a sprite so continue
  rts
 pokadd
- lda moveflag   ;flag 0=LINE cmd, >0=MOVE cmd
+ lda XSAV       ;flag 0=draw line, else move sprite
  beq setdot
 ;hack to move a sprite instead of plot line
  lda $fc        ;temp var hibyte of x coord
@@ -6165,7 +6187,7 @@ readb jsr ydiv8
  lda ptab3,x
  eor #$ff
  and ($c3),y    ;bitmap in HIRAM
- sta XSAV
+ tay
  lda R6510
  ora #%00000010 ;bit1 1=HIROM
  sta R6510
@@ -6173,7 +6195,7 @@ readb jsr ydiv8
  txa
  and #%00000111
  tax
- lda XSAV
+ tya
  cpx $5b
  bcs flgit
 divid2 lsr
@@ -6196,9 +6218,20 @@ donee
 ;
 ;process radial line options
 ciropts
+;set flag for line draw
+ lda #0    ;0=draw line, 1=move sprite
+ sta XSAV
+;init point1 and point2 for radial line
+ ldx #2
+pntcpy
+ lda lastplotx,x
+ sta $50,x
+ sta $fb,x
+ dex
+ bpl pntcpy
+;check quadrant bit flags for line segment
  asl $2a
  bcc copt2
- jsr getpoint ;get last plot coordinates
  lda $fd
  clc
  adc $36
@@ -6211,7 +6244,6 @@ okopt1 sta $fd
 copt2
  asl $2a
  bcc copt3
- jsr getpoint ;get last plot coordinates
  lda $fb
  sec
  sbc $35
@@ -6226,7 +6258,6 @@ okopt2 sta $fc
 copt3
  asl $2a
  bcc copt4
- jsr getpoint ;get last plot coordinates
  lda $fd
  sec
  sbc $36
@@ -6237,7 +6268,6 @@ okopt3 sta $fd
 copt4
  asl $2a
  bcc donee
- jsr getpoint ;get last plot coordinates
  lda $fb
  clc
  adc $35
@@ -6635,9 +6665,9 @@ plotq2
  ror $fd
  lda $2a   ;circle options
  and #%00000010 ;show quad 2?
- beq plotq1_
+ beq plotq1a
  jsr plotc ;quad2
-plotq1_
+plotq1a
  lda $61
  clc
  adc $6f
@@ -6879,16 +6909,19 @@ loadd
  ldx #0
  jsr lodsav  ;open file and check status, quit if needed (no return here, ROM in)
  jsr $f5af   ;print SEARCHING...
- jsr $f5d2   ;print LOADING...
  ldx LA      ;logical file number
- jsr $e11e   ;define input channel, CHKIN wrapper to handle error
+ jsr CHKIN   ;set default input logical file number
+ jsr CHRIN   ;get first byte from file
+ sta XSAV    ;save for later
+ jsr chkio   ;check i/o status, error if needed
+ jsr $f5d2   ;print LOADING...
  lda $fe     ;secondary address
  cmp #16     ;16=screen
  bne sdnot2
 lodsrn
  jsr param   ;prepare text and color mem pointers
-lodfile
- jsr CHRIN   ;get border color
+ lda XSAV    ;recall first read byte (border color)
+lodscrn
  sta EXTCOL  ;set border color
  jsr CHRIN   ;get background color
  sta BGCOL0  ;set background color
@@ -6917,27 +6950,31 @@ sdnot2
  cmp #17     ;17=CHAREN
  bne sdnot3
  jsr param2
+ lda XSAV    ;recall first read byte
 lodchr
- jsr CHRIN
  sta ($50),y
  jsr status  ;check for stop key or EOF and do not return here if so
+ jsr CHRIN   ;get next byte
  inc $50
  bne lodchr
  inc $51
  bne lodchr
+ jmp romin   ;a valid file should not reach this line
 sdnot3
  jsr param3  ;18=BITMAP
+ lda XSAV
 lodbm
- jsr CHRIN
  sta ($50),y
  jsr status  ;check for stop key or EOF and do not return here if so
+ jsr CHRIN
  inc $50
  bne lodbm
  inc $51
  bne lodbm
  lda #$c8
  jsr param4
- jmp lodfile ;finish by loading the remainder of the file
+ jsr CHRIN   ;get first byte of screen info
+ jmp lodscrn ;finish by loading the remainder of the file
 ;
 ;*********************
 ;save command re-write
@@ -6946,7 +6983,7 @@ lodbm
 savee
  ldx #1
  jsr lodsav
- jsr $f68f   ;print SAVING
+ jsr $f68f   ;print SAVING filename
  ldx LA      ;current logical file number
  jsr CHKOUT  ;set stdout to current logical file number
  lda $fe     ;MDBASIC secondary address (16,17,18)
@@ -6978,7 +7015,7 @@ saves
  jsr CHROUT
  lda ($fb),y ;color
  jsr CHROUT
- jsr status  ;check for stop key or EOF and do not return here if so
+ jsr status  ;check for stop key or i/o error and do not return here if so
  inc $fb
  inc $50
  bne srnend
@@ -7034,17 +7071,17 @@ lodsav          ;real secondary device in x reg
  sta $fe        ;save MDBASIC secondary device # (16,17,18)
  stx SA         ;replace secondary device with desired real value
  jsr OPEN       ;perform OPEN
- bcc loded      ;return if ok, close and fail if error
- jmp err127
-;
+ bcs stopls     ;error, abort load or save
 loded rts
+;
 status jsr STOP
  beq stopls
  jsr READST
  beq loded
-stopls pla
+stopls
+ pla          ;discard caller return addr
  pla
- jmp romin
+ jmp romin    ;quit
 ;
 param         ;setup screen pointers
  lda HIBASE   ;hibyte of top of text screen
@@ -7458,7 +7495,7 @@ cpyleft iny
  cpy $be     ;columns to scroll
  bne cpyleft
  jsr scrollh
- dec $bf     ;row to scroll
+ dec $bf     ;rows to scroll
  bpl scroll2
 hsdone jmp memnorm ;switch LORAM back to LOROM
 ;scroll right
@@ -7545,7 +7582,7 @@ wdone
  rts
 ;--------------
 ;play next note
-nextn0       ;start over from beginning
+nextn0          ;start over from beginning
  lda #0
  sta playindex
 nextn2
@@ -7553,9 +7590,7 @@ nextn2
  beq wdone
 nextn
  cmp #"h"       ;notes A-G only
- bcc goodnote
- jmp nonnote
-goodnote
+ bcs nonnote
  sec            ;ascii of notes must start at A (65)
  sbc #"a"       ;ascii - A(65) starts at 0 for A, 1 for B, etc.
  bmi plyrpt
@@ -7568,33 +7603,26 @@ wrdidx asl      ;convert node index to word index
  jsr noteget
  beq regnote
 
- cmp #"#"       ;sharp?
- bne noshar
- jsr noteget    ;skip over txt
- lda snotes+1,x
- tay
- lda snotes,x
- jmp playnote   ;always branches
-
-noshar
  cmp #"-"       ;flat?
+ beq fltshr
+ cmp #"#"       ;sharp?
  bne regnote
- jsr noteget    ;skip over txt
- lda fnotes+1,x
- tay
- lda fnotes,x
- jmp playnote   ;always branches
+ inx            ;adjust index for sharps
+ inx
+fltshr
+ jsr noteget    ;skip over symbol
+ txa            ;adjust index
+ clc
+ adc #14
+ tax
 
 regnote
- lda notes+1,x
- tay
- lda notes,x
-
-playnote
- jsr octadj
- ldx playvoice
+ ldy notes+1,x  ;hibyte of note
+ lda notes,x    ;lobyte of note
+ jsr octadj     ;adjust note for octave
+ ldx playvoice  ;voice offset
  sta FRELO1,x   ;voice x freq lo byte
- tya 
+ tya
  sta FREHI1,x   ;voice x freq hi byte
  lda playwave   ;select current waveform
  ora #%00000001 ;and start attack/decay/sustain cycle
@@ -7611,18 +7639,19 @@ notewait2
 endply
  rts
 
-plyrpt cmp #"@"-"a"
+plyrpt
+ cmp #"@"-"a" ;255 repeat?
  beq nextn0
 
 octchg
- cmp #"<"-"a" ;251 ;<
+ cmp #"<"-"a" ;251 octave down
  bne octup2
 prevoct
  dec playoct
  bpl nextn3
  bmi nextoct
 octup2
- cmp #">"-"a" ;253  ;>
+ cmp #">"-"a" ;253 octave up
  bne nextn3
 nextoct
  inc playoct
@@ -7900,7 +7929,7 @@ drdone rts
 bitfil
  ldy #$01    ;signed y inc value
 ;calc number of lines to fill
- lda lastploty
+ lda $52     ;point2 y coordinate
  sec
  sbc $fd     ;calc abs(y1-y2)
  bcs filines ;y1 <= y2
@@ -7915,11 +7944,11 @@ filines
 ;calc line width and fill left or right
  lda #0      ;0-=draw right,1=draw left
  sta $ff     ;horizontal fill direction
- lda lastplotx
+ lda $50     ;point2 x coordinate lobyte
  sec
  sbc $fb
  tax
- lda lastplotx+1
+ lda $51     ;point2 x coordinate hibyte
  sbc $fc
  tay
  bpl setwidth
@@ -7976,38 +8005,24 @@ filldone
  sta $15
 ;
  dec COUNT
- lda COUNT
- cmp #0
  bpl linefil
  jmp memnorm
 ;
 ;***OPEN RS-232 CHANNEL***
 openrs232
- lda #126        ;file handle 126
+ sta mdbio
  ldx #2          ;device 2 = RS-232
  ldy #0          ;secondary channel
  jsr SETLFS
- jsr $f30f       ;find the file in the logical file table
- bne xf359       ;zero flag=1 means file not currently open
- jsr $f6fe       ;handle FILE OPEN error
- tax             ;error code 2
- sec
- rts
-xf359 ldx LDTND  ;number of open i/o files/index to the end of file tables
- cpx #10         ;limit 10
- bcc xf362
- jsr $f6fb       ;handle TOO MANY FILES error
- tax             ;error code 1
- sec
- rts
-xf362 inc LDTND  ;inc total file handle count
+ ldx LDTND       ;use current count as 0-based index for file in tables
+ inc LDTND       ;inc total file handle count
  lda LA          ;current logical file number
  sta LAT,x       ;store file descriptors into master table
  lda SA          ;current secondary address
  ora #%01100000  ;flag bits 5&6 to indicate rs-232 channel
  sta SA          ;needs special handling on close or error
  sta SAT,x
- lda $ba         ;current device number
+ lda FA          ;current device number
  sta FAT,x
 ;***PREPARE RS-232 DEVICE WITH DEFAULTS***
  jsr $f483       ;init IRQ timers (y reg loaded with 0)
@@ -8634,7 +8649,7 @@ filess
  stx $50        ;to ignore header and footer
  inx
  stx $51
- ldx #126
+ ldx mdbin
  jsr CHKIN
  bcs err7e
  jsr CHRIN      ;skip 2-byte file header
@@ -8648,7 +8663,7 @@ chkeof
  and #%01000000 ;bit6=EOF/EOI, bit7=device not present, bits0-1 indicate device timeout
  bne filecnt    ;bit6=1? EOF, print file count
  lda #5         ;DEVICE NOT PRESENT
- sec
+ sec            ;flag for error
 err7e rts
 nxtfile
  inc $50        ;increment file count
@@ -8664,7 +8679,7 @@ chkps
 filecnt
  ldx $50
  lda $51
- clc
+ clc            ;flag for success
  rts
 ;
 chkpause
@@ -8675,7 +8690,7 @@ chkpauser
  jmp STOP       ;stop key?
 ;
 prtlin
- ldx #126
+ ldx mdbin
  jsr CHKIN
  bcs pdone
  jsr CHRIN      ;skip 2 byte line header
@@ -8710,7 +8725,7 @@ stdout
 ;read with buffering from current input channel
 ;write to current output channel
 bufio7e
- ldx #126
+ ldx mdbin
 bufio
  sta XSAV       ;write flag
  jsr CHKIN
@@ -8883,7 +8898,20 @@ clrflg lda TXTPTR
  ldy #$00
  sty COUNT
  sty XSAV
-donenow rts
+ rts
+;*********
+;prepare for FIND with 65535 as param
+f65535
+ lda #>BUF
+ sta TXTPTR+1
+ lda #<BUF
+ sta TXTPTR
+ ldy #$05
+ffff lda nolin,y
+ sta BUF,y
+ dey
+ bpl ffff
+ rts
 ;
 renumer
  jsr chrget
@@ -8892,7 +8920,7 @@ renumer
  jsr tofac
 strnum jsr chrget
  jsr chrget
- beq donenow  ;end of renum process
+ beq f65535  ;end of renum process
  jsr chrget
  lda $63
  sta (TXTPTR),y
