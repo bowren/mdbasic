@@ -369,7 +369,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.05.31"
+.text "mdbasic 24.08.11"
 .byte 13
 .text "(c)1985-2024 mark bowren"
 .byte 13,0
@@ -1342,6 +1342,7 @@ zzz
  lda mdbout
  beq clsclr
  jsr CLOSE
+clscmd
  lda #0
  sta CHANNL
  sta mdbout
@@ -2330,12 +2331,20 @@ close
  cmp #TOKEN_FILES
  beq clsfiles
 gfn jsr getval    ;get file number
+ beq nxtcls       ;ignore zero file number (invalid)
+ pha              ;save file number
  jsr CLOSE        ;close file if open, ignore if not
+ pla              ;recall file number
+ cmp CHANNL       ;if closing the cmd i/o channel then
+ bne nxtcls       ;clear the cmd i/o channel
+ jsr clscmd       ;and restore default devices
+nxtcls
  jsr chkcomm      ;check for comma, quit if none otherwise skip over it
  jmp gfn          ;process next file number
 clsfiles
- jsr CLALL        ;close all open files
- jsr CLRCHN       ;restore default devices
+ jsr CLALL        ;close all open files and restore default devices
+ lda #0           ;clear the cmd i/o channel
+ sta CHANNL
  jmp CHRGET
 ;
 ;*******************
