@@ -369,7 +369,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.08.11"
+.text "mdbasic 24.08.18"
 .byte 13
 .text "(c)1985-2024 mark bowren"
 .byte 13,0
@@ -743,7 +743,8 @@ xcmd jsr tstcmd
  bne nocmd     ;key trapping is paused
  lda NDX       ;num chars in keyboard buffer
  beq nocmd
- jsr LP2       ;$E5B4 get char in keyboard buffer
+ sei
+ jsr LP2       ;get char in keyboard buffer
  sta keyentry  ;use K=KEY(0) to get value
  inc keyflag   ;pause key trapping
  lda #3        ;actually 5 since jsr counts for 2
@@ -1458,34 +1459,8 @@ tokread
  ldx mdbio     ;file number
  stx CHANNL    ;current I/O channel (cmd logical file) number
  jsr $e11e     ;BASIC wrapper for CHKIN with error error handling
-;get or create pointer to string pointer provided as param
- jsr PTRGET    ;search for a var & setup if not found
- sta $49       ;variable address is returned in a (lo byte) and y (hi byte) registers
- sty $4a       ;every string variable is a pointer consisting of 3 bytes, 2 for ptr, 1 for length
-;determine data type to read
- ldx VALTYP    ;0=numeric, 255=string
- inx
- stx $bb       ;0=string,1=float
- stx $fd       ;offset to store bytes
- beq rdstr     ;string read 255 bytes at a time
- stx XSAV      ;numeric binary read 1 byte at a time
- ldx INTFLG    ;0=float, 128=int
- beq rdnum     ;float stores 5 bytes
- inc $bb       ;2=int
-rdnum
- sta $35       ;ptr of a numeric variable
- sty $36       ;is the ptr of the value
- jmp chksent
-;allocate space for new string
-rdstr
- dex           ;max string length is 255
- stx XSAV      ;buffer size
- lda #<paintbuf1
- sta $35
- lda #>paintbuf1
- sta $36
+ jsr getvar    ;get pointer to target variable
 ;check if sentinel param supplied
-chksent
  lda #0
  sta $fb       ;flag for sentinel check
  jsr CHRGOT
@@ -1508,7 +1483,7 @@ goread
  sta $15
 ;read next byte with timeout (if enabled)
  jsr waitread
- bcs setstrlen
+ bcs rdone
 ;save the byte
  lda $61       ;last byte read
  ldy $fd       ;offset to store result
@@ -1523,12 +1498,12 @@ goread
  lda $61       ;last read byte
  cmp $fc       ;sentinel reached?
  beq strdone   ;yes, stop reading
- lda $bb       ;string type
+ lda $ff       ;string type
  bne goread    ;numeric variable use only 1 byte
 nxtbyte
  inc $fd       ;next index in string
  dec XSAV      ;reduce byte count for read
- beq setstrlen ;stop reading
+ beq rdone     ;stop reading
  bne goread    ;keep reading if more room in string
 
 ;include byte in string length
@@ -1536,32 +1511,34 @@ strdone
  inc $fd       ;string length = index+1
 
 ;return result based on data type
-setstrlen
- ldy $bb       ;type 0=string, 1=float, 2=int
+rdone
+ jsr $abb5    ;send UNLSN and UNTALK to serial device and restore default devices
+
+;apply value to variable
+setval
+ ldy $ff       ;type 0=string, 1=float, 2=int
  beq setstr
  dey
  beq setflt
  lda #0        ;make hibyte zero
  tay
- sta ($35),y
- beq done232   ;always branches
+ sta ($35),y   ;store directly to int value memory
+valdone
+ rts
 setflt
  ldy $61       ;byte read is lobyte
  lda #0        ;zero hibyte
  jsr GIVAYF    ;convert binary int to float with result in FAC1
  ldx $35       ;copy the result in FAC1
  ldy $36       ;to the variable memory
- jsr $bbd7     ;copy FAC1 to memory
-done232
- jmp end232
+ jmp $bbd7     ;copy FAC1 to memory
 setstr
  lda $fd       ;length of string read
  sta ($49),y   ;string length byte
- beq done232   ;zero-length string
+ beq valdone   ;zero-length string
  jsr GETSPA    ;alloc new str return ptr in $35,$36 and length in A reg
  jsr setstrptr ;set pointer to newly allocated string
- jsr buf2str   ;copy data to string
- jmp done232
+ jmp buf2str   ;copy data to string
 ;
 ;read a byte with timeout (if enabled)
 waitread
@@ -1609,6 +1586,35 @@ chktimer
  lda $14       ;zero flag indicates timeout reached
  ora $15
 endtimer rts
+;
+;get or create pointer to string pointer provided as param
+getvar
+ jsr PTRGET    ;search for a var & setup if not found
+ sta $49       ;variable address is returned in a (lo byte) and y (hi byte) registers
+ sty $4a       ;every string variable is a pointer consisting of 3 bytes, 2 for ptr, 1 for length
+;determine data type to read
+ ldx VALTYP    ;0=numeric, 255=string
+ inx
+ stx $ff       ;0=string,1=float
+ stx $fd       ;offset to store bytes
+ beq rdstr     ;string read 255 bytes at a time
+ stx XSAV      ;numeric binary read 1 byte at a time
+ ldx INTFLG    ;0=float, 128=int
+ beq rdnum     ;float stores 5 bytes
+ inc $ff       ;2=int
+rdnum
+ sta $35       ;ptr of a numeric variable
+ sty $36       ;is the ptr of the value
+ rts
+;allocate space for new string
+rdstr
+ dex           ;max string length is 255
+ stx XSAV      ;buffer size
+ lda #<paintbuf1
+ sta $35
+ lda #>paintbuf1
+ sta $36
+ rts
 ;
 ;*******************
 ; SYS address [,a] [,x] [,y] [,p]
@@ -1797,18 +1803,6 @@ shftky
  bit SHFLAG ;is the shift key pressed?
  beq shftky ;wait for it to be pressed
 etrace rts
-weglst
- jsr FINDLN ;find BASIC line number in $14,$15
- bcc endprg ;line not found
- jsr $a82c  ;test STOP key for break in program
- lda #19    ;chr 19 = cursor home
- jsr CHROUT
- jsr lstrap
- ldy #1
- jmp $a6d7  ;perform LIST of current line
-endprg
- jsr $a67a  ;empty the stack
- jmp HALT
 ;
 initmdb
  lda #0         ;clear all MDBASIC IRQ flags
@@ -2125,7 +2119,19 @@ deldone
  jsr old2
 relink
  jsr CLEAR-5  ;reset TXTPTR to beginning of prg then perform CLR
- jmp endprg
+endprg
+ jsr $a67a  ;empty the stack
+ jmp HALT
+;
+weglst
+ jsr FINDLN ;find BASIC line number in $14,$15
+ bcc endprg ;line not found
+ jsr $a82c  ;test STOP key for break in program
+ lda #19    ;chr 19 = cursor home
+ jsr CHROUT
+ jsr lstrap
+ ldy #1
+ jmp $a6d7  ;perform LIST of current line
 ;
 ;******************
 ; RESTORE       - set first data line as next DATA READ
@@ -3801,10 +3807,15 @@ keywait
  lda NDX
  beq keywait
  jsr CHRGET
- bne doget
- rts
-doget
- jmp GET          ;peform GET
+ beq kdone
+ jsr getvar  ;get or setup target variable
+ sei
+ jsr LP2     ;get char in keyboard buffer
+ sta $61     ;float store lobyte in FAC1 to convert to float
+ ldy $fd     ;offset to store result, strings use 0, int use 1
+ sta ($35),y ;store byte in variable memory for string and int
+ inc $fd     ;when string type length=1, otherwise not used
+ jmp setval
 keyclr
  lda #0
  sta NDX
