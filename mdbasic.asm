@@ -375,7 +375,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.08.25"
+.text "mdbasic 24.08.26"
 .byte 13
 .text "(c)1985-2024 mark bowren"
 .byte 13,0
@@ -4401,20 +4401,15 @@ round1
  lda $14        ;decimal places to round
  beq doround    ;zero will round to nearest whole number
 ;move decimal point to the right or left based on sign of num places
- jsr movedec1   ;move decimal to left or right based on sign of param2
+ jsr movedec    ;move decimal to left or right based on sign of param2
  lda $15
  eor #$ff       ;toggle move direction for 2nd call
  sta $15
- jsr doround    ;round FAC1 to nearest whole number
-;move decimal point to the left
- jsr movedec
-done3 rts
-
+ jsr doround    ;round FAC1 to nearest whole number (left)
 ;move decimal point
-movedec
  lda $14        ;decimal places to round
  beq done3
-movedec1
+movedec
  sta COUNT
  lda $66        ;save FAC1 sign flag
  pha            ;before moving decimal
@@ -4433,7 +4428,21 @@ xmul10
 mvdec
  pla            ;restore FAC1 sign flag
  sta $66        ;as it was before moving decimal
- rts
+done3 rts
+;
+;*******************
+; KEY AND KEY$ are used with ON KEY GOSUB to return key that caused the event
+; K = KEY    -get ASCII value, no key = 0
+; K$ = KEY$  -get string value of length 1, no key has ASC(KEY$)=0
+keyfn
+ jsr chrget
+ ldy keyentry    ;y=lobyte
+ cmp #"$"
+ bne nobutt
+ jsr CHRGET
+ tya
+ jsr $b6f0       ;perform chr$
+;NOTE: JSR will not return here since rountine pulls address off stack
 ;
 ;*******************
 ; J = JOY(n) where n=joystick number 1 or 2
@@ -4462,17 +4471,10 @@ nobutt lda #0    ;hibyte 0
 illqty7 jmp FCERR ;display illegal qty error
 ;
 ;*******************
-; K = KEY   - used with ON KEY GOSUB to indicate key causing event
-keyfn
- jsr CHRGET
- ldy keyentry    ;y=lobyte
- jmp nobutt
-;
-;*******************
 ; E = ERROR(n) where n=0 Error Number, n=1 Error Line Number
 err
  jsr getfnparam
- beq errorno
+ beq errorno     ;valid values 0 or 1
  dey
  bne illqty7
  ldy errline
@@ -5056,7 +5058,7 @@ fac2int jsr GETADR ;convert FAC1 to unsigned 2 byte int in $14,$15
  tax               ;if hi byte is not zero then
  bne illqty4       ;throw ill qty err
  tya               ;also return the result in the accumulator
- rts               ;processor flags set based on lobyte
+ rts               ;processor zero flag set based on lobyte
 ;*******************
 ;get a single-byte numeric parameter (0-255) inside parentheses
 getfnparam
@@ -5070,7 +5072,7 @@ getvalue  jsr FRMNUM ;eval numeric expr & type
  jsr GETADR          ;convert FAC1 to unsigned 2 byte int in $14,$15
  ldx $14             ;return lobyte in x reg
  ldy $15             ;return hibyte in y reg
- rts                 ;processor flags set based on hibyte
+ rts                 ;processor zero flag set based on hibyte
 ;*******************
 ; get plot type and color for graphics statements
 types
