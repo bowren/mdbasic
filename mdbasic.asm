@@ -8537,19 +8537,19 @@ cpytimfun
  adc #"0"
  sta BAD+13    ;one tenth of a second
 ;seconds
- lda BAD+6
+ lda BUF+$56
  sta BAD+10
- lda BAD+7
+ lda BUF+$57
  sta BAD+11
 ;minutes
- lda BAD+3
+ lda BUF+$53
  sta BAD+18
- lda BAD+4
+ lda BUF+$54
  sta BAD+19
 ;hours
- lda BAD
+ lda BUF+$50
  sta BAD+26
- lda BAD+1
+ lda BUF+$51
  sta BAD+27
 ;return ptr to string result
  ldx #<BAD+10
