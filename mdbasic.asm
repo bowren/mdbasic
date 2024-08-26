@@ -22,10 +22,13 @@ TXTPTR = $7a ;Pointer to the Address of the Current BASIC text char currently be
 STATUS = $90 ;Kernal I/O Status Word (ST)
 XSAV   = $97 ;Temporary .X Register Save Area
 LDTND  = $98 ;Number of Open I/O Files/Index to the End of File Tables
+MSGFLG = $9d ;Message Control Flag, 0=none, $C0=Kernal & CTRL, $80=CTRL only, $40=Kernal only
+EAL    = $ae ;vector to I/O end address of last loaded file
 FNLEN  = $b7 ;Length of Current Filename
 LA     = $b8 ;Current Logical File Number
 SA     = $b9 ;Current Secondary Address
 FA     = $ba ;Current Device Number: 0=keybrd,1=tape,2=rs232,3=screen,4-5=printer,8=11=disk
+STAL   = $c1 ;vector to I/O start address
 LSTX   = $c5 ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
 NDX    = $c6 ;number of keys in keyboard buffer
 RVS    = $c7 ;Flag: Print Reverse Characters? 0=No
@@ -191,9 +194,11 @@ ISAVE  = $0332 ;Kernal SAVE Routine
 
 ;MDBASIC IRQ management
 MDBIRQ = $0313 ;MDBASIC IRQ Control Register bit0=play,bit1=playsprite,bit2=key,bit3=spritecol16
-TMPIRQ = $0334 ;temp storage for original IRQ vector
-
-TMPERR = $0336 ;temp storage for original error handling vector
+TMPIRQ = $0334 ;2-byte temp storage for original IRQ vector
+;misc vectors (2-bytes each)
+TMPERR = $0336 ;original error handling vector
+TMPERRP= $0338 ;TXTPTR of statement for ON ERROR GOTO line#
+TMPKEYP= $033a ;TXTPTR of statement for ON KEY GOSUB line#
 
 ;CBM BASIC subroutines
 GETSTK = $a3fb ;check for space on stack
@@ -335,6 +340,7 @@ TOKEN_PRINT   = $99
 TOKEN_LIST    = $9b
 TOKEN_CLR     = $9c
 TOKEN_SYS     = $9e
+TOKEN_GET     = $a1
 TOKEN_NEW     = $a2
 TOKEN_TO      = $a4
 TOKEN_THEN    = $a7
@@ -369,7 +375,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.08.18"
+.text "mdbasic 24.08.25"
 .byte 13
 .text "(c)1985-2024 mark bowren"
 .byte 13,0
@@ -745,9 +751,9 @@ xcmd jsr tstcmd
  beq nocmd
  sei
  jsr LP2       ;get char in keyboard buffer
- sta keyentry  ;use K=KEY(0) to get value
+ sta keyentry  ;use K=KEY to get value
  inc keyflag   ;pause key trapping
- lda #3        ;actually 5 since jsr counts for 2
+ lda #3        ;actually is 5 since this jsr counts for 2
  jsr GETSTK    ;check for space on stack
  lda #>onkey1-1
  pha
@@ -763,9 +769,9 @@ xcmd jsr tstcmd
  pha
  lda #TOKEN_GOSUB
  pha
- lda keyptr
+ lda TMPKEYP
  sta TXTPTR
- lda keyptr+1
+ lda TMPKEYP+1
  sta TXTPTR+1
  lda keyline
  ldy keyline+1
@@ -802,8 +808,6 @@ oldcmd
  lda cmdtab,x   ;lobyte
  pha
  jmp CHRGET
-badtok
- jmp SNERR
 ;
 vall
  jsr CHRGET
@@ -845,7 +849,8 @@ back1
  beq binary
  cmp #"o"         ;octal
  beq octal
- bne badtok
+badtok
+ jmp SNERR
 ;
 ;Evalutate functions via vector IEVAL ($030A) originally pointing to EVAL $AE86
 newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
@@ -996,8 +1001,8 @@ fntime
 ;get time as a string
  jsr getimstr
  inc R6510
- ldy #>BAD
- lda #<BAD
+ ldy #>BUF
+ lda #<BUF+$50
  jsr STRLIT
  jmp CHRGET
 ;get time in seconds since midnight
@@ -1035,7 +1040,7 @@ lstpause
  beq out        ;just output pi symbol as-is
  cmp #FIRST_CMD_TOK ;first MDBASIC command token?
  bcs newlst     ;greater or equal to first MDBASIC token so decode the command text
- jmp $a724      ;perform part of CLR cmd. done here.
+ jmp $a724      ;perform part of CLR
 out jmp $a6f3   ;output byte as it is on cmd line
 newlst
  sbc #FIRST_CMD_TOK-1
@@ -1102,18 +1107,6 @@ nxtline
 vars dec R6510
  jmp varss
 ;
-buf2str
- ldy $fd
- dec R6510
-;copy input buffer to string variable
-copyer
- lda paintbuf1-1,y
- dey
- sta ($35),y
- bne copyer
- inc R6510
- rts
-;
 ;*******************
 ;DISK dos$ [,device] [,out$]]
 ;"S0:myfile.bas"                 - delete a file
@@ -1137,7 +1130,7 @@ disk
  ldx mdbin
 inpstr
  dec R6510
- lda $9d        ;display message if not in prg mode
+ lda MSGFLG     ;display message if not in prg mode
  jsr bufio      ;read response and print if needed
  inc R6510
  bcs errmdb     ;carry indicates i/o error
@@ -1538,11 +1531,13 @@ setstr
  beq valdone   ;zero-length string
  jsr GETSPA    ;alloc new str return ptr in $35,$36 and length in A reg
  jsr setstrptr ;set pointer to newly allocated string
- jmp buf2str   ;copy data to string
+buf2str
+ dec R6510
+ jmp buf2strg
 ;
 ;read a byte with timeout (if enabled)
 waitread
- jsr $f086     ;CHRIN for RS-232 device
+ jsr $f086     ;GETIN for RS-232 device
  sta $61
  lda RSSTAT    ;get status without clearing it
  beq byter     ;no errors then accept byte
@@ -1617,7 +1612,7 @@ rdstr
  rts
 ;
 ;*******************
-; SYS address [,a] [,x] [,y] [,p]
+; SYS address [,a [,x [,y [,p]]]]
 sys
  jsr getvaluez ;get 2-byte int into $14 lobyte, $15 hibyte
  ldy #252      ;prepare for loop of 4 registers
@@ -1654,7 +1649,7 @@ decx dex
  lda $a2       ;jiffy clock updated 60 times per sec.
 dlay2 cmp $a2
  beq dlay2
- lda LSTX      ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
+ lda LSTX      ;matrix coordinate of last key pressed, 64=none
  cmp #$3f      ;STOP key?
  bne delay2    ;carry flag will be returned to caller to indicate STOP key pressed
 stopnow rts
@@ -1914,8 +1909,8 @@ xf4bf
  lda SA     ;current secondary address
  jsr TKSA   ;send a secondary address to a device on the serial bus after talk
  jsr ACPTR  ;receive a byte of data from a device on the serial bus
- sta $ae    ;low byte of address for load which will increment to the end address
- sta $c1    ;remember start address
+ sta EAL    ;low byte of address for load which will increment to the end address
+ sta STAL   ;remember start address
  lda STATUS ;kernal I/O status
  lsr        ;shift bit 1 (serial read timeout)
  lsr        ;right into carry
@@ -1923,27 +1918,27 @@ xf4bf
  jmp $f704  ;yes, handle error #4 - FILE NOT FOUND
 oklod
  jsr ACPTR  ;receive a byte of data from a device on the serial bus
- sta $c2    ;remember start address
+ sta STAL+1 ;remember start address
  jsr $f4e3  ;continue with original LOAD subroutine
  bcc oklod2 ;carry set indicates error
  jmp $e0f9  ;handle i/o error
 oklod2
  jsr chkio  ;check the I/O status
- lda $9d    ;display message if not in prg mode, #$C0=kernal & ctrl, #$80=ctrl only
+ lda MSGFLG ;display message if not in prg mode
  bpl lodone ;don't display load addresses
  jsr $ab3f  ;print space
  ldx TXTTAB ;assume BASIC mem load
  lda TXTTAB+1
  ldy $fe    ;secondary address: 0=BASIC load, 1=binary
  beq prtmem
- ldx $c1    ;print mem ptr from file
- lda $c2
+ ldx STAL   ;print mem ptr from file
+ lda STAL+1
 prtmem
  jsr LINPRT ;print 2-byte binary value
  lda #"-"
  jsr CHROUT
- ldx $ae    ;ptr to end addr of loaded file
- lda $af
+ ldx EAL    ;ptr to end addr of loaded file
+ lda EAL+1
  jsr LINPRT ;print 2-byte binary value
 lodone
  lda VERCK  ;load=0 or 1=verify
@@ -1951,16 +1946,16 @@ lodone
  lda $fe    ;secondary address
  bne lodbin ;binary load does not need to adjust BASIC mem ptrs
 lodbas
- ldx $ae    ;restore x,y ptr to end of prg from load subroutine
- ldy $af
+ ldx EAL    ;restore x,y ptr to end of prg from load subroutine
+ ldy EAL+1
  clc        ;no error
 lodfin
  rts
 lodbin
  lda TXTTAB+1 ;check if binary load was actually a BASIC prg
- cmp $c2      ;by comparing the start address of loaded binary
+ cmp STAL+1   ;by comparing the start address of loaded binary
  bne isbin    ;with the start address of BASIC prg mem
- lda $c1      ;if it was loaded exactly in BASIC mem
+ lda STAL     ;if it was loaded exactly in BASIC mem
  cmp TXTTAB   ;then finish load as usual to init mem ptrs
  beq lodbas   ;this will kill the current running BASIC prg
 isbin         ;otherwise do not return to calling subroutine
@@ -2010,15 +2005,15 @@ osave
  jmp $e156
 bsaver
  jsr getvalue+3 ;start address
- stx $c1
- sty $c2
+ stx STAL
+ sty STAL+1
  jsr getvalueg ;end address
- stx $ae
- sty $af
+ stx EAL
+ sty EAL+1
  jsr CHRGET   ;advance to next param or end of statement
  jsr $e1d4    ;set parms for LOAD, VERIFY, SAVE
- ldx $ae      ;ptr to end address
- ldy $af      ;in x and y reg
+ ldx EAL      ;ptr to end address
+ ldy EAL+1    ;in x and y reg
  lda #$c1     ;first byte in zero-page used as ptr to start address
  jmp $e15f    ;save RAM to device - finish save
 ;
@@ -2375,8 +2370,8 @@ onkey jsr CHRGET
  jmp onkeyoff
 onkeygo
  jsr getline
- stx keyptr   ;of the line# specified
- sty keyptr+1
+ stx TMPKEYP  ;of the line# specified
+ sty TMPKEYP+1
  lda $14
  sta keyline
  lda $15
@@ -2401,8 +2396,8 @@ onerres
  jsr seterrvec     ;and failed statement are skipped
  jmp CHRGET
 errgoto jsr getline
- stx errtxtptr     ;of the line# specified
- sty errtxtptr+1
+ stx TMPERRP       ;of the line# specified
+ sty TMPERRP+1
  lda $14
  sta errtrap
  lda $15
@@ -2490,9 +2485,9 @@ trap
  pha
  lda #TOKEN_ERROR
  pha
- lda errtxtptr
+ lda TMPERRP
  sta TXTPTR
- lda errtxtptr+1
+ lda TMPERRP+1
  sta TXTPTR+1
  lda errtrap
  ldy errtrap+1
@@ -3346,7 +3341,7 @@ clrsid sta FRELO1,y
 ;NTSC and PAL hold the value of 1Hz (based on clock speed)
 ;REG_VAL=FREQUENCY/NTSC
 ;VOICE CLR
-;VOICE voice#, frequency(0 to 3995 for NTSC machines)
+;VOICE voice#, frequency(0 to 3994.997 for NTSC machines)
 voice
  php
  cmp #TOKEN_CLR  ;clr token?
@@ -3464,7 +3459,17 @@ line
  cmp #TOKEN_INPUT  ;input token (line input)
  bne baddraw       ;SYNTAX ERROR
  jsr ERRDIR        ;if not in prg mode, illegal direct error
- jsr peekop
+;check next required txt char without advancing TXTPTR
+ ldy #1            ;should be a quote symbol or str var name
+peekop
+ lda (TXTPTR),y
+ beq mop3          ;end of line terminator
+ iny
+ cmp #" "          ;skip over spaces
+ beq peekop
+ cmp #":"          ;end of statement terminator?
+ beq mop3          ;sorry, parameter is required
+;check for quoted prompt string
  cmp #"""
  bne readline
  jsr getstr   ;string is returned in registers y=hi byte, x=lo byte, a=length
@@ -3746,16 +3751,26 @@ chk24 cmp #24
 ;
 mop jmp missop
 ;
+keyclr
+ lda #0
+ sta NDX
+ jmp CHRGET
+keylist dec R6510
+ jmp keylistt
+;
 ;*******************
-; KEY LIST      -list current function key assignments
-; KEY OFF       -turn off key trapping (enabled by ON KEY)
-; KEY CLR       -clear the keyboard buffer
-; KEY WAIT [A$] -wait for any keypress, optionally store in str var
-; KEY n, "string"  where n = (1-8)
+; KEY LIST        -list current function key assignments
+; KEY OFF         -turn off key trapping (enabled by ON KEY)
+; KEY CLR         -clear the keyboard buffer
+; KEY WAIT [var]  -wait for any keypress, optionally store result in var of any type
+; KEY GET var     -get key (or null) from buffer and store result in var of any type
+; KEY n, "string" -assign a function key n (1 to 8)
 key
  beq mop
  cmp #TOKEN_CLR
  beq keyclr
+ cmp #TOKEN_GET
+ beq keyget
  cmp #TOKEN_WAIT
  beq keywait
  cmp #TOKEN_OFF
@@ -3803,25 +3818,29 @@ keyoff
  sta keyflag
  sta keyentry
 kdone rts
+keyget
+ jsr CHRGET
+getkey
+ jsr getvar
+ ldx #0
+ lda NDX
+ beq setvar
+;get byte in keyboard buffer
+ sei
+ jsr LP2
+ ldx #1
+setvar
+ sta $61     ;store byte as lobyte in FAC1 for later conversion to float
+ ldy $fd     ;offset to store result, strings use 0, int use 1, float n/a
+ sta ($35),y ;use buffer if string, variable memory for int and float (n/a)
+ stx $fd     ;when string type length is 0 or 1, otherwise not used
+ jmp setval
 keywait
  lda NDX
  beq keywait
  jsr CHRGET
- beq kdone
- jsr getvar  ;get or setup target variable
- sei
- jsr LP2     ;get char in keyboard buffer
- sta $61     ;float store lobyte in FAC1 to convert to float
- ldy $fd     ;offset to store result, strings use 0, int use 1
- sta ($35),y ;store byte in variable memory for string and int
- inc $fd     ;when string type length=1, otherwise not used
- jmp setval
-keyclr
- lda #0
- sta NDX
- jmp CHRGET
-keylist dec R6510
- jmp keylistt
+ bne getkey
+ rts
 ;
 ;*******************
 ; SCROLL x1, y1 TO x2, y2, [direction 0-3], [wrap 0-1]
@@ -4735,7 +4754,7 @@ keychk
  beq nokey      ;always branches
 ;start of the original mdbasic routine
 keychk2
- lda $9d        ;control messages enabled?
+ lda MSGFLG     ;control messages enabled?
  beq nokey      ;no, use original routine
  lda QTSW       ;editor in quote mode?
  bne nokey      ;yes, use original routine
@@ -4962,14 +4981,6 @@ linnul lda $14     ;if no line num given
  sta $14
  sta $15
 opgot rts
-;*******************
-peekop ldy #1
-peekoper lda (TXTPTR),y
- beq peekdone
- iny
- cmp #" "
- beq peekoper
-peekdone rts
 ;*******************
 comchk
  ldy #0            ;quickly check
@@ -5223,11 +5234,9 @@ md418      .byte 0      ;current volume (lo nybble) and filter type (hi nybble)
 errnum     .byte 0      ;last error number that occured, default 0 (no error)
 errline    .word $ffff  ;last line number causing error, default -1 (not applicable)
 errtrap    .word 0      ;error handler line number
-errtxtptr  .word 0      ;basic txt ptr of statement causing error
 
 keyflag    .byte 0      ;key capture mode 0=disabled, 1=enabled, 2=paused
 keyentry   .byte 0      ;scan code of the last key captured with ON KEY statement enabled
-keyptr     .word 0      ;basic txt ptr of statement for ON KEY GOSUB line#
 keyline    .word $ffff  ;line number for ON KEY subroutine
 keyidx     .byte 0      ;current index of char to put in keyboard buffer via IRQ
 keystrflg  .byte 0      ;flag to indicate key string from KEY cmd
@@ -5342,7 +5351,8 @@ temp2     .byte 0
 playoct   .byte 4  ;default octave 4
 playlen   .byte 30 ;notelength for each voice
 playindex .byte 0  ;index of current char in play string for each voice
-;** play table ***
+
+;** music notes table ***
 ;These numbers represent the middle octave and are only for the SID freq control registers
 ;CLOCK is NTSC=1022727.143, PAL=985248.611
 ;FREQUENCY=REGVAL*(CLOCK/16777216)Hz
@@ -8296,9 +8306,9 @@ nxtpg
  bne poker
 poked jmp memnorm
 ;--------------
-;perform HEX$(s$)
+;perform HEX$(s$) for 32-bit number
 hexx
- ldy #$00
+ ldy #$50    ;use last 9 bytes in BUF
  lda $62
  jsr dechex
  lda $63
@@ -8308,19 +8318,19 @@ hexx
  lda $65
  jsr dechex
  lda #$00
- sta BAD,y
+ sta BUF,y   ;string len is 8 chars plus a zero-byte terminator
 ;find most significant digit index
- ldy #0
+ ldy #$50
 nxzro
- lda BAD,y
- beq hexzro ;reached end of str so value is 0
- cmp #"0"   ;ignore leading zeros
+ lda BUF,y
+ beq hexzro  ;reached end of str so value is 0
+ cmp #"0"    ;ignore leading zeros
  bne msd
  iny
  bne nxzro
 hexzro dey
-msd tya   ;A(lo) Y(hi) is ptr to zero-term str
- ldy #$01
+msd tya      ;A(lo) Y(hi) is ptr to zero-term str
+ ldy #>BUF
  rts
 dechex pha
  lsr
@@ -8333,7 +8343,7 @@ dechex pha
  adc #$07
 add48 clc
  adc #48
- sta BAD,y
+ sta BUF,y
  iny
  pla
  and #$0f
@@ -8343,7 +8353,7 @@ add48 clc
  adc #$07
 noadd7 clc
  adc #48
- sta BAD,y
+ sta BUF,y
  iny
 doneit
  rts
@@ -8463,13 +8473,13 @@ not12
  adc #%00010010  ;12 in BCD format
  cld
 getime
- ldy #0
+ ldy #$50        ;use last 9 bytes in BUF
  jsr timedig
  lda TO2MIN
  jsr timedig
  lda TO2SEC
  jsr timedig
- lda TO2TEN ;reading resumes capture of time to these registers
+ lda TO2TEN      ;reading resumes capture of time to these registers
  rts
 ;get time digit
 timedig
@@ -8480,20 +8490,20 @@ timedig
  lsr
  clc
  adc #"0"
- sta BAD,y
+ sta BUF,y
  iny
  txa
  and #15
  clc
  adc #"0"
- sta BAD,y
+ sta BUF,y
  iny
  lda #":"
- cpy #8
+ cpy #$58
  bcc setterm
  lda #0
 setterm
- sta BAD,y
+ sta BUF,y
  iny
  rts
 ;
@@ -8863,12 +8873,12 @@ fstart
  cmp #23
  beq fend
  bcs infptrs
- lda $c1     ;last load start address
- ldy $c2
+ lda STAL    ;last load start address
+ ldy STAL+1
  rts
 fend
- lda $ae     ;last load end address
- ldy $af
+ lda EAL     ;last load end address
+ ldy EAL+1
  rts
 infptrs
  sbc #24
@@ -9083,5 +9093,15 @@ pntreq lda $22
  lda $23
  cmp $25
 gbhah rts
+;
+;copy input buffer to string variable
+buf2strg
+ ldy $fd
+copyer
+ lda paintbuf1-1,y
+ dey
+ sta ($35),y
+ bne copyer
+ jmp memnorm
 ;
 .end
