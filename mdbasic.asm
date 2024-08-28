@@ -377,7 +377,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.08.27"
+.text "mdbasic 24.08.28"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -2954,17 +2954,18 @@ column
  jsr chkcomm  ;if current char is a comma then continue otherwise quit now
  jsr getbool  ;0=disable, 1=enable
  eor #1       ;flip value so that 0=enabled 1=disabled
- beq setcsr   ;enable cursor
-;disable cursor
- ldx BLNSW    ;is cursor already disabled? 0=enabled, 1=disabled
- bne csrdone  ;yes, then nothing to do
- sta BLNCT    ;set cursor remaining blink delay to 1 jiffy
+ ldy BLNON    ;if cursor blink is off
+ bne xxxx     ;then it is ok to enable or disable it
+;ensure cursor is enabled then wait 1 jiffy for blink off
+ ldy #1       ;1 jiffy
+ sty BLNCT    ;set cursor remaining blink delay to 1 jiffy
+ dey          ;0=cursor enabled
+ sty BLNSW    ;ensure cursor is enabled
 csrwait
- ldx BLNON    ;wait for cursor
+ ldy BLNON    ;wait for cursor
  beq csrwait  ;to blink off
-setcsr
+xxxx
  sta BLNSW    ;0=enable, 1=disable
-csrdone
  rts
 ;
 ;*****************
