@@ -34,7 +34,9 @@ NDX    = $c6 ;number of keys in keyboard buffer
 RVS    = $c7 ;Flag: Print Reverse Characters? 0=No
 BLNSW  = $cc ;Cursor Blink Enable: 0=Flash Cursor
 SFDX   = $cb ;Matrix Coordinate of Current Key Pressed
+BLNCT  = $cd ;Timer: Countdown to Blink Cursor
 GDBLN  = $ce ;ASCII value of char under csr (when blinking)
+BLNON  = $cf ;Flag: Was Last Cursor Blink on or off?
 PNTR   = $d3 ;Logical Cursor Column on Current Line
 QTSW   = $d4 ;Flag: Editor in Quote Mode? 0=No
 LNMX   = $d5 ;Maximum Length of Physical Screen Line (39 or 79)
@@ -375,9 +377,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.08.26"
-.byte 13
-.text "(c)1985-2024 mark bowren"
+.text "mdbasic 24.08.27"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -2952,9 +2952,19 @@ column
  clc          ;clear carry is flag to write new value
  jsr PLOT     ;read/set cursor position on screen
  jsr chkcomm  ;if current char is a comma then continue otherwise quit now
- jsr getbool
- eor #1       ;flip value so that 1=on 0=off
- sta BLNSW    ;0=flash cursor, otherwise no cursor
+ jsr getbool  ;0=disable, 1=enable
+ eor #1       ;flip value so that 0=enabled 1=disabled
+ beq setcsr   ;enable cursor
+;disable cursor
+ ldx BLNSW    ;is cursor already disabled? 0=enabled, 1=disabled
+ bne csrdone  ;yes, then nothing to do
+ sta BLNCT    ;set cursor remaining blink delay to 1 jiffy
+csrwait
+ ldx BLNON    ;wait for cursor
+ beq csrwait  ;to blink off
+setcsr
+ sta BLNSW    ;0=enable, 1=disable
+csrdone
  rts
 ;
 ;*****************
