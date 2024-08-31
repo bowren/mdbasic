@@ -346,6 +346,7 @@ TOKEN_GET     = $a1
 TOKEN_NEW     = $a2
 TOKEN_TO      = $a4
 TOKEN_THEN    = $a7
+TOKEN_EQUAL   = $b2
 TOKEN_EXP     = $bd
 TOKEN_VAL     = $c5
 
@@ -377,7 +378,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.08.28"
+.text "mdbasic 24.08.30"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -971,7 +972,7 @@ badtime2 jmp TMERR
 ;set the clock
 settime
  jsr CHRGET
- cmp #$b2         ;equal sign token
+ cmp TOKEN_EQUAL
  bne badtime
  jsr getstr
  dec R6510
@@ -3769,6 +3770,10 @@ keyclr
 keylist dec R6510
  jmp keylistt
 ;
+keyeq
+ jsr getvalg
+ jmp setkey
+;
 ;*******************
 ; KEY LIST        -list current function key assignments
 ; KEY OFF         -turn off key trapping (enabled by ON KEY)
@@ -3788,6 +3793,8 @@ key
  beq onkeyoff
  cmp #TOKEN_LIST
  beq keylist
+ cmp TOKEN_EQUAL
+ beq keyeq
  jsr FRMEVL     ;eval expression
  lda VALTYP     ;number or string?
  beq keynum     ;number is key assign
@@ -3827,6 +3834,7 @@ onkeyoff
 keyoff
  lda #0
  sta keyflag
+setkey
  sta keyentry
 kdone rts
 keyget
