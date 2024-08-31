@@ -972,7 +972,7 @@ badtime2 jmp TMERR
 ;set the clock
 settime
  jsr CHRGET
- cmp TOKEN_EQUAL
+ cmp #TOKEN_EQUAL
  bne badtime
  jsr getstr
  dec R6510
@@ -3793,7 +3793,7 @@ key
  beq onkeyoff
  cmp #TOKEN_LIST
  beq keylist
- cmp TOKEN_EQUAL
+ cmp #TOKEN_EQUAL
  beq keyeq
  jsr FRMEVL     ;eval expression
  lda VALTYP     ;number or string?
