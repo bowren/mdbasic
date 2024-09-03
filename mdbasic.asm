@@ -4,8 +4,8 @@
 ;
 ;zero-page registers
 R6510  = $01 ;LORAM/HIRAM/CHAREN RAM/ROM selection and cassette control register
-VERCK  = $0a ;Flag for LOAD or VERIFY
-COUNT  = $0b ;Index into the Text Input Buffer/Number of Array Subscripts/General Counter
+VERCK  = $0a ;flag for LOAD or VERIFY
+COUNT  = $0b ;general counter
 VALTYP = $0d ;Type of Data (255=String, 0=Numeric)
 INTFLG = $0e ;Type of Numeric Data (128=Integer, 0=Floating Point)
 GARBFL = $0f ;Flag for LIST, Garbage Collection, and Program Tokenization
@@ -13,26 +13,27 @@ CHANNL = $13 ;Current I/O Channel (CMD Logical File) Number
 VARTAB = $2d ;Pointer to the Start of the BASIC Variable Storage Area
 TXTTAB = $2b ;Pointer to the Start of BASIC Program Text
 ARYTAB = $2f ;Pointer to the Start of the BASIC Array Storage Area
-STREND = $31 ;Pointer to End of the BASIC Array Storage Area (+1), and the Start of Free RAM
+STREND = $31 ;Pointer to Start of Free BASIC RAM
 CURLIN = $39 ;Current BASIC Line Number (lobyte)
 OLDLIN = $3b ;Previous BASIC Line Number (lobyte)
 OLDTXT = $3d ;Pointer to the Address of the Current BASIC Statement
 DATPTR = $41 ;Pointer to the Address of the Current DATA Item
-TXTPTR = $7a ;Pointer to the Address of the Current BASIC text char currently being scanned
+TXTPTR = $7a ;Pointer to the Address of the Current BASIC text char
 STATUS = $90 ;Kernal I/O Status Word (ST)
 XSAV   = $97 ;Temporary .X Register Save Area
 LDTND  = $98 ;Number of Open I/O Files/Index to the End of File Tables
-MSGFLG = $9d ;Message Control Flag, 0=none, $C0=Kernal & CTRL, $80=CTRL only, $40=Kernal only
+MSGFLG = $9d ;Msg Ctrl: 0=none, $40=Kernal, $80=CTRL, $C0=Kernal & CTRL
 EAL    = $ae ;vector to I/O end address of last loaded file
 FNLEN  = $b7 ;Length of Current Filename
 LA     = $b8 ;Current Logical File Number
 SA     = $b9 ;Current Secondary Address
-FA     = $ba ;Current Device Number: 0=keybrd,1=tape,2=rs232,3=screen,4-5=printer,8=11=disk
+FA     = $ba ;Current Device Number
+             ;0=keybrd,1=tape,2=rs232,3=screen,4-5=printer,8=11=disk
 STAL   = $c1 ;vector to I/O start address
 LSTX   = $c5 ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
 NDX    = $c6 ;number of keys in keyboard buffer
 RVS    = $c7 ;Flag: Print Reverse Characters? 0=No
-BLNSW  = $cc ;Cursor Blink Enable: 0=Flash Cursor
+BLNSW  = $cc ;Cursor Blink Disabled: 0=No, 1=Yes
 SFDX   = $cb ;Matrix Coordinate of Current Key Pressed
 BLNCT  = $cd ;Timer: Countdown to Blink Cursor
 GDBLN  = $ce ;ASCII value of char under csr (when blinking)
@@ -51,8 +52,10 @@ BUF    = $0200 ;BASIC Line Editor Input Buffer
 COLOR  = $0286 ;Current Foreground Color for Text
 GDCOL  = $0287 ;Color of Character under Cursor
 HIBASE = $0288 ;Top Page of Screen Memory
-RPTFLAG= $028a ;which keys repeat 0=only cursor, insert, delete and spacebar keys, 64=no keys, 128=all keys
-SHFLAG = $028d ;SHIFT/CTRL/Logo Keypress flags Bit0 SHIFT, Bit1 Commodore Logo Key, Bit2 Ctrl Key
+RPTFLAG= $028a ;which keys repeat
+               ;0=cursor, insert, delete and spacebar, 64=none, 128=all
+SHFLAG = $028d ;SHIFT/CTRL/Logo Keypress flags
+               ;bit0 SHIFT, bit1 Commodore Logo Key, bit2 Ctrl Key
 PALNTSC= $02a6 ;PAL/NTSC TV Standard Flag: 0=NTSC, 1=PAL
 
 ;Kernal Tables for File Management
@@ -70,7 +73,7 @@ RIDBE  = $029b ;Index to End of Receive Buffer
 RIDBS  = $029c ;Index to Start of Receive Buffer
 RODBS  = $029d ;Index to Start of Transmit Buffer
 RODBE  = $029e ;Index to End of Transmit Buffer
-ENABL  = $02a1 ;IRQ Statuses, 1=Transmittinging, 2=Receiving, 16=Waiting 
+ENABL  = $02a1 ;IRQ Statuses, 1=Transmittinging, 2=Receiving, 16=Waiting
 
 ;SYS command mock registers
 SAREG  = $030c ;Storage Area for processor registers A,X,Y,P
@@ -89,41 +92,43 @@ SCROLY = $d011 ;Vertical Fine Scrolling and Control Register
 ;Bit 7 High bit (Bit 8) of raster compare register at 53266 ($D012)
 ;
 LPENX  = $d013 ;Light Pen Horizontal Position (0-160) must by multiplied by 2
-SPENA  = $d015 ;Sprite Enable Register - Bit 0  Enable Sprite 0 (1=sprite is on, 0=sprite is off)
+SPENA  = $d015 ;Sprites 0-7 Enable Register (1=on, 0=off)
 
 SCROLX = $d016 ;Horizontal Fine Scrolling and Multicolor Control Register
 ;Bits 0-2 Fine scroll display horizontally by X dot positions (0-7)
-;Bit 3 Select a 38-column or 40-column text display (1=40 columns, 0=38 columns)
-;Bit 4 Enable multicolor text or multicolor bitmap mode (1=multicolor on, 0=multicolor off)
+;Bit 3 Select a 38-column or 40-column text display (1=40 columns, 0=38 cols)
+;Bit 4 Enable multicolor text or bitmap mode (1=on, 0=off)
 ;Bit 5 Video chip reset (0=normal operations, 1=video completely off)
 ;Bits 6-7 Unused
 ;
 
-YXPAND = $d017 ;Sprite Vertical Expansion Register
-;Bit 0-7 is Sprite 0-7 flag to expand sprite n vertically (1=double height, 0=normal height)
+YXPAND = $d017 ;Sprites 0-7 Vertical Expansion Register (1=2x, 0=normal)
 
 VMCSB  = $d018 ;VIC-II Chip Memory Control Register
 ;Bit 0 Unused
-;Bits 1-3 Text character dot-data base address within VIC-II 16K addressable memory.
-;   The default is %100 (4) = 4 * 1K = $1000 (4096) the address of the Character Dot-Data area in ROM.
-;   The uppercase characters are the first 2K.  The alternate character set which contains both
-;   upper and lowercase characters are in the second 2K.  To shift to the alternate
-;   character set, you must change the value of this nybble to %110 (6) = 6 * 1K = $1800 (6144).
+;Bits 1-3 Text char dot-data base address in VIC-II 16K addressable memory.
+;   The default is %100 (4) = 4 * 1K = $1000 (4096) the address of Dot-Data.
+;   Uppercase chars are the first 2K. The alternate charset which contains both
+;   upper and lowercase chars are in the second 2K. To shift to the alternate
+;   charset, change this nybble to %110 (6) = 6 * 1K = $1800 (6144).
 ;
 ;Bits 4-7 Video matrix base address within VIC-II 16K addressable memory
 ;   The default is %0001 (1) = 1 * 1K = $0400 (1024).
-;   Select which 1024-byte area of memory will contain the screen codes for characters on screen.
-;   The last eight bytes of this 1K area are used as pointers to select the 64-byte block of memory
-;   for each sprite.
+;   Select which 1K area of memory will have screen codes for text on screen.
+;   The last 8 bytes of this 1K area are used as pointers to select the 64-byte
+;   block of memory for each sprite.
 ;
 SPBGPR = $d01b ;Sprite to Foreground Display Priority Register
 SPMC   = $d01c ;Sprite Multicolor Registers
 XXPAND = $d01d ;Sprite Horizontal Expansion Register
 EXTCOL = $d020 ;Border Color Register
-BGCOL0 = $d021 ;Background Color 0 background color for text modes, sprites and mc bitmap. Default 6 (blue)
-BGCOL1 = $d022 ;Background Color 1 multicolor mode bits 6 and 7 bit-pair 01 (screen codes  64-127) Default 1 (white)
-BGCOL2 = $d023 ;Background Color 2 multicolor mode bits 6 and 7 bit-pair 10 (screen codes 128-191) Default 2 (red)
-BGCOL3 = $d024 ;Background Color 3 multicolor mode bits 6 and 7 bit-pair 11 (screen codes 192-255) Default 3 (cyan)
+BGCOL0 = $d021 ;Bkgnd Color 0 for text, sprites and mc bitmap (default 6=blue)
+BGCOL1 = $d022 ;Bkgnd Color 1 mc mode bits 6,7 bit-pair 01 (default 1=white)
+               ;for screen codes  64-127
+BGCOL2 = $d023 ;Bkgnd Color 2 mc mode bits 6,7 bit-pair 10 (default 2=red)
+               ;for screen codes 128-191
+BGCOL3 = $d024 ;Bkgnd Color 3 mc mode bits 6,7 bit-pair 11 (default 3=cyan)
+               ;for screen codes 192-255
 SPMC0  = $d025 ;Sprite Multicolor Register 0 (01 bit-pair)
 SPMC1  = $d026 ;Sprite Multicolor Register 1 (11 bit-pair)
 SP0COL = $d027 ;Sprite 0 Color Register (the default color value is 1, white)
@@ -140,7 +145,7 @@ CUTLO  = $d415 ;Filter Cutoff Frequency (lo byte)
 CUTHI  = $d416 ;Filter Cutoff Frequency (high byte)
 RESON  = $d417 ;Filter Resonance Control Register
 SIGVOL = $d418 ;Volume and Filter Select Register
-POTX   = $d419 ;Read Position of Game Paddle 1 or 3, POTX+1 ($d41a) = Paddle 2 or 4
+POTX   = $d419 ;Read Game Paddle 1 or 3, POTX+1 ($d41a) = Paddle 2 or 4
 
 ;Complex Interface Adapter (CIA) #1 Registers ($DC00-$DC0F)
 CIAPRA = $dc00 ;Data Port Register A
@@ -151,10 +156,10 @@ CIACRA = $dc0e ;Control Register A
 ;Complex Interface Adapter (CIA) #2 Registers ($DD00-$DD0F)
 CI2PRA = $dd00 ;Data Port Register A
 ;Bits 0-1 Select VIC-II 16K addressable memory bank (0-3)
-;  00 Bank 3 (49152-65535, $C000-$FFFF) 16K RAM / Memory mapped I/O, character ROM, 4K Kernal
-;  01 Bank 2 (32768-49151, $8000-$BFFF) 16K RAM / BASIC text, 8K BASIC interpreter ROM
-;  10 Bank 1 (16384-32767, $4000-$7FFF) 16K RAM / BASIC text
-;  11 Bank 0 (    0-16383, $0   -$3FFF) 16K RAM / system variables, screen RAM, BASIC text
+;  00 Bank 3 ($C000-$FFFF) 16K RAM / Memory mapped I/O, char ROM, 4K Kernal
+;  01 Bank 2 ($8000-$BFFF) 16K RAM / BASIC text, 8K BASIC interpreter ROM
+;  10 Bank 1 ($4000-$7FFF) 16K RAM / BASIC text
+;  11 Bank 0 ($0000-$3FFF) 16K RAM / system variables, screen RAM, BASIC text
 ;*See zero-page memory location $01 bits 0 & 1 for RAM/ROM switching
 CI2PRB = $dd01 ;Data Port Register B
 C2DDRA = $dd02 ;Data Direction Register for port A (CI2PRA)
@@ -195,7 +200,8 @@ ILOAD  = $0330 ;Kernal LOAD Routine
 ISAVE  = $0332 ;Kernal SAVE Routine
 
 ;MDBASIC IRQ management
-MDBIRQ = $0313 ;MDBASIC IRQ Control Register bit0=play,bit1=playsprite,bit2=key,bit3=spritecol16
+MDBIRQ = $0313 ;MDBASIC IRQ Control Register
+               ;bit0=play, bit1=playsprite, bit2=key, bit3=spritecolor16
 TMPIRQ = $0334 ;2-byte temp storage for original IRQ vector
 ;misc vectors (2-bytes each)
 TMPERR = $0336 ;original error handling vector
@@ -231,14 +237,14 @@ LET    = $a9a5 ;perform LET
 PRINTN = $aa80 ;perform PRINT#
 CMD    = $aa86 ;perform CMD
 PRINT  = $aaa0 ;perform PRINT
-STROUT = $ab1e ;print msg from str whose addr is in the Y (hi byte) and A (lo byte) registers
+STROUT = $ab1e ;print msg from ptr in Y (hi byte) and A (lo byte) registers
 GET    = $ab7b ;perform GET
 INPUTN = $aba5 ;perform INPUT#
 INPUT  = $abbf ;perform INPUT
 READ   = $ac06 ;perform READ
 NEXT   = $ad1e ;perform NEXT
-FRMNUM = $ad8a ;evaluate a numeric expression and/or check for data type mismatch, store result in FAC1
-TESTNUM= $ad8d ;test if last expression was numeric, if not, type mismatch error
+FRMNUM = $ad8a ;evaluate numeric expression and check data type, result in FAC1
+TESTNUM= $ad8d ;test last expression was numeric, if not, type mismatch error
 FRMEVL = $ad9e ;evaluate expression
 PARCHK = $aef1 ;eval expr inside parentheses
 CHKCLS = $aef7 ;check for and skip closing parentheses
@@ -248,25 +254,25 @@ ISVAR  = $af28 ;get the value of a variable into FAC1
 DIM    = $b081 ;perform DIM
 PTRGET = $b08b ;search for a variable & setup if not found
 AYINT  = $b1bf ;convert FAC1 to a signed integer in FAC1
-GIVAYF = $b391 ;convert 16-bit signed integer to floating point (a=hibyte y=lobyte)
+GIVAYF = $b391 ;convert 16-bit signed int to floating-point (a=hibyte y=lobyte)
 ERRDIR = $b3a6 ;check if prg is running in direct mode/cause error
 DEF    = $b3b3 ;perform DEF
-STRLIT = $b487 ;scan and setup pointers to a string in memory ptr A lobyte, Y hibyte
+STRLIT = $b487 ;scan and setup ptrs to a str in memory ptr A lobyte, Y hibyte
 GETSPA = $b4f4 ;alloc space in mem for string
 FRESTR = $b6a3 ;discard a temporary string
 GETBYTC= $b79b ;input a parameter whose value is between 0 and 255
 VAL    = $b7ad ;perform VAL
-GETADR = $b7f7 ;convert FAC1 to unsigned 16-bit integer; result in $14 lobyte, $15 hibyte
+GETADR = $b7f7 ;convert FAC1 to unsigned 16-bit integer in ($14,$15)
 POKE   = $b824 ;perform POKE
 WAIT   = $b82d ;perform WAIT
 FADDH  = $b849 ;add 0.5 to FAC1
-NEGFAC = $b947 ;replace FAC1 with its 2's complement (make it a negative number)
+NEGFAC = $b947 ;replace FAC1 with its 2's complement (negate)
 DIV10  = $bafe ;divide FAC1 by 10
 MUL10  = $bae2 ;multiply FAC1 by 10
 FMULT  = $ba28 ;copy mem pointed by Y(hi),A(lo) to FAC2 then FAC1=FAC1*FAC2
 FDIVT  = $bb12 ;divide FAC2 by FAC1 FAC1 = (FAC2/FAC1)
-MOVFM  = $bba2 ;move a 5-byte floating point number from memory to FAC1, ptr = A=lobyte, Y=hibyte
-MOV2F  = $bbc7 ;move a 5-byte floating point number from FAC1 to memory $57-$5B BASIC numeric work area
+MOVFM  = $bba2 ;copy a 5-byte float from memory to FAC1, A=lobyte, Y=hibyte
+MOV2F  = $bbc7 ;copy a 5-byte float from FAC1 to memory, $57-$5B
 MOVEF  = $bc0f ;copy FAC1 to FAC2 without rounding
 SIGN   = $bc2b ;put the sign of FAC1 into accumulator
 ABS    = $bc58 ;perform ABS
@@ -378,7 +384,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.08.30"
+.text "mdbasic 24.08.31"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -854,7 +860,7 @@ badtok
  jmp SNERR
 ;
 ;Evalutate functions via vector IEVAL ($030A) originally pointing to EVAL $AE86
-newfun lda #$00   ;0=number, 255=string - all funcs take a one numeric parameter
+newfun lda #$00   ;0=number, 255=string - all funcs take one numeric param
  sta VALTYP       ;Flag Type of Data (String or Numeric) to enforce data type
  jsr CHRGET
  bcc xbcf3        ;numeric digit 0 to 9
@@ -983,8 +989,7 @@ settime
 ;reset clock to 12AM
 timeclr
  jsr CHRGET      ;skip over CLR token
-clrtime
- lda #%10010010  ;BCD 12am (am/pm flag=1 because it flips on write when hour is 12)
+ lda #%10010010  ;BCD 12 (am/pm flag=1 since it flips on write when hour is 12)
  sta TO2HRS      ;writing this reg stops time reg updates
  lda #0
  sta TO2MIN
@@ -1040,7 +1045,7 @@ lstpause
  cmp #TOKEN_PI  ;pi token?
  beq out        ;just output pi symbol as-is
  cmp #FIRST_CMD_TOK ;first MDBASIC command token?
- bcs newlst     ;greater or equal to first MDBASIC token so decode the command text
+ bcs newlst     ;decode MDBASIC token to text
  jmp $a724      ;perform part of CLR
 out jmp $a6f3   ;output byte as it is on cmd line
 newlst
@@ -1113,7 +1118,7 @@ vars dec R6510
 ;"S0:myfile.bas"                 - delete a file
 ;"N0:label,id"                   - full format disk with a label and id
 ;"N0:label"                      - soft format (BAM only) with label
-;"I0:"                           - initialize disk (clears last error and moves head to track 0, sector 0)
+;"I0:"                           - init disk-clr err, move head to trk 0 sec 0
 ;"C0:sourceFile=destinationFile" - copy a file
 ;"R0:newfileName=oldfileName"    - rename a file
 ;"V0:"                           - validate (defragment) disk
@@ -1149,7 +1154,7 @@ outstr
 gstr
  jsr CHRGET
  jsr PTRGET     ;search for a var & setup if not found
- sta $49        ;variable address is returned in a (lo byte) and y (hi byte) registers
+ sta $49        ;var address is returned in a (lo byte), y (hi byte) registers
  sty $4a
  lda $fd        ;string length
 setstrptr
@@ -1278,7 +1283,6 @@ prtopen
  rts
 ;
 ;*******************
-;The DUMP command supports multiple options based on a second required token (or expression)
 ;DUMP LIST [start]-[end]
 ;DUMP SCREEN
 ;DUMP BITMAP
@@ -1388,7 +1392,7 @@ tokclse
  lda mdbio    ;logical file number
  jsr $f314    ;find the index of an opened logical file number to X reg
  bne clsd232  ;zero flag indicates not found
- jsr $f31f    ;set current logical file, current device, and current seconday address
+ jsr $f31f    ;set current logical file, device and seconday address
  txa
  jsr $f2f2    ;remove from table of open files
  jsr $f483    ;Initialize IRQ Timers and data direction registers
@@ -1412,7 +1416,7 @@ waitout
  and #1
  bne waitout
 end232
- jmp $abb5    ;send UNLSN and UNTALK to serial device and restore default devices
+ jmp $abb5    ;send UNLSN & UNTALK to serial device and restore default devices
 ;
 ;*******************
 ;SERIAL OPEN [baud],[databits],[stopbits],[duplex],[parity],[handshake]
@@ -1506,7 +1510,7 @@ strdone
 
 ;return result based on data type
 rdone
- jsr $abb5    ;send UNLSN and UNTALK to serial device and restore default devices
+ jsr $abb5    ;send UNLSN, UNTALK to serial device then restore default devices
 
 ;apply value to variable
 setval
@@ -1586,8 +1590,8 @@ endtimer rts
 ;get or create pointer to string pointer provided as param
 getvar
  jsr PTRGET    ;search for a var & setup if not found
- sta $49       ;variable address is returned in a (lo byte) and y (hi byte) registers
- sty $4a       ;every string variable is a pointer consisting of 3 bytes, 2 for ptr, 1 for length
+ sta $49       ;var address is returned in a (lo byte) y (hi byte) registers
+ sty $4a       ;sting descriptor is 3 bytes, 2 for ptr, 1 for length
 ;determine data type to read
  ldx VALTYP    ;0=numeric, 255=string
  inx
@@ -1621,7 +1625,7 @@ regloop
  sty XSAV      ;current register index offset
  jsr CHRGOT    ;another param?
  beq sysend
- jsr GETADR-6  ;skip over comma then evaluate expression to single byte unsigned int into x reg
+ jsr GETADR-6  ;skip over comma then eval expr to a single byte into x reg
  txa
  ldy XSAV
  sta SAREG-252,y
@@ -1637,7 +1641,7 @@ wait
  jsr getvaluez ;get 2-byte int into $14 lobyte, $15 hibyte
  jsr CHRGOT    ;another param?
  beq delay2    ;no, do jiffy wait
- jsr GETADR-6  ;skip over comma then evaluate expression to single byte unsigned int into x reg
+ jsr GETADR-6  ;skip over comma then eval expr to a single byte into x reg
  jmp WAIT+3    ;continue with original WAIT cmd
 delay2         ;entry point for internal use; set x and y reg accordingly
  clc           ;flag for STOP key
@@ -1652,7 +1656,7 @@ dlay2 cmp $a2
  beq dlay2
  lda LSTX      ;matrix coordinate of last key pressed, 64=none
  cmp #$3f      ;STOP key?
- bne delay2    ;carry flag will be returned to caller to indicate STOP key pressed
+ bne delay2    ;carry set indicates STOP key pressed
 stopnow rts
 ;
 ;*******************
@@ -1824,7 +1828,7 @@ newrun
  lda #$00       ;RUN with file params
  sta VERCK      ;load or verify? 0=load, 1=verify
  jsr $e1d4      ;process file parameters
- jsr RUNC       ;reset ptr to current text char to the beginning of program text
+ jsr RUNC       ;reset TXTPTR to start of program text
  jsr $e16f      ;perform load
  jsr old        ;set BASIC prg ptrs
  lda #0         ;run without line number
@@ -1877,7 +1881,7 @@ romin
 newload
  sta $93     ;flag for load routine 0=Load, 1=Verify
  ldx SA      ;secondary address
- stx $fe     ;save for use after load to determine if mem ptrs need to be restored
+ stx $fe     ;used after load to determine if mem ptrs need to be restored
  cpx #16     ;mdbasic secondary address 16,17,18
  bcs newlod  ;indicates MDBASIC load
 oldload
@@ -1910,7 +1914,7 @@ xf4bf
  lda SA     ;current secondary address
  jsr TKSA   ;send a secondary address to a device on the serial bus after talk
  jsr ACPTR  ;receive a byte of data from a device on the serial bus
- sta EAL    ;low byte of address for load which will increment to the end address
+ sta EAL    ;lobyte of address for load which will increment to the end address
  sta STAL   ;remember start address
  lda STATUS ;kernal I/O status
  lsr        ;shift bit 1 (serial read timeout)
@@ -2055,7 +2059,7 @@ old2
  adc #$02
  sta VARTAB ;Pointer to the Start of the BASIC Variable Storage Area
  sta ARYTAB ;Pointer to the Start of the BASIC Array Storage Area
- sta STREND ;Pointer to End of the BASIC Array Storage Area (+1), and the Start of Free RAM
+ sta STREND ;Pointer to the Start of BASIC Free RAM
  bcc savex
  inx
 savex stx VARTAB+1
@@ -2511,7 +2515,7 @@ resume
 okresu
  jsr clearerr ;clear last error info
  jsr CHRGOT
- beq resum    ;no token or digit, then resume with statement that caused the error
+ beq resum    ;no token or digit? resume with statement that caused the error
  cmp #TOKEN_NEXT
  bne resume0
 ;perform RESUME NEXT - next statement after the one that caused the error
@@ -2574,8 +2578,8 @@ pullit2
 stoppull
  lda #$19     ;25=empty temp string index value
  sta $16      ;reset temp string stack
- lda #0
- sta $10      ;SUBFLG Subscript Reference to an Array or User-Defined Function Call (FN)
+ lda #0       ;clear SUBFLG, 0=normal var else var is array or user FN
+ sta $10
  jmp (IGONE)  ;read and execute the next statement
 _a807 cmp #$3a
  beq pullit
@@ -2791,7 +2795,7 @@ setm lda SPMC
  ora $bf        ;2^sprite#
 skipmc sta SPMC
 spntr
- jsr chkcomm    ;if no more params, quit now otherwise check for and skip over comma
+ jsr chkcomm    ;if no more params, quit now else check for and skip over comma
  cmp #","       ;if another comma then omit param
  beq prorty
 ;get sprite data ptr 0-255 (ptr*64)=start address
@@ -2801,7 +2805,7 @@ spntr
  jsr ptrhi      ;get hibyte of sprite ptr start address
  sta $62        ;sprite pointers are in the last 8 bytes of 1K screen RAM
  lda #$f8       ;lobyte of offset to first byte of sprite data ptrs
- sta $61        ;ptr to first sprite data ptr, ie bank 0 with 1K offset is $07F8
+ sta $61        ;ptr to first sprite ptr, ie bank 0 with 1K offset is $07F8
 
 ;apply ptr param
  lda $14        ;sprite ptr from cmd param
@@ -2861,7 +2865,7 @@ setmag
 ;*******************
 ;MULTI [TEXT] [cc1], [cc2]         - multicolor text mode
 ;MULTI COLOR  [eb1], [eb2], [eb3]  - extended background color mode
-;MULTI SPRITE [sc1], [sc2]         - multicolor sprite mode color bit patterns 01,11
+;MULTI SPRITE [sc1], [sc2]         - multicolor sprite mode, bit patterns 01,11
 multi
  cmp #TOKEN_SPRITE
  beq mcspri
@@ -2869,7 +2873,7 @@ multi
  bne chrmap
 ;MULTI COLOR [eb1], [eb2], [eb3]
  lda SCROLY        ;horiz fine scrolling and control reg
- ora #%01000000    ;turn on bit 6 - enable extended background color mode for text
+ ora #%01000000    ;bit 6=1 to enable extended background color mode for text
  sta SCROLY        ;Vertical Fine Scrolling and Control Register
  jsr CHRGET
  cmp #","
@@ -2921,7 +2925,7 @@ getcc2
  rts
 ;
 ;*******************
-; LOCATE [col], [row], [blink] - param values can be omitted to use current value
+; LOCATE [col], [row], [blink] - omitted params use current value
 locate
  beq mop6
  pha
@@ -2948,25 +2952,22 @@ row jsr CHRGET
  bcs badloc
  stx $fb
 column
- ldx $fb
- ldy $fc      ;y holds the line (from temp storage area)
+ ldx $fb      ;line
+ ldy $fc      ;column
  clc          ;clear carry is flag to write new value
  jsr PLOT     ;read/set cursor position on screen
  jsr chkcomm  ;if current char is a comma then continue otherwise quit now
  jsr getbool  ;0=disable, 1=enable
  eor #1       ;flip value so that 0=enabled 1=disabled
- ldy BLNON    ;if cursor blink is off
- bne xxxx     ;then it is ok to enable or disable it
-;ensure cursor is enabled then wait 1 jiffy for blink off
  ldy #1       ;1 jiffy
  sty BLNCT    ;set cursor remaining blink delay to 1 jiffy
- dey          ;0=cursor enabled
- sty BLNSW    ;ensure cursor is enabled
-csrwait
- ldy BLNON    ;wait for cursor
- beq csrwait  ;to blink off
-xxxx
- sta BLNSW    ;0=enable, 1=disable
+ ldy BLNSW    ;is cursor enabled?
+ bne setcsr   ;no, then set its new value now
+csrwait       ;otherwise wait for it to blink off
+ ldy BLNON    ;last blink state, 0=rvs, 1=norm
+ bne csrwait  ;wait for cursor to blink off
+setcsr
+ sta BLNSW    ;cursor: 0=enable, 1=disable
  rts
 ;
 ;*****************
@@ -2998,10 +2999,12 @@ designon
  lda CI2PRA     ;bits 0-1 mem bank, 00=bank3, 01=bank2, 10=bank1, 11=bank0
  and #%11111100 ;select VIC-II 16K mem bank 3 ($C000-$FFFF)
  sta CI2PRA     ;base address is now $C000
- lda #%00101100 ;video matrix offset %0010 (2*1K) = $0800; char dot data offset at %110 (6*1K) = $1800
- sta VMCSB      ;bit 0 unused; bits 1-3 char dot data base addr; bits 4-7 video matrix base addr
+ lda #%00101100 ;video matrix offset (2*1K) = $0800
+                ;char dot data offset (6*1K) = $1800
+ sta VMCSB      ;bit 0 unused; bits 1-3 char dot data base addr
+                ;bits 4-7 video matrix base addr
  lda #$c8       ;video matrix is at $c800
- sta HIBASE     ;let Kernal know video matrix is at $c800 so printed chars will be visible
+ sta HIBASE     ;video matrix is at $c800 for Kernal prints
  lda SCROLX
  and #%11101111 ;bit 4 off disable multicolor text/bitmap mode
  sta SCROLX
@@ -3032,7 +3035,7 @@ design
  sta $bf
  lda R6510
  pha
- and #%11111011 ;bit2=0 switch out I/O and bring in CHAREN ROM into bank $d000-$dfff
+ and #%11111011 ;bit2=0 switch out device I/O for CHAREN ROM bank $d000-$dfff
  sei
  sta R6510
 nex256 ldy #0
@@ -3103,16 +3106,16 @@ pokcol sta $c800,y  ;fill color mem for entire screen
 ;colorMode 0=hires, 1=multicolor (mc)
 ;bkgndColor is applied based on colorMode:
 ;clear 0=no clear, 1=clear
-;hires mode sets color RAM in video matrix with initialization of all 1000 bytes
+;hires mode sets color RAM in video matrix with init of all 1000 bytes
 ;mc mode sets the single bkgrnd color register BGCOL0
 ;MAPCOL c1,c2,c3 (c3 mc mode only) to change colors:
-;hires c1 (0-15) dot color, c2 (0-15) 8x8 square bkgnd color, c3 not used but can be set
+;hires c1 (0-15) dot color, c2 (0-15) 8x8 square bkgnd color
 ;multicolor uses dual plotted bit pattern to select the color:
 ;  00 from BGCOL0 (0-15)
 ;  01 from video matrix hi-nybble: c1 (0-15)
 ;  10 from video matrix lo-nybble: c2 (0-15)
 ;  11 from color RAM lo-nybble:    c3 (0-15)
-;NOTE when in mc mode all graphics cmds use color index 1-3 (not color value 0-15)
+;when in mc mode all graphics cmds use color index 1-3 instead of color 0-15
 ;as a color parameter to select the color from tri-color pallete
 ;
 bitmap
@@ -3176,15 +3179,15 @@ bitmapon
  ora #%00000011     ;bits 0-1 are set to 1=output (default)
  sta C2DDRA
  
- lda #%11000100     ;bits 0-1 VIC-II 16K memory bank 00=bank3 (49152-65535, $C000-$FFFF)
+ lda #%11000100     ;bits 0-1 VIC-II 16K memory bank 00=bank3 ($C000-$FFFF)
  sta CI2PRA         ;send bits out data port register
 
  lda SCROLY         ;turn on bitmap graphics mode
  ora #%00100000     ;bit#5 1=on, 0=off
  sta SCROLY         ;apply setting to control register
  lda #%00101100     ;bit 0 unused
-                    ;bits 1-3 text dot-data base offset=  110=6 ->6K offset from base $c000+6K=$d800
-                    ;bits 4-7 video matrix base offset = 0010=2 ->2K offset from base $c000+2K=$c800
+                    ;bits 1-3 text dot-data base offset of 6K $c000+6K=$d800
+                    ;bits 4-7 video matrix base offset of 2K $c000+2K=$c800
  sta VMCSB          ;apply setting to control register
  rts
 ;
@@ -3192,16 +3195,17 @@ bitmapon
 ;
 ;MAPCOL changes the default colors to be used when plotting dots on a bitmap
 ;In hires mode (c1,c2):
-; c1 plot color (0-15) of dot in same 8x8 square (upper 4-bits scan code in Video Matrix)
+; c1 plot color (0-15) of dot in 8x8 square (upper nybble from Video Matrix)
 ; c2 background color (0-15) of dot in 8x8 square (lower 4-bits in Color RAM)
 ;In multi color mode (c1,c2,c3):
 ;    00 Background Color Register 0 BGCOL0 ($D021)
 ; c1 01 Upper nybble of Video Matrix (scan code)
 ; c2 10 Lower nybble of Video Matrix (scan code)
 ; c3 11 Lower nybble of Color RAM for Video Matrix ($D800-$DBE8)
-;
-;hires mapcol 0,1   dot color black, background (of 8x8 square of dot) white
-;multi mapcol 0,1,2 bit patterns 01=black, 10=white, 11=red (00 is the background color in BGCOL0)
+;hires example:
+;mapcol 0,1  is dot color black, background (of 8x8 square of dot) white
+;multicolor example:
+;mapcol 0,1,2 is bit patterns 01=black, 10=white, 11=red (00 is BGCOL0)
 mapcol
  beq mop7
  cmp #","
@@ -3226,11 +3230,11 @@ getc1
  asl
  asl
  asl
- ora XSAV        ;apply new value to high nybble while keeping original low nybble value
+ ora XSAV        ;apply new high nybble while keeping original low nybble
  sta mapcolc1c2  ;replace global variable storage for c1 (plot color)
  rts
 getc2
- lda mapcolc1c2  ;again, get global variable storage but for low nybble this time
+ lda mapcolc1c2  ;again, get global variable storage but for low nybble
  and #%11110000  ;erase lo nybble
  sta XSAV        ;temp var for final byte value calculation
  jsr getval15    ;c2 (0-15) changes the background of the 8 x 8 square
@@ -3330,11 +3334,11 @@ waveit
 ; VOL n   where n=0 to 15
 vol
  jsr getval15z  ;only values from 0-15 allowed
- lda md418      ;read current value which includes upper nybble that holds the resonance
+ lda md418      ;get current volume (lo nybble) and resonance (hi nybble)
  and #%11110000 ;clear volume bits only
  ora $14        ;apply new volume bits only
 setvol
- sta SIGVOL     ;SID register lower nybble is volume, upper nybble is filter type
+ sta SIGVOL     ;SID register volume (lo nybble) and resonance (hi nybble)
 setvol2
  sta md418      ;mock register for $d418 Volume and Filter Select Register
  rts
@@ -3485,12 +3489,12 @@ peekop
  cmp #"""
  bne readline
  jsr getstr   ;string is returned in registers y=hi byte, x=lo byte, a=length
- txa          ;x reg has low byte of str ptr but next func needs it in a reg 
+ txa          ;x reg has low byte of str ptr but next func needs it in a reg
  jsr STROUT   ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
  jsr comchk
  bne mop3
 readline
- jsr INLIN    ;input a line to buffer from keyboard (80 chars max from keyboard)
+ jsr INLIN    ;input a line into buffer from keyboard (80 chars max)
  ldy #$ff     ;count number of chars
 fndend iny
  lda BUF,y
@@ -3590,8 +3594,8 @@ okvalu stx $fb
  sty $fc
  jsr ckcom2     ;check for and skip over comma, misop err if missing
  jsr getvalue   ;x=lobyte, y=hibyte
- bne hellno     ;y reg holds hibyte for y coordinate and must be zero
- cpx #200       ;x reg holds lobyte for y coordinate and must be between 0 and 199
+ bne hellno     ;y reg has hibyte for y coordinate and must be zero
+ cpx #200       ;x reg has lobyte for y coordinate, must be between 0 and 199
  bcs hellno
  stx $fd        ;y coordinate
  rts
@@ -3631,7 +3635,7 @@ circle
  jsr getval     ;get options value
  sta $2a        ;circle options
 circlept
- jsr types      ;get optional plot type and color; use last used values if not supplied
+ jsr types      ;get optional params for changing plot type and color
 docircle
 ;get multicolor mode flag
  lda SCROLX
@@ -3654,8 +3658,8 @@ norm
  ora #%00000011  ;select VIC-II 16K mem bank 0 ($0000-$4000)
  sta CI2PRA
  lda #$04        ;text page for kernal prints
- sta HIBASE      ;top page of screen mem
- lda #%00010101  ;bit0 is always 1; bits1-3 text chr dot data base address in 1K chunks
+ sta HIBASE      ;top page of screen mem for Kernal prints
+ lda #%00010101  ;bit0 always 1; bits1-3 text dot data base addr in 1K chunks
  sta VMCSB       ;bits 4-7 video matrix base address in 1K chunks
  lda #%11001000  ;display on, multicolor text/bitmap mode off
  sta SCROLX      ;40 columns, 0 horizontal scroll scan lines
@@ -3778,8 +3782,8 @@ keyeq
 ; KEY LIST        -list current function key assignments
 ; KEY OFF         -turn off key trapping (enabled by ON KEY)
 ; KEY CLR         -clear the keyboard buffer
-; KEY WAIT [var]  -wait for any keypress, optionally store result in var of any type
-; KEY GET var     -get key (or null) from buffer and store result in var of any type
+; KEY WAIT [var]  -wait for keypress, optionally put result in var of any type
+; KEY GET var     -get key (or null) from buffer into var of any type
 ; KEY n, "string" -assign a function key n (1 to 8)
 key
  beq mop
@@ -4043,7 +4047,7 @@ mop2 jmp missop
 ;  $d416     $d415    Target Filter frequency registers
 ; 11111111  XXXXX111  Target bits to map from parameter value, X=not used
 ;
-;shift hibyte left 5 times to promote lower 3 bits to highest 3 bits, fill with 0
+;shift hibyte left 5x to promote lower 3 bits to highest 3 bits, fill with 0
 okfilt
  asl
  asl
@@ -4082,7 +4086,7 @@ reson
 ;Bit5 Select band-pass filter, 1=band-pass on, 0=off
 ;Bit6 Select high-pass filter, 1=high-pass on, 0=off
 ;Bit7 Disconnect output of voice 3, 1=disconnect, 0=connect
-;since SID registers can only be written to, an alternate var will hold on to it
+;since SID registers can only be written to, an alternate var will hold it
 ;0. None.
 ;1. A low-pass filter is available, which suppresses the volume of those
 ;frequency components that are above a designated cutoff level.
@@ -4280,12 +4284,13 @@ inivoc
  ora #%00001111 ;set volume to max
  jmp setvol
 ;
-;*******************************************************************************
+;******************************************************************************
 ;* MDBASIC Functions
-;*******************************************************************************
+;******************************************************************************
 ;
+; I = INSTR(src$,find$)
 ; I = INSTR(offset,src$,find$)
-;if first expression is int type then offset provided otherwise offset=1 (default)
+;if first param is numeric then use as offset, otherwise offset=1 (default)
 instr
  jsr CHRGET   ;process next cmd text
  jsr CHKOPN   ;Check for and Skip Opening Parentheses
@@ -4362,7 +4367,8 @@ fix
  jmp trunc      ;truncate fractional portion
 ;
 
-;round FAC1 to the nearest whole number by adding .5 to absolute value then truncate
+;round FAC1 to the nearest whole number
+;add 0.5 to the absolute value then truncate remainder
 doround
  lda $66        ;FAC1 sign 0=positive, 255=negative
  pha            ;save sign
@@ -4380,8 +4386,10 @@ trunca
  jmp NEGOP      ;otherwise make negative again
 
 ;*******************
-; V = ROUND(n)   where n=num to round to nearest whole number
-; V = ROUND(n,d) where n=num to round, d(-9 to +9) = num of places left (-) or right (+) of decimal point
+; V = ROUND(n)    -round to nearest whole number
+; V = ROUND(n,d)  -round to specific precision
+; n is the 32-bit floating point number to round, d is the precision
+; d(-9 to +9) is the number of places left (-) or right (+) of decimal point
 round
  jsr CHRGET
  jsr CHKOPN     ;check for and skip opening parentheses
@@ -4416,7 +4424,7 @@ round1
 ;restore param1 to FAC1
  lda #<BUF+$54  ;5-byte buffer pointer to unused
  ldy #>BUF+$54  ;memory area at end of line input buffer
- jsr MOVFM      ;copy a 5-byte floating point number from memory to FAC1 A=lo, Y=hi
+ jsr MOVFM      ;copy a 5-byte float from memory to FAC1 A=lo, Y=hi
  lda $14        ;decimal places to round
  beq doround    ;zero will round to nearest whole number
 ;move decimal point to the right or left based on sign of num places
@@ -4504,9 +4512,9 @@ errorno
  jmp nobutt
 ;
 ;*******************
-; P = PEN(n) where (n=0:x, n=1:y) to read $D013 (X) and $D014 (Y) Light Pen Registers.
+; P = PEN(n) where n: 0=x-coordinate, 1:y-coordinate
 ;For PENY there are 200 visible scan lines possible so value is exact.
-;For PENX there are only 8 bits available for 320 possible horizontal axis values.
+;For PENX there are only 8 bits available for 320 possible horiz axis values.
 ;Therefore the value is accurate only to every second dot position.
 ;The number will range from 0 to 160 and must be multiplied by 2 in order to
 ;approximate the actual horizontal dot position of the light pen.
@@ -4550,7 +4558,7 @@ pendone          ;return 2-byte int value
  jmp GIVAYF      ;convert binary int to FAC then return
 ;
 ;*******************
-; V = INF(n) where n = 0 to 15 to select info
+; V = INF(n) where n = 0 to 67 to select info
 inf
  jsr getfnparam
  cmp #68
@@ -4574,7 +4582,7 @@ pot
 ;
  cmp #3          ;set carry flag if pot num 3 or 4
  ldx #%11000000  ;bits 6,7 set to output to select port 1 or 2 paddle read
-                 ;bits 3,4 set to input for paddle buttons, the rest are not needed
+                 ;bits 3,4 set to input paddle buttons, the rest are not needed
  ldy #1          ;port index 0=A (port 2), 1=B (port 1)
 ;keyboard off
  sei             ;prevent irq from using port for keyboard
@@ -4638,7 +4646,7 @@ resvec
  sei         ;disable interrupts
  txs         ;clear the stack
  cld         ;ensure decimal mode is turned off
- stx SCROLX  ;reset video chip (bit5) visibly by using 38 cols (bit3) & mc mode (bit4)
+ stx SCROLX  ;reset video chip and show mc text mode for visual effect
  jsr IOINIT  ;init CIA i/o devices
  jsr RAMTAS  ;init RAM, tape buffer & screen
  jsr RESTOR  ;restore default I/O vectors
@@ -5141,7 +5149,7 @@ ptrhi           ;determine hibyte for address of sprite pointers
  ror
  sta $62        ;VIC-II Base Address hibyte 0=$00, 1=$40, 2=$80 ,3=$C0
 ;determine location of sprite data pointers
- lda VMCSB      ;calc screen RAM page offset (n*1K) 1=$0400, 2=$0800, 3=$0C00, etc.
+ lda VMCSB      ;screen RAM page offset (n*1K) 1=$0400, 2=$0800, 3=$0C00, etc.
  and #%11110000 ;upper nybble holds the number of 1K chunks
  lsr            ;convert to offset for hibyte, 1K=(4*256), 1=4, 2=8, 3=12, etc.
  lsr            ;zero shifted into carry by lsr so it is clear
@@ -5253,13 +5261,13 @@ md417      .byte 0      ;current filter control and resonance
 md418      .byte 0      ;current volume (lo nybble) and filter type (hi nybble)
 
 errnum     .byte 0      ;last error number that occured, default 0 (no error)
-errline    .word $ffff  ;last line number causing error, default -1 (not applicable)
+errline    .word $ffff  ;last line number causing error, (default -1 for none)
 errtrap    .word 0      ;error handler line number
 
 keyflag    .byte 0      ;key capture mode 0=disabled, 1=enabled, 2=paused
-keyentry   .byte 0      ;scan code of the last key captured with ON KEY statement enabled
+keyentry   .byte 0      ;scan code of the last key captured with ON KEY stmt
 keyline    .word $ffff  ;line number for ON KEY subroutine
-keyidx     .byte 0      ;current index of char to put in keyboard buffer via IRQ
+keyidx     .byte 0      ;current index of char to put in keyboard buf via IRQ
 keystrflg  .byte 0      ;flag to indicate key string from KEY cmd
 
 ;sprite animation
@@ -5276,9 +5284,9 @@ sprcolopt  .byte 0      ;bit flags for which sprites to change color
 lastplotx  .word 0      ;last plot x coord
 lastploty  .byte 0      ;last plot y coord
 lastplott  .byte 1      ;last plot type used
-mapcolc1c2 .byte $15    ;current plot color; hi nybble = c1 (white), lo nybble = c2 (green)
-mapcolc3   .byte 7      ;c3 (1-3) multicolor mode color for bit pattern 11 (default yellow)
-mapcolbits .byte 8      ;(values 8,16,24) used for plotting a dot on a multi-color bitmap
+mapcolc1c2 .byte $15    ;last plot color, hinybble c1=white, lonybble c2=green
+mapcolc3   .byte 7      ;last plot multicol, c3 (1-3) for bit pattern 11=yellow
+mapcolbits .byte 8      ;(8,16,24) used for plotting a dot on a multicol bitmap
 
 ;PLAY command use only - used during IRQ
 playtime   .byte 0      ;current jiffies till next note
@@ -5338,8 +5346,12 @@ bmdt
 .byte $f2,$19,$0b,$20,$20,$92,$20,$12,$20,$20,$f2,$05,$10,$92,$98,$00
 
 ;tables for plotting dots on a bitmap per line 0-24
-lbtab .byte 0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0,64,128,192,0
-hbtab .byte 224,225,226,227,229,230,231,232,234,235,236,237,239,240,241,242,244,245,246,247,249,250,251,252,254
+lbtab
+.byte 0,64,128,192,0,64,128,192,0,64,128,192
+.byte 0,64,128,192,0,64,128,192,0,64,128,192,0
+hbtab
+.byte 224,225,226,227,229,230,231,232,234,235,236,237
+.byte 239,240,241,242,244,245,246,247,249,250,251,252,254
 
 ;table of video screen matrix hibyte offset per line 0-24
 btab .byte 0,0,0,0,0,0,0,1,1,1,1,1,1,2,2,2,2,2,2,2,3,3,3,3,3
@@ -5374,7 +5386,7 @@ playlen   .byte 30 ;notelength for each voice
 playindex .byte 0  ;index of current char in play string for each voice
 
 ;** music notes table ***
-;These numbers represent the middle octave and are only for the SID freq control registers
+;These numbers represent the middle octave for the SID freq control registers
 ;CLOCK is NTSC=1022727.143, PAL=985248.611
 ;FREQUENCY=REGVAL*(CLOCK/16777216)Hz
 ;REGVAL=FREQUENCY/(CLOCK/16777216)Hz
@@ -5400,7 +5412,7 @@ notes ;A    B    C    D    E    F    G
 infbytes
 .byte PNTR      ;csr logical column
 .byte TBLX      ;csr physical line
-.byte BLNSW     ;csr blink enabled
+.byte BLNSW     ;csr blink disabled, 0=no, 1=yes
 .byte LNMX      ;csr max columns on current line (39 or 79)
 .byte GDBLN     ;ASCII value of char under csr (when blinking)
 .byte TMPASC    ;ASCII value of last character printed to screen
@@ -5436,9 +5448,12 @@ ascctlfn
 ;code  255 same as 126
 asc2scr
 ;codes 160 to 255
-.byte 32,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127
-.byte 64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95
-.byte 32,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,94
+.byte 32,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111
+.byte 112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127
+.byte 64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79
+.byte 80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95
+.byte 32,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111
+.byte 112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,94
 
 ;scroll direction vectors up,down,left,right
 scrolls .rta scroll0,scroll1,scroll2,scroll3
@@ -5616,7 +5631,7 @@ newvec
  sta ISAVE+1
  lda #$ff   ;MDBASIC takes 8k of the BASIC RAM area
  sta $37    ;the highest address is now $7FFF (32767)
- lda #$7f   ;$37-$38 holds value of highest address used by BASIC, originally $9FFF (40959)
+ lda #$7f   ;highest address used by BASIC, originally $9FFF (40959)
  sta $38
  rts
 ;
@@ -5786,7 +5801,7 @@ std010 sta MSIGX
 movewait
  lda LSTX     ;Matrix Coordinate of Last Key Pressed, 64=None Pressed
  cmp #$3f     ;STOP key?
- bne movwait  ;carry flag will be returned to caller to indicate STOP key pressed
+ bne movwait  ;carry flag returned to caller to indicate STOP key pressed
  pla
  pla
  rts
@@ -5828,7 +5843,8 @@ dotoff lda ptab2,x  ;read ptab2 and ptab3 in LORAM
 doton lda ($c3),y
  and ptab3,x
  ora ptab2,x
-colorb sta ($c3),y ;write byte with bit pattern targeting the one bit in hires or 2 bits in mc mode
+;write byte with bit pattern for the one bit in hires or 2 bits in mc mode
+colorb sta ($c3),y
  pla
  sta R6510   ;restore Kernal HIROM ($e000-$ffff)
  cli
@@ -5850,7 +5866,7 @@ colorb sta ($c3),y ;write byte with bit pattern targeting the one bit in hires o
  lda btab,y  ;video maxtrix hibyte offset
  adc #$c8    ;video matrix starts at $c800 in bitmap mode
  sta $c4
- lda mapcolc1c2 ;hires dot color (hi nybble) and background color of 8x8 square (lo nybble)
+ lda mapcolc1c2 ;hires dot color (hi nybble), bkgnd color of 8x8 sq (lo nybble)
  ldy #0
  sta ($c3),y
  lda $c4
@@ -5974,7 +5990,7 @@ txtleft
  lda lastplotx+1
  sbc #0
  clc         ;flag indicating x not set
- bmi done2  ;not enough space so abort
+ bmi done2   ;not enough space so abort
 oktxtx
  sta lastplotx+1
  stx lastplotx
@@ -6958,7 +6974,7 @@ chbyc lda $fe  ;y coordinate hibyte
 ;*********************
 loadd
  ldx #0
- jsr lodsav  ;open file and check status, quit if needed (no return here, ROM in)
+ jsr lodsav  ;open file and check status, quit if needed
  jsr $f5af   ;print SEARCHING...
  ldx LA      ;logical file number
  jsr CHKIN   ;set default input logical file number
@@ -7367,17 +7383,17 @@ nxtbit lda $61
  sta $61  ;temp var
 pekbyt
 ;select HIRAM and disable IRQ
- lda R6510      ;bit0 0=LORAM 1=LOROM ($a000-$bfff), bit1 0=HIRAM 1=HIROM ($e000-$ffff)
+ lda R6510
  pha            ;save current mem bank setting
- and #%11111101 ;turn bit 1 off for HIRAM
- sei            ;****disable irqs while HIROM is not available
+ and #%11111101 ;switch i/o devices out for RAM
+ sei            ;disable irqs while i/o devices are not available
  sta R6510      ;apply mem bank new selection
 ;read byte from bitmap image in HIRAM
  lda ($fb),y
  tax            ;save in x
  pla
- sta R6510      ;restore mem bank original selection
- cli            ;****enable irqs
+ sta R6510      ;switch out RAM for i/o devices
+ cli            ;enable irqs now that i/o devices are restored
  txa            ;get saved value
  and $61
  cmp #16        ;hi nybble to lo nybble for indexing 
@@ -8080,16 +8096,17 @@ openrs232
  sty RSSTAT      ;reset RS-232 Status
 ;bits 0-3 of M51CTR are used to set the baud rate as follows:
 ;0=User Defined (not supported here yet)
-;1=50,2=75,3=110,4=134.5,5=150,6=300,7=600,8=1200,9=1800,10=2400,11=3600,12=4800,13=7200,14=9600,15=19200
+;1=50,2=75,3=110,4=134.5,5=150,6=300,7=600,8=1200,9=1800
+;10=2400,11=3600,12=4800,13=7200,14=9600,15=19200
  lda #%00001000  ;1200 baud, 8 data bits, 1 stop bit
  sta M51CTR      ;bits3-0=baud, bit4:unused, bits6-5=data bits, bit7=stop bits
  lda #%00000000  ;no parity, full duplex, 3-line handshake
  sta M51CDR      ;bits7-5:parity, bit4=duplex, bits3-1:unused, bit0=handshake
 ;if implementing user-defined baud rate, the value placed here would be
-;TIMING = (CLOCK/(BAUDRATE/2))-100 in binary little endian format
-;therefore the max baud rate for NTSC machines is 20454 and 19705 on PAL machines.
+;TIMING = (CLOCK/(BAUDRATE/2))-100 in binary little-endian format
+;thus the max baud rate for NTSC machines is 20454 and 19705 on PAL machines.
 ;however near maximum is not suggested and prone to errors;
-;in fact, the IRQ facilitating the send and receive buffers cannot keep up beyond 2400.
+;the IRQ facilitating the send and receive buffers cannot keep up beyond 2400.
  lda #0         ;user defined baud rate not supported by C64 Kernal
  sta M51AJB     ;lobyte of timing for user defined baud rate
  sta M51AJB+1   ;hibyte of timing for user defined baud rate
@@ -8227,7 +8244,7 @@ gethndshk
 ;
 ;open the RS-232 channel
 open232
- jsr $ef4a      ;get the word length for the current RS-232 character into x reg
+ jsr $ef4a      ;get word length for current RS-232 character into x reg
  stx BITNUM     ;RS-232: number of bits left to be sent/received
  lda M51CTR     ;RS-232: Mock 6551 Control Register
  and #$0f       ;if baud (first 4 bits) = 0 then
@@ -8711,7 +8728,7 @@ blocks
  bcs err7e
  beq nxtfile
 chkeof
- and #%01000000 ;bit6=EOF/EOI, bit7=device not present, bits0-1 indicate device timeout
+ and #%01000000 ;bit6=EOF/EOI, bit7=device not present, bits0-1 device timeout
  bne filecnt    ;bit6=1? EOF, print file count
  lda #5         ;DEVICE NOT PRESENT
  sec            ;flag for error
