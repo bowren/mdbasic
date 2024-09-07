@@ -384,7 +384,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.08.31"
+.text "mdbasic 24.09.07"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -3814,7 +3814,7 @@ cpystr2
  lda #0
  sta paintbuf3,y
  sta keyidx
- inc keystrflg  ;flag for manual key string
+ sty keystrflg  ;flag for manual key string
  lda #%00000100 ;key pump irq flag
  jmp irqon
 ;
@@ -4831,16 +4831,18 @@ keypump
  ldx NDX        ;if keyboard buffer is empty then put next char
  bne irqdone2   ;otherwise forward to original IRQ vector
  lda R6510
+ pha
  and #%11111110
  sta R6510      ;switch LOROM to LORAM
  ldx keyidx     ;offset to next char to process
- lda keybuf,x   ;get next char
- ldy keystrflg  ;manual key string flag?
+ ldy keybuf,x   ;get next char
+ lda keystrflg  ;manual key string flag?
  beq nostrflg
- lda paintbuf3,x
+ ldy paintbuf3,x
 nostrflg
- inc R6510      ;switch LORAM to LOROM
- tax
+ pla
+ sta R6510      ;switch LORAM to LOROM
+ tya
  beq alldone    ;zero-terminated string
  sta KEYD       ;place char in keyboard buffer
  inc NDX        ;indicate 1 char waiting in buffer
