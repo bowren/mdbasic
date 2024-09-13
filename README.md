@@ -1,6 +1,6 @@
 # MDBASIC
 MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
-MDBASIC version 24.09.07<br>
+MDBASIC version 24.09.12<br>
 <br>
 Download the documentation file <b>mdbasic.pdf</b> for details.<br>
 <br>
