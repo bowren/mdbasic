@@ -274,6 +274,7 @@ FDIVT  = $bb12 ;divide FAC2 by FAC1 FAC1 = (FAC2/FAC1)
 MOVFM  = $bba2 ;copy a 5-byte float from memory to FAC1, A=lobyte, Y=hibyte
 MOV2F  = $bbc7 ;copy a 5-byte float from FAC1 to memory, $57-$5B
 MOVEF  = $bc0f ;copy FAC1 to FAC2 without rounding
+ROUND  = $bc1b ;round FAC1 by adjusting the rounding byte
 SIGN   = $bc2b ;put the sign of FAC1 into accumulator
 ABS    = $bc58 ;perform ABS
 QINT   = $bc9b ;convert FAC1 into a 4-byte (32-bit) signed integer within FAC1
@@ -384,7 +385,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.09.07"
+.text "mdbasic 24.09.12"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -581,7 +582,7 @@ cmdtab
 ;
 ;MDBASIC Function Dispatch Table
 funtab
-.rta fix,fntime, round            ;$f3,$f4,$f5
+.rta fix,fntime, fnround          ;$f3,$f4,$f5
 .rta keyfn, err                   ;$f6,$f7 are both a command and a function
 .rta ptr, inf, pen, joy, pot, hex ;$f8,$f9,$fa,$fb,$fc,$fd
 .rta instr, $ae9e                 ;$fe,$ff (PI Constant)
@@ -957,7 +958,7 @@ zero txa
  jsr FINLOG ;add signed int to FAC1
  jmp nexth
 ;
-;clear num work area $5d-$60 and FAC1 $61-$68
+;clear num work area $5d-$60, FAC1 $61-$68 and FAC2 $69-$6E
 clrfac ldx #11
  lda #0
 loop sta $5d,x
@@ -1632,7 +1633,7 @@ regloop
  iny
  bne regloop
 sysend
- jmp SYS+6    ;perform remainder of SYS
+ jmp SYS+6     ;perform remainder of SYS
 ;
 ;*******************
 ; WAIT location, mask1 [,mask2]
@@ -4374,6 +4375,7 @@ doround
  pha            ;save sign
  jsr ABS        ;ensure positive number
  jsr FADDH      ;add .5 to value in FAC1
+ jsr ROUND      ;adjust FAC1 rounding byte
  jmp trunca
 trunc
  lda $66        ;FAC1 sign 0=positive, 255=negative
@@ -4390,7 +4392,7 @@ trunca
 ; V = ROUND(n,d)  -round to specific precision
 ; n is the 32-bit floating point number to round, d is the precision
 ; d(-9 to +9) is the number of places left (-) or right (+) of decimal point
-round
+fnround
  jsr CHRGET
  jsr CHKOPN     ;check for and skip opening parentheses
  jsr FRMNUM     ;get numeric param1 - number to round
@@ -4435,12 +4437,10 @@ round1
  jsr doround    ;round FAC1 to nearest whole number (left)
 ;move decimal point
  lda $14        ;decimal places to round
- beq done3
 movedec
  sta COUNT
  lda $66        ;save FAC1 sign flag
  pha            ;before moving decimal
-movdec
  lda $15        ;direction: 0=right else left
  beq xmul10
 xdiv10
@@ -4506,9 +4506,9 @@ err
  bne illqty7
  ldy errline
  lda errline+1
- jmp GIVAYF  ;convert binary int to FAC then return
+ jmp GIVAYF      ;convert binary int to FAC then return
 errorno
- ldy errnum  ;y=lobyte
+ ldy errnum      ;y=lobyte
  jmp nobutt
 ;
 ;*******************
