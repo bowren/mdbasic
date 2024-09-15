@@ -266,7 +266,6 @@ GETADR = $b7f7 ;convert FAC1 to unsigned 16-bit integer in ($14,$15)
 POKE   = $b824 ;perform POKE
 WAIT   = $b82d ;perform WAIT
 FADDH  = $b849 ;add 0.5 to FAC1
-NEGFAC = $b947 ;replace FAC1 with its 2's complement (negate)
 DIV10  = $bafe ;divide FAC1 by 10
 MUL10  = $bae2 ;multiply FAC1 by 10
 FMULT  = $ba28 ;copy mem pointed by Y(hi),A(lo) to FAC2 then FAC1=FAC1*FAC2
@@ -284,7 +283,6 @@ FINLOG = $bd7e ;add signed integer to FAC1
 INPRT  = $bdc2 ;print IN followed by a line number
 LINPRT = $bdcd ;print 2-byte number stored in A (hibyte), X (lobyte)
 FOUT   = $bddd ;convert contents of FAC1 to ASCII String
-NEGOP  = $bfb4 ;perform NOT
 
 ;CBM BASIC routines to raise a specific error
 NOGOSUB= $a8e0 ;return without gosub
@@ -385,7 +383,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.09.12"
+.text "mdbasic 24.09.15"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -583,7 +581,7 @@ cmdtab
 ;MDBASIC Function Dispatch Table
 funtab
 .rta fix,fntime, fnround          ;$f3,$f4,$f5
-.rta keyfn, err                   ;$f6,$f7 are both a command and a function
+.rta fnkey, err                   ;$f6,$f7 are both a command and a function
 .rta ptr, inf, pen, joy, pot, hex ;$f8,$f9,$fa,$fb,$fc,$fd
 .rta instr, $ae9e                 ;$fe,$ff (PI Constant)
 ;
@@ -820,7 +818,7 @@ oldcmd
 vall
  jsr CHRGET
 valll
- jsr PARCHK       ;PARCHK Evaluate Expression Within Parentheses
+ jsr PARCHK       ;Evaluate Expression Within Parentheses
  jmp VAL          ;perform VAL
 ;
 valfn
@@ -4354,10 +4352,10 @@ notfound
 ; P=PTR(x) or P=PTR(x%) or P=PTR(x$) where x is the variable name
 ptr
  jsr CHRGET
- jsr PARCHK
- lda $48
+ jsr PARCHK     ;get term inside parentheses
+ lda $48        ;pointer to variable
  ldy $47
- jmp GIVAYF
+ jmp GIVAYF     ;convert 16-bit signed int in A,Y regs to 5-byte float in FAC1
 ;
 ;*******************
 ; I = FIX(float)  truncate the fractional portion
@@ -4365,27 +4363,27 @@ fix
  jsr CHRGET
  jsr PARCHK     ;get term inside parentheses
  jsr TESTNUM    ;ensure expression was numeric, error if not
- jmp trunc      ;truncate fractional portion
-;
+ lda $66        ;FAC1 sign byte
+ pha            ;save sign byte
+ jsr ABS        ;ensure positive number for floor calculation
+ jmp trunca     ;truncate remainder
 
 ;round FAC1 to the nearest whole number
 ;add 0.5 to the absolute value then truncate remainder
 doround
- lda $66        ;FAC1 sign 0=positive, 255=negative
- pha            ;save sign
+ lda $66        ;FAC1 sign byte
+ pha            ;save sign byte
  jsr ABS        ;ensure positive number
  jsr FADDH      ;add .5 to value in FAC1
- jsr ROUND      ;adjust FAC1 rounding byte
- jmp trunca
-trunc
- lda $66        ;FAC1 sign 0=positive, 255=negative
- pha            ;save sign
- jsr ABS        ;ensure positive number
 trunca
  jsr INT        ;convert FAC1 value to its lowest integer value (floor)
- pla            ;what was the original sign
- bpl done3      ;if positive then done
- jmp NEGOP      ;otherwise make negative again
+signit
+ pla            ;recall original FAC1 sign byte
+ tax            ;if rounding or fixing results in zero
+ jsr SIGN       ;then leave the sign byte alone
+ beq signed     ;otherwise restore it as it was
+ stx $66        ;before rounding or fixing began
+signed rts
 
 ;*******************
 ; V = ROUND(n)    -round to nearest whole number
@@ -4402,66 +4400,61 @@ fnround
  jsr MOV2F+16   ;copy a 5-byte floating point number from FAC1 to memory
 ;prepare param2 default values
  lda #0
- sta $14        ;default 0 decimal places (round to whole number)
- sta $15        ;default first direction right
+ sta $fb        ;default 0 decimal places (round to whole number)
+ sta $fc        ;default first move direction right
  jsr comchk
  bne round1
-;get param2
+;get param2, move decimal direction
  jsr CHRGET
  jsr FRMNUM
- jsr AYINT      ;convert FAC1 to a signed integer in FAC1
- lda $66        ;sign, $00=Positive, $FF=Negative
- sta $15        ;negative move left, positive move right
- beq round2
- jsr NEGFAC     ;replace FAC1 with its 2's complement
-round2
- lda $64        ;hi byte
- bne illqty7
- lda $65        ;lo byte
+ jsr SIGN       ;get FAC1 0=Zero, 1=Positive, 255=Negative
+ beq round1     ;zero value, no move needed
+ sta $fc        ;save sign, negative move left, positive move right
+ jsr ABS        ;ensure FAC1 is a positive number
+ jsr fac2int    ;convert FAC1 to 1-byte unsigned int
  cmp #10
  bcs illqty7    ;range is -9 to +9
- sta $14        ;decimal places to round
+ sta $fb        ;decimal places to round
 round1
  jsr CHKCLS     ;check for and skip closing parentheses
 ;restore param1 to FAC1
  lda #<BUF+$54  ;5-byte buffer pointer to unused
  ldy #>BUF+$54  ;memory area at end of line input buffer
  jsr MOVFM      ;copy a 5-byte float from memory to FAC1 A=lo, Y=hi
- lda $14        ;decimal places to round
+ lda $fb        ;decimal places to round
  beq doround    ;zero will round to nearest whole number
 ;move decimal point to the right or left based on sign of num places
  jsr movedec    ;move decimal to left or right based on sign of param2
- lda $15
+ lda $fc        ;move direction
  eor #$ff       ;toggle move direction for 2nd call
- sta $15
- jsr doround    ;round FAC1 to nearest whole number (left)
+ sta $fc
+ jsr doround    ;round FAC1 to nearest whole number
 ;move decimal point
- lda $14        ;decimal places to round
+ lda $fb        ;decimal places to round
 movedec
  sta COUNT
- lda $66        ;save FAC1 sign flag
+ lda $66        ;save FAC1 sign byte
  pha            ;before moving decimal
- lda $15        ;direction: 0=right else left
- beq xmul10
+ lda $fc        ;direction: 255=left else right
+ bpl xmul10
 xdiv10
  jsr DIV10      ;divide FAC1 by 10
+ jsr ROUND      ;adjust FAC1 rounding byte
  dec COUNT
- bne xdiv10
- beq mvdec
+ bne xdiv10     ;keep moving till done
+ beq signit     ;always branches
 xmul10
  jsr MUL10      ;multiply FAC1 by 10
+ jsr ROUND      ;adjust FAC1 rounding byte
  dec COUNT
  bne xmul10     ;keep moving till done
-mvdec
- pla            ;restore FAC1 sign flag
- sta $66        ;as it was before moving decimal
-done3 rts
+ beq signit     ;always branches
 ;
 ;*******************
 ; KEY AND KEY$ are used with ON KEY GOSUB to return key that caused the event
 ; K = KEY    -get ASCII value, no key = 0
 ; K$ = KEY$  -get string value of length 1, no key has ASC(KEY$)=0
-keyfn
+fnkey
  jsr chrget
  ldy keyentry    ;y=lobyte
  cmp #"$"
