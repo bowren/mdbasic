@@ -383,7 +383,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.09.15"
+.text "mdbasic 24.09.20"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -401,7 +401,7 @@ newcmd
 .shift "fill"
 .shift "scroll"
 .shift "swap"
-.shift "locate"
+.shift "cursor"
 .shift "disk"
 .shift "delete"
 .shift "files"
@@ -541,7 +541,7 @@ cmdtab
 .rta fill    ;$d1
 .rta scroll  ;$d2
 .rta swap    ;$d3
-.rta locate  ;$d4
+.rta cursor  ;$d4
 .rta disk    ;$d5
 .rta delete  ;$d6
 .rta files   ;$d7
@@ -1250,11 +1250,11 @@ getdskdev
  jsr comchk
  bne devdone
  jsr getvalg    ;get single byte value in x reg
- cmp #8
+ cmp #8         ;valid serial device numbers 8 to 12
  bcc illdev
- tax
  cmp #12
  bcs illdev
+ tax
 devdone
  rts
 illdev
@@ -2749,7 +2749,6 @@ sprvis
  beq scr        ;another comma so skip param
 ;get sprite visibility 0=off, 1=on
  jsr getbool
- lda $14        ;visible param
  bne spron
  lda $bf        ;2^sprite#
  eor #$ff
@@ -2923,55 +2922,8 @@ getcc2
  sta BGCOL2
  rts
 ;
-;*******************
-; LOCATE [col], [row], [blink] - omitted params use current value
-locate
- beq mop6
- pha
- sec          ;flag for read
- jsr PLOT     ;read current position
- stx $fb      ;x (col)
- sty $fc      ;y (row)
- pla
- cmp #","
- beq row
- jsr getvalue ;get value as int: x=lobyte, y=hibyte
- bne badloc   ;hibyte must be zero
- cpx #40      ;40 is max column number
- bcs badloc
- stx $fc
- jsr CHRGOT
- beq column   ;end of statement
-row jsr CHRGET
- cmp #","
- beq column
- jsr getvalue ;get value as int: ;x=lobyte, y=hibyte
- bne badloc   ;hibyte must be zero
- cpx #25      ;25 is max line number
- bcs badloc
- stx $fb
-column
- ldx $fb      ;line
- ldy $fc      ;column
- clc          ;clear carry is flag to write new value
- jsr PLOT     ;read/set cursor position on screen
- jsr chkcomm  ;if current char is a comma then continue otherwise quit now
- jsr getbool  ;0=disable, 1=enable
- eor #1       ;flip value so that 0=enabled 1=disabled
- ldy #1       ;1 jiffy
- sty BLNCT    ;set cursor remaining blink delay to 1 jiffy
- ldy BLNSW    ;is cursor enabled?
- bne setcsr   ;no, then set its new value now
-csrwait       ;otherwise wait for it to blink off
- ldy BLNON    ;last blink state, 0=rvs, 1=norm
- bne csrwait  ;wait for cursor to blink off
-setcsr
- sta BLNSW    ;cursor: 0=enable, 1=disable
- rts
-;
 ;*****************
 mop6 jmp missop    ;missing operand error
-badloc jmp hellno  ;illegal coordinate error
 ;
 ;*******************
 ; COLOR [foregndColor (0-31)], [backgndColor (0-15)], [borderColor (0-15)]
@@ -3245,22 +3197,20 @@ getc2
 ; PULSE voc#(1-3), width%(0-100)
 pulse
  jsr getvoc
- pha          ;save voice SID register offset (voice#-1)*7
+ sta $fe      ;save voice SID register offset (voice#-1)*7
  jsr ckcom2   ;check for and skip over comma, misop err if missing
  jsr FRMNUM   ;get width% (0.00 to 100.00)
  lda #<m4095  ;REGVAL=ROUND(40.95*WIDTH%) result in range 0-4095
  ldy #>m4095  ;y=hi byte, a=lo byte pointer to 5-byte FAC value
  jsr FMULT    ;multiply FAC1 by a value in memory ptr A=lo byte, Y=hi byte
  jsr doround  ;round FAC1 to nearest whole number
- jsr GETADR   ;convert FAC1 to 2-byte integer in $14,$15
- pla
- tay          ;register offset for voice
- lda $15
+ jsr GETADR   ;convert FAC1 to 2-byte integer in Y (lobyte), A (hibyte)
  cmp #$10     ;0-4095 only (12-bit value)
  bcs badwav
- sta PWHI1,y  ;Pulse Waveform Width (hi nybble)
- lda $14
- sta PWLO1,y  ;Pulse Waveform Width (lo byte)
+ ldx $fe      ;register offset for voice
+ sta PWHI1,x  ;Pulse Waveform Width (hi nybble)
+ tya
+ sta PWLO1,x  ;Pulse Waveform Width (lo byte)
  rts
 ;
 ;******************
@@ -3367,7 +3317,7 @@ voice
 getfreq
  plp
  jsr getvoc      ;returns SID register offset (voice#-1)*7 in accumulator
- pha
+ sta $fe
  jsr CHRGET
  jsr FRMNUM      ;convert current expression to a number and store in FAC1
  jsr MOVEF       ;copy FAC1 to FAC2 (numerator) frequency value
@@ -3382,12 +3332,10 @@ memfac jsr MOVFM ;copy mem to FAC1 pointed by a & y
  jsr FDIVT       ;FAC1 = (FAC2/FAC1)
  jsr doround     ;round FAC1 to nearest whole number
  jsr GETADR      ;convert FAC1 to unsigned 16-bit int
- pla
- tay
- lda $15
- sta FREHI1,y
- lda $14
- sta FRELO1,y    ;store result in data control reg for voice
+ ldx $fe
+ sta FREHI1,x
+ tya
+ sta FRELO1,x    ;store result in data control reg for voice
 done5 rts
 ;
 ;*******************
@@ -3462,6 +3410,58 @@ memnorm
  inc R6510
  rts
 ;
+; LINE x1,y1 TO x2, y2, plotType, color
+liner
+ jsr getxy
+ jsr point2
+ jsr types
+ lda #0          ;0=draw line, 1=move sprite move
+ jsr strtln
+ jmp savepoint   ;save last plotted point
+;
+;entry point for commands PLOT,CIRCLE,PAINT,TEXT
+getpnt
+ jsr getxy      ;get x,y, plot type
+savepoint
+ ldx #2
+ lda $fb,x
+ sta lastplotx,x
+ dex
+ bpl savepoint+2
+ rts
+;
+;draw line or move sprite on line
+strtln
+ sta XSAV  ;0=draw line, 1=move sprite move
+ dec R6510
+ jsr linedraw
+ inc R6510
+ rts
+;
+getpoint
+ ldx #2
+ lda lastplotx,x
+ sta $fb,x
+ dex
+ bpl getpoint+2
+ rts
+;
+point2
+ jsr savepoint  ;save point1
+ lda #TOKEN_TO
+ jsr CHKCOM+2   ;skip over TO token, syntax error if not there
+ jsr getxy      ;get point2
+;set point1 and point2
+ ldx #2
+pntswp
+ lda $fb,x
+ sta $50,x      ;point2
+ lda lastplotx,x
+ sta $fb,x      ;point1
+ dex
+ bpl pntswp
+ rts
+;
 ;*******************
 ; LINE INPUT ["prompt",] S$ [,S2$,...,S3$]
 ; LLINE INPUT# filenum, S1$ [,S2$,...,S3$]
@@ -3517,57 +3517,68 @@ lnin
 ;
 mop3 jmp missop
 ;
-; LINE x1,y1 TO x2, y2, plotType, color
-liner
- jsr getxy
- jsr point2
- jsr types
- lda #0          ;0=draw line, 1=move sprite move
- jsr strtln
- jmp savepoint   ;save last plotted point
+;*******************
+; CURSOR CLR           - clear cursor line
+; CURSOR ON | OFF      - cursor on/off
+; CURSOR [col], [row]  - locate cursor
+cursor
+ beq mop3
+ cmp #TOKEN_ON
+ beq csron
+ cmp #TOKEN_OFF
+ beq csroff
+ cmp #TOKEN_CLR
+ beq csrclr
+ pha
+ sec          ;flag for read
+ jsr PLOT     ;read current position
+ sty $fb      ;column
+ stx $fc      ;line
+ pla
+ cmp #","
+ beq row
+ jsr getvalue ;get value as int: x=lobyte, y=hibyte
+ bne hellno   ;hibyte must be zero
+ cpx #40      ;40 is max column number
+ bcs hellno
+ stx $fb      ;new column
+ jsr comchk   ;if 2nd param then get it
+ bne column   ;else assume end of statement
+row
+ jsr getvalueg ;get value as int: ;x=lobyte, y=hibyte
+ bne hellno   ;hibyte must be zero
+ cpx #25      ;25 is max line number
+ bcs hellno
+ stx $fc      ;new line
+column
+ ldy $fb      ;column
+ ldx $fc      ;line
+ clc          ;clear carry is flag to write new value
+ jmp PLOT     ;read/set cursor position on screen
+csron
+ lda #0       ;0=enabled
+.byte $2c
+csroff
+ lda #1       ;1=disabled
+ ldy #2       ;2 jiffies
+ sty BLNCT    ;set cursor remaining blink delay to 1 jiffy
+ ldy BLNSW    ;is cursor disabled? 0=no, else yes
+ bne setcsr   ;if yes then set its new value now
+csrwait       ;otherwise wait for it to blink off
+ ldy BLNON    ;last blink state, 0=rvs, 1=norm
+ bne csrwait  ;wait for cursor to blink off
+setcsr
+ sta BLNSW    ;cursor: 0=enable, 1=disable
+ jmp CHRGET
 ;
-;entry point for commands PLOT,CIRCLE,PAINT,TEXT
-getpnt
- jsr getxy      ;get x,y, plot type
-savepoint
- ldx #2
- lda $fb,x
- sta lastplotx,x
- dex
- bpl savepoint+2
- rts
+csrclr
+ ldx PNTR     ;current cursor line
+ jsr $e9ff    ;clear line
+ jmp CHRGET
 ;
-;draw line or move sprite on line
-strtln
- sta XSAV  ;0=draw line, 1=move sprite move
- dec R6510
- jsr linedraw
- inc R6510
- rts
-;
-getpoint
- ldx #2
- lda lastplotx,x
- sta $fb,x
- dex
- bpl getpoint+2
- rts
-;
-point2
- jsr savepoint  ;save point1
- lda #TOKEN_TO
- jsr CHKCOM+2   ;skip over TO token, syntax error if not there
- jsr getxy      ;get point2
-;set point1 and point2
- ldx #2
-pntswp
- lda $fb,x
- sta $50,x      ;point2
- lda lastplotx,x
- sta $fb,x      ;point1
- dex
- bpl pntswp
- rts
+hellno
+ ldx #34      ;illegal coordinate error
+ jmp (IERROR)
 ;
 ;get x,y coordinates
 getxy
@@ -3598,8 +3609,6 @@ okvalu stx $fb
  bcs hellno
  stx $fd        ;y coordinate
  rts
-hellno ldx #34  ;illegal coordinate error
- jmp (IERROR)
 ;
 ;*******************
 ; PAINT x,y, [plotType], [color]
