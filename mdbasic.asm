@@ -383,7 +383,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.09.20"
+.text "mdbasic 24.10.16"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -3572,7 +3572,7 @@ setcsr
  jmp CHRGET
 ;
 csrclr
- ldx PNTR     ;current cursor line
+ ldx TBLX     ;current cursor line
  jsr $e9ff    ;clear line
  jmp CHRGET
 ;
