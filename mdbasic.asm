@@ -1,6 +1,6 @@
 ; ***MDBASIC***
 ; by Mark D Bowren
-; (c)1985-2023 Bowren Consulting, Inc. (www.bowren.com)
+; (c)1985-2024 Bowren Consulting, Inc. (www.bowren.com)
 ;
 ;zero-page registers
 R6510  = $01 ;LORAM/HIRAM/CHAREN RAM/ROM selection and cassette control register
@@ -205,7 +205,7 @@ MDBIRQ = $0313 ;MDBASIC IRQ Control Register
 TMPIRQ = $0334 ;2-byte temp storage for original IRQ vector
 ;misc vectors (2-bytes each)
 TMPERR = $0336 ;original error handling vector
-TMPERRP= $0338 ;TXTPTR of statement for ON ERROR GOTO line#
+TMPERRP= $0338 ;TXTPTR of statement for ON ERR GOTO line#
 TMPKEYP= $033a ;TXTPTR of statement for ON KEY GOSUB line#
 
 ;CBM BASIC subroutines
@@ -253,7 +253,6 @@ CHKCOM = $aefd ;check for and skip comma
 ISVAR  = $af28 ;get the value of a variable into FAC1
 DIM    = $b081 ;perform DIM
 PTRGET = $b08b ;search for a variable & setup if not found
-AYINT  = $b1bf ;convert FAC1 to a signed integer in FAC1
 GIVAYF = $b391 ;convert 16-bit signed int to floating-point (a=hibyte y=lobyte)
 ERRDIR = $b3a6 ;check if prg is running in direct mode/cause error
 DEF    = $b3b3 ;perform DEF
@@ -300,6 +299,7 @@ VERIFY = $e165 ;perform VERIFY
 HALT   = $e386 ;halt program and return to main BASIC loop
 INIT   = $e3bf ;initialize BASIC
 LP2    = $e5b4 ;get a character from the keyboard buffer
+CLS    = $e544 ;init screen line link table and clear the screen
 
 ;Commodore 64 Kernal API
 CINT   = $ff81 ;initialize screen editor and video chip
@@ -373,7 +373,7 @@ TOKEN_TRACE   = $f2
 TOKEN_TIME    = $f4
 FIRST_FUN_TOK = $f3  ;first MDBASIC function
 TOKEN_KEY     = $f6
-TOKEN_ERROR   = $f7
+TOKEN_ERR     = $f7
 TOKEN_PI      = $ff  ;PI symbol token
 
 *=$8000 ;"MDBASIC RAM Memory Block"
@@ -383,7 +383,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.10.16"
+.text "mdbasic 24.10.30"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -438,7 +438,7 @@ newcmd
 .shift "round"
 ;statement & function
 keystr .shift "key"
-.shift "error"
+.shift "err"
 ;functions only
 .shift "ptr"
 .shift "inf"
@@ -572,7 +572,7 @@ cmdtab
 .rta auto    ;$f0
 .rta old     ;$f1
 .rta trace   ;$f2
-.rta fix     ;$f3 func
+.rta SNERR   ;$f3 placeholder for fix (not a command, func only)
 .rta time    ;$f4 cmd and func
 .rta SNERR   ;$f5 placeholder for round (not a command, func only)
 .rta key     ;$f6 cmd & func
@@ -581,7 +581,7 @@ cmdtab
 ;MDBASIC Function Dispatch Table
 funtab
 .rta fix,fntime, fnround          ;$f3,$f4,$f5
-.rta fnkey, err                   ;$f6,$f7 are both a command and a function
+.rta fnkey, fnerr                 ;$f6,$f7 are both a command and a function
 .rta ptr, inf, pen, joy, pot, hex ;$f8,$f9,$fa,$fb,$fc,$fd
 .rta instr, $ae9e                 ;$fe,$ff (PI Constant)
 ;
@@ -2177,9 +2177,9 @@ gopoke
  dec R6510
  jmp pokee
 ;
-; ERROR CLR    :clear last error data
-; ERROR OFF    :turn off error trapping
-; ERROR errnum :raise error (1-35)
+; ERR CLR    :clear last error data
+; ERR OFF    :turn off error trapping
+; ERR errnum :raise error (1-35)
 error
  cmp #TOKEN_CLR
  beq errclr
@@ -2353,20 +2353,21 @@ clsfiles
  jmp CHRGET
 ;
 ;*******************
-; ON ERROR GOTO line
-; ON ERROR RESUME NEXT
+; ON ERR GOTO line
+; ON ERR RESUME NEXT
 ; ON KEY GOSUB line
-; ON i GOTO line1,line2,...linen
+; ON i GOTO|GOSUB line1,line2,...
 baderr jmp SNERR  ;syntax err
 ;
 on
  beq mop4
- cmp #TOKEN_ERROR
+ cmp #TOKEN_ERR
  beq onerror
  cmp #TOKEN_KEY
  beq onkey
  jmp ONGOTO   ;perform ON
-onkey jsr CHRGET
+onkey
+ jsr CHRGET
  cmp #TOKEN_GOSUB
  beq onkeygo
  cmp #TOKEN_OFF
@@ -2383,7 +2384,8 @@ onkeygo
  lda #1
  sta keyflag  ;turn on key trapping
  rts
-onerror jsr CHRGET
+onerror
+ jsr CHRGET
  cmp #TOKEN_GOTO
  beq errgoto
  cmp #TOKEN_RESUME
@@ -2395,7 +2397,7 @@ onerres
  jsr CHRGET
  cmp #TOKEN_NEXT
  bne baderr
- ldx #<resumenext  ;apply ON ERROR RESUME NEXT
+ ldx #<resumenext  ;apply ON ERR RESUME NEXT
  ldy #>resumenext  ;so that all errors will be ignored
  jsr seterrvec     ;and failed statement are skipped
  jmp CHRGET
@@ -2445,7 +2447,7 @@ dec5f2 dex
  rts
 undef jmp UNDEFST   ;UNDEF'D STATEMENT
 ;*******************************************
-; error trap routine for ON ERROR RESUME NEXT
+; error trap routine for ON ERR RESUME NEXT
 ;*******************************************
 resumenext
  txa
@@ -2487,7 +2489,7 @@ trap
  lda CURLIN
  sta errline
  pha
- lda #TOKEN_ERROR
+ lda #TOKEN_ERR
  pha
  lda TMPERRP
  sta TXTPTR
@@ -2506,7 +2508,7 @@ resume
  pla
  tsx
  lda BAD+1,x
- cmp #TOKEN_ERROR
+ cmp #TOKEN_ERR
  beq okresu
  jsr detrap
  ldx #35      ;can't resume error
@@ -2518,7 +2520,7 @@ okresu
  cmp #TOKEN_NEXT
  bne resume0
 ;perform RESUME NEXT - next statement after the one that caused the error
- pla          ;discard ERROR token
+ pla          ;discard ERR token
  pla
  sta CURLIN   ;pull line number from stack and make current
  pla
@@ -2538,7 +2540,7 @@ skpstmt
  jmp nxtstmt0 ;setup next stmt for execution
 ;perform RESUME line#
 resume0
- pla          ;discard ERROR token
+ pla          ;discard ERR token
  pla          ;discard line number that caused the error
  pla
  pla          ;discard txt ptr of error
@@ -2585,7 +2587,8 @@ _a807 cmp #$3a
  jmp REM
 ;
 ;perform RESUME - with statement that caused the error
-resum pla     ;discard ERROR token
+resum
+ pla          ;discard ERR token
  pla          ;pull line number from stack and make current
  sta CURLIN
  pla
@@ -2947,20 +2950,31 @@ noback jsr chkcomm
 ;*****************
 designon
  jsr CHRGET
- lda CI2PRA     ;bits 0-1 mem bank, 00=bank3, 01=bank2, 10=bank1, 11=bank0
- and #%11111100 ;select VIC-II 16K mem bank 3 ($C000-$FFFF)
- sta CI2PRA     ;base address is now $C000
- lda #%00101100 ;video matrix offset (2*1K) = $0800
-                ;char dot data offset (6*1K) = $1800
- sta VMCSB      ;bit 0 unused; bits 1-3 char dot data base addr
-                ;bits 4-7 video matrix base addr
- lda #$c8       ;video matrix is at $c800
- sta HIBASE     ;video matrix is at $c800 for Kernal prints
- lda SCROLX
- and #%11101111 ;bit 4 off disable multicolor text/bitmap mode
+;select video matrix and dot data offsets
+ lda #2         ;page 2, offset $0800
+setpage         ;valid page index 0 to 3
+;set hibyte ptr for Kernal prints
+ asl            ;each page is 4 blocks of 256 bytes (1K)
+ asl
+ ora #%11000000 ;video matrix base is at $c000
+ sta HIBASE     ;page 0=$c0, 1=$c4, 2=$c8, 3=$cc
+;set video matrix and char dot data address offsets
+ asl            ;discard bits 6,7
+ asl            ;while moving bits 2,3 to positions 4,5
+                ;bits 4-7 video matrix offset (4*page*1K)
+ ora #%00001100 ;bits 1-3 char dot data offset (6*1K) = $1800
+ sta VMCSB      ;bit 0 unused
+;select VIC-II 16K mem bank 3 ($c000-$ffff)
+ lda #%11111100 ;bits 0-1 mem bank, 00=bank3, 01=bank2, 10=bank1, 11=bank0
+ and CI2PRA
+ sta CI2PRA     ;base address is now $c000
+;turn off multicolor text/bitmap mode
+ lda #%11101111 ;bit 4 off disables multicolor text/bitmap mode
+ and SCROLX
  sta SCROLX
- lda SCROLY
- and #%11011111 ;turn off bitmap mode
+;turn off bitmap mode
+ lda #%11011111 ;bit 5 off disables bitmap mode
+ and SCROLY
  sta SCROLY
  rts
 
@@ -2977,12 +2991,13 @@ design
  beq designoff
  cmp #TOKEN_NEW
  bne dodesign
- lda #$f0    ;target location $F000-$FFFF
+;copy CHAREN ROM into HIRAM (std c64 char dot data)
+ lda #$f0    ;target location $f000-$ffff
  sta $bc
  lda #$00
  sta $bb
  sta $be
- lda #$d0    ;source location 4K CHAREN at $D000-$DFFF
+ lda #$d0    ;source location 4K CHAREN at $d000-$dfff
  sta $bf
  lda R6510
  pha
@@ -3001,6 +3016,7 @@ nexbyt lda ($be),y
  sta R6510     ;back to normal
  cli
  jmp CHRGET
+;
 dodesign
  jsr getval    ;get screen code
  jsr times8    ;multiply A reg value by 8 result in $be,$bf
@@ -3520,7 +3536,7 @@ mop3 jmp missop
 ;*******************
 ; CURSOR CLR           - clear cursor line
 ; CURSOR ON | OFF      - cursor on/off
-; CURSOR [col], [row]  - locate cursor
+; CURSOR [col], [row]  - set cursor coordiantes
 cursor
  beq mop3
  cmp #TOKEN_ON
@@ -3659,6 +3675,11 @@ hirez sta $29   ;0=hires mode, 1=multicolor mode
 ;
 ;*******************
 norm
+ lda #%11001000  ;display on, multicolor text/bitmap mode off
+ sta SCROLX      ;40 columns, 0 horizontal scroll scan lines
+ lda #%00011011  ;extended color text mode off, bitmap mode off
+ sta SCROLY      ;display on, 25 rows, 3 vertical scroll scan lines
+norm3
  lda C2DDRA      ;data direction for port A (CI2PRA)
  ora #%00000011  ;bits 0-1 are set to 1=output (default)
  sta C2DDRA
@@ -3669,10 +3690,6 @@ norm
  sta HIBASE      ;top page of screen mem for Kernal prints
  lda #%00010101  ;bit0 always 1; bits1-3 text dot data base addr in 1K chunks
  sta VMCSB       ;bits 4-7 video matrix base address in 1K chunks
- lda #%11001000  ;display on, multicolor text/bitmap mode off
- sta SCROLX      ;40 columns, 0 horizontal scroll scan lines
- lda #%00011011  ;extended color text mode off, bitmap mode off
- sta SCROLY      ;display on, 25 rows, 3 vertical scroll scan lines
 norm2
  lda R6510
  ora #%00000111  ;switch mem banks to normal
@@ -3680,6 +3697,7 @@ norm2
  rts             ;HIROM ($e000-$ffff), LOROM ($a000-$bfff)
 ;
 illqty8 jmp FCERR     ;illegal quantity error
+
 ; TEXT x,y "string", [charset], [sizeX], [sizeY], [plotType], [color]
 text
  beq norm
@@ -3713,66 +3731,69 @@ text
 ne dec R6510
  jmp texter
 ;
+screenoffg
+ jsr CHRGET
 screenoff
  lda SCROLY
  and #%11101111  ;bit4 = 0 screen off
- jmp setscrly
-screenon
- lda SCROLY
- ora #%00010000  ;bit4 = 1 screen on
-setscrly
  sta SCROLY
  rts
 ;
 ;*******************
 ; SCREEN CLR
 ; SCREEN ON|OFF
-; SCREEN cols, rows where cols=38|40, rows=24|25
+; SCREEN [page], [xoffset], [yoffset]
+; page (0-4, initially 0, 0=normal text page, 1-4=redefined char mode)
+; xoffset (0-15, initially 8) 0-7 horiz offset with 38 cols, 8-15 is 40 cols
+; yoffset (0-15, initially 11) 0-7 vert offset with 24 rows, 8-15 is 25 rows
 screen
  beq mop
  cmp #TOKEN_ON
- bcc setscr
- bne scnoff
- jsr screenon
- jmp CHRGET
-scnoff cmp #TOKEN_OFF
- bne clrscrn
- jsr screenoff
- jmp CHRGET
-clrscrn cmp #TOKEN_CLR
- bne setscr
- lda #147        ;clear screen
- jsr CHROUT
- jmp CHRGET
-setscr cmp #","
- beq cklast
- jsr getval      ;get num cols
- cmp #40         ;38 or 40 only
- bne chk38
+ beq screenong
+ cmp #TOKEN_OFF
+ beq screenoffg
+ cmp #TOKEN_CLR
+ beq docls
+ cmp #","
+ beq xbits
+ jsr getval      ;page 0-4, 0=norm
+ bne page
+ jsr norm3       ;select normal text screen
+ jmp xbits
+page
+ cpy #5
+ bcs illqty8
+ dey
+ tya
+ jsr setpage
+xbits jsr chkcomm
+ cmp #","
+ beq ybits
+ jsr getval15    ;x offset and cols 38/40
  lda SCROLX
- ora #%00001000  ;bit 3 on 40 columns
+ and #%11110000
+ ora $14
  sta SCROLX
- jmp cklast
-chk38 cmp #38
- bne illqty3
- lda SCROLX
- and #%11110111  ;bit 3 off 38 columns
- sta SCROLX
-cklast jsr chkcomm
- jsr getval      ;get num rows
- cmp #25         ;24 or 25 only
- bne chk24
+ybits jsr chkcomm
+ jsr getval15    ;y offset and rows 24/25
  lda SCROLY
- ora #%00001000  ;bit 3 on 25 rows
- sta SCROLY
- rts
-chk24 cmp #24
- bne illqty3
- lda SCROLY
- and #%11110111  ;bit 3 off 24 rows
+ and #%11110000
+ ora $14
  sta SCROLY
  rts
 ;
+screenong
+ jsr CHRGET
+screenon
+ lda SCROLY
+ ora #%00010000  ;bit4 = 1 screen on
+ sta SCROLY
+ rts
+;
+docls jsr CLS
+ jmp CHRGET
+;
+
 mop jmp missop
 ;
 keyclr
@@ -3841,6 +3862,7 @@ keynum
  dec R6510
  pla
  jmp keyy
+;
 onkeyoff
  jsr CHRGET
 keyoff
@@ -3849,6 +3871,7 @@ keyoff
 setkey
  sta keyentry
 kdone rts
+;
 keyget
  jsr CHRGET
 getkey
@@ -3866,6 +3889,7 @@ setvar
  sta ($35),y ;use buffer if string, variable memory for int and float (n/a)
  stx $fd     ;when string type length is 0 or 1, otherwise not used
  jmp setval
+;
 keywait
  lda NDX
  beq keywait
@@ -3915,11 +3939,13 @@ getcoords
  cpx #25         ;max rows
  bcs badscroll
  stx $bf         ;rows to scroll
+ lda #TOKEN_TO   ;token to skip over
+ jsr CHKCOM+2    ;check for and skip over TO token, syntax error if not found
+;calc screen text and color ptrs
  dec R6510
  jsr calcptr
  inc R6510
- lda #TOKEN_TO   ;token to skip over
- jsr CHKCOM+2    ;check for and skip over TO token, syntax error if not found
+;get x2,y2
  jsr getvaluez   ;x2
  bne badscroll   ;hibyte must be 0
  cpx #40
@@ -4500,18 +4526,17 @@ nobutt lda #0    ;hibyte 0
 illqty7 jmp FCERR ;display illegal qty error
 ;
 ;*******************
-; E = ERROR(n) where n=0 Error Number, n=1 Error Line Number
-err
- jsr getfnparam
- beq errorno     ;valid values 0 or 1
- dey
- bne illqty7
- ldy errline
+; EN = ERR    -error number
+; EL = ERRL   -error line number
+fnerr
+ jsr chrget      ;advance TXTPTR one byte
+ ldy errnum      ;assume ERR (error number)
+ cmp #"l"        ;ERRL?
+ bne nobutt      ;return error number
+ jsr CHRGET      ;skip over letter
+ ldy errline     ;return error line number
  lda errline+1
- jmp GIVAYF      ;convert binary int to FAC then return
-errorno
- ldy errnum      ;y=lobyte
- jmp nobutt
+ jmp GIVAYF      ;convert binary int to float in FAC1
 ;
 ;*******************
 ; P = PEN(n) where n: 0=x-coordinate, 1:y-coordinate
@@ -8462,9 +8487,10 @@ founit lda CURLIN
  jsr findlnr  ;search for line#
  lda #$91     ;crsr up
  jsr CHROUT
+linend
  jsr STOP
  beq prgend
-linend lda $fb
+ lda $fb
  sta $fd
  lda $fc
  sta $fe
