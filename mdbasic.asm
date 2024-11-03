@@ -351,6 +351,7 @@ TOKEN_GET     = $a1
 TOKEN_NEW     = $a2
 TOKEN_TO      = $a4
 TOKEN_THEN    = $a7
+TOKEN_AND     = $af
 TOKEN_EQUAL   = $b2
 TOKEN_EXP     = $bd
 TOKEN_VAL     = $c5
@@ -383,7 +384,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.10.30"
+.text "mdbasic 24.11.02"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -2700,51 +2701,47 @@ spriteon
  dey            ;0 dec to 255 for all sprites
 spriteoff
  sty SPENA
- rts
-;
-sprexp
- cmp #TOKEN_OFF
- beq setxy
- cmp #TOKEN_ON
- bne badspr
- dey
-setxy
- sty XXPAND
- sty YXPAND
  jmp CHRGET
 ;
-sprtok
+sprexp
+ jsr chrget
+ cmp #TOKEN_AND
+ bne badspr
+ lda #$ff    ;all sprites
+ sta $bf
  jsr CHRGET
- ldy #0
- cpx #TOKEN_EXP
- beq sprexp
- cpx #TOKEN_OFF
- beq spriteoff
- cpx #TOKEN_ON
- beq spriteon
+ jmp sprsize+3
+;
 badspr jmp SNERR
 ;
 ;*******************
 ;SPRITE ON | OFF
-;SPRITE EXP ON | OFF
-;SPRITE sprite# EXP size
+;SPRITE EXPAND ON | OFF
+;SPRITE sprite# EXPAND size
 ;SPRITE sprite# DATA index
 ;SPRITE sprite#, [visibile] [,color] [,colormode] [,index] [,priority] [,size]
 sprite
- tax
- bmi sprtok
-dosprite
+ cmp #TOKEN_EXP
+ beq sprexp
+ ldy #0
+ cmp #TOKEN_OFF
+ beq spriteoff
+ cmp #TOKEN_ON
+ beq spriteon
 ;get sprite number
  jsr sprnum     ;sprite# returned in $be and 2^sprite# in $bf
  jsr CHRGOT
- tax
- bpl sprvis
+ cmp #TOKEN_DATA
+ bne chkexp
  jsr CHRGET
- cpx #TOKEN_DATA
- beq spntr+3    ;get sprite data index
- cpx #TOKEN_EXP
+ jmp sprptr    ;get sprite data index
+chkexp
+ cmp #TOKEN_EXP
+ bne sprvis
+ jsr chrget
+ cmp #TOKEN_AND
  bne badspr
- tax            ;clear zero flag
+ jsr CHRGET
  jmp sprsize+3  ;get sprite expansion size
 sprvis
  jsr ckcom22
@@ -2800,6 +2797,7 @@ spntr
  cmp #","       ;if another comma then omit param
  beq prorty
 ;get sprite data ptr 0-255 (ptr*64)=start address
+sprptr
  jsr getval
 
 ;determine VIC-II base addr
