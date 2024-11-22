@@ -384,7 +384,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
 ;
 mesge .byte 147
-.text "mdbasic 24.11.11"
+.text "mdbasic 24.11.21"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -3574,19 +3574,15 @@ csron
 .byte $2c
 csroff
  lda #1       ;1=disabled
- sei
- ldy BLNSW   ;cursor disabled flag, 0=no, 1=yes
- bne setcsr  ;if disabled then no cursor init needed
- sty BLNON   ;last cursor blink flag, 0=norm, 1=rvs
- pha
-;init cursor
- lda GDBLN   ;character under cursor
- ldx GDCOL   ;color of char under cursor
- jsr $ea13   ;set cursor blink timing and color memory address for print
- pla
+ ldy BLNSW    ;is cursor disabled? 0=no, else yes
+ bne setcsr   ;if yes then set its new value now
+ iny          ;1 jiffiy
+ sty BLNCT    ;set cursor remaining blink delay to 1 jiffy
+csrwait       ;otherwise wait for it to blink off
+ ldy BLNON    ;current blink state, 0=norm, 1=rvs
+ bne csrwait  ;wait for cursor to blink off
 setcsr
- sta BLNSW   ;cursor disabled flag, 0=no, 1=yes
- cli
+ sta BLNSW    ;cursor: 0=enable, 1=disable
  jmp CHRGET
 ;
 csrclr
