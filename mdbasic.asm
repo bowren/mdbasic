@@ -381,10 +381,10 @@ TOKEN_PI      = $ff  ;PI symbol token
 
 ;cartridge identifier
 .word resvec,runstp        ;new reset and runstop vectors
-.byte $c3,$c2,$cd,$38,$30  ;necessary for cartridge indicator
+.byte $c3,$c2,$cd,$38,$30  ;CBM80
 ;
 mesge .byte 147
-.text "mdbasic 24.11.21"
+.text "mdbasic 24.12.01"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -8753,11 +8753,10 @@ filess
  bcs err7e
 blocks
  jsr prtlin
- bcs err7e
- beq nxtfile
-chkeof
- and #%01000000 ;bit6=EOF/EOI, bit7=device not present, bits0-1 device timeout
- bne filecnt    ;bit6=1? EOF, print file count
+ bcs err7e      ;error flag set
+ beq nxtfile    ;status bits are clear, keep reading
+ and #%10000011 ;bit6=EOF/EOI, bit7=device not present, bits0-1 device timeout
+ beq filecnt    ;bit6 must be 1, EOF, quit now with success
  lda #5         ;DEVICE NOT PRESENT
  sec            ;flag for error
 err7e rts
@@ -9170,4 +9169,6 @@ copyer
  bne copyer
  jmp memnorm
 ;
+.repeat 3,0  ;filler to complete 8K
+
 .end
