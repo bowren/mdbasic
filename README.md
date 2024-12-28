@@ -1,6 +1,5 @@
 # MDBASIC
 MDBASIC is an extension to the Commodore 64 BASIC V2.<br>
-MDBASIC version 24.12.01<br>
 <br>
 Download the documentation file <b>mdbasic.pdf</b> for details.<br>
 <br>
@@ -8,17 +7,17 @@ Download Options:<br>
 <ol>
 <li>mdbasic.d64 - A disk image that contains mdbasic.prg and a few testing/example programs & games</li>
 <li>mdbasic.prg - The compiled executable program</li>
-<li>mdbasic.crt - A cartridge image of MDBASIC</li>
+<li>mdbasic.crt - The cartridge image</li>
 <li>mdbasic.asm - The source code</li>
 </ol>
 Download Turbo Assembler to compile source:<br>
 https://style64.org/file/TMPx_v1.1.0-STYLE.zip<br>
 <br>
-See the shell script "compile.sh" for an example of how to compile using Turbo Assembler and execute on the VICE emulator.
+See the shell script "compile.sh" for an example of how to compile using Turbo Assembler and execute on the VICE emulator.<br>
 <br>
 MDBASIC can run on a C64 computer or any computer that uses the Versatile Commodore Emulator (VICE). 
 VICE can attach the cartridge image (mdbasic.crt) or load & run the executable program (mdbasic.prg). 
-VICE can also mount the disk image (mdbasic.d64).  Refer to the VICE manual for details.
+VICE can also mount the disk image (mdbasic.d64). Refer to the VICE manual for details.<br>
 <br>
 VICE can be downloaded using the following link:<br>
 http://vice-emu.sourceforge.net/<br>
