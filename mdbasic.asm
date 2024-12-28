@@ -384,7 +384,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;CBM80
 ;
 mesge .byte 147
-.text "mdbasic 24.12.01"
+.text "mdbasic 24.12.02"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -4597,8 +4597,8 @@ inf
 ;
 ;*******************
 ; P = POT(n) where n=potentiometer number (1-4)
-;labeled "Port 1" (pots 1 and 2) are on CIA #1 data port B
-;labeled "Port 2" (pots 3 and 4) are on CIA #1 data port A
+;labeled "Port 1" (pots 1 and 2) buttons are on CIA #1 data port B
+;labeled "Port 2" (pots 3 and 4) buttons are on CIA #1 data port A
 pot
  jsr getfnparam  ;get pot number param
  beq illqty7     ;zero is invalid
@@ -4608,7 +4608,7 @@ pot
  cmp #3          ;set carry flag if pot num 3 or 4
  ldx #%11000000  ;bits 6,7 set to output to select port 1 or 2 paddle read
                  ;bits 3,4 set to input paddle buttons, the rest are not needed
- ldy #1          ;port index 0=A (port 2), 1=B (port 1)
+ ldy #0          ;port index 0=A (labeled "Port 2"), 1=B (labeled "Port 1")
 ;keyboard off
  sei             ;prevent irq from using port for keyboard
  lda CIDDRA      ;get current data direction on port A
@@ -4617,13 +4617,13 @@ pot
  stx CIDDRA      ;write bits to select reading pots on ports A and B
 ;select port 1 or 2
  lda #%10000000  ;bit 7 & 6 pattern: 10=port1, 01=port2
- bcc setport     ;carry was set if pot num 3 or 4
- dey             ;offset for data port A (port 2)
+ bcs setport     ;carry was set if pot num 3 or 4
+ iny             ;offset for data port B (port 1)
  lsr             ;adjust bit pattern to select port 2
 setport
  sta CIAPRA      ;apply port selection
 ;read buttons
- lda CIAPRA,y    ;read button flags (bits 3,4) from selected port A or B
+ lda CIAPRA,y    ;read button flags (bits 2,3) from selected port A or B
  sta $61         ;save button bit flags, 0=pressed, 1=not pressed
 ;wait for data
  ldy #$7f        ;wait for POTX/POTY latches to ensure 8-bit data capture
