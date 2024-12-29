@@ -384,7 +384,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;CBM80
 ;
 mesge .byte 147
-.text "mdbasic 24.12.02"
+.text "mdbasic 24.12.03"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -2544,10 +2544,9 @@ resume0
  pla          ;discard ERR token
  pla          ;discard line number that caused the error
  pla
- pla          ;discard txt ptr of error
+ pla          ;discard TXTPTR of error
  pla
- jsr CHRGOT
- jsr GOTO     ;perform goto (adjust txt ptr to given line num)
+ jsr dogoto2  ;perform GOTO, error if bad line num
 nxtstmt0
  jsr entrap   ;re-enable error trapping
 nxtstmt       ;prepare next stmt for execution
@@ -2608,16 +2607,28 @@ bbbb dec TXTPTR
  jmp findstart
 ;
 ;*******************
+nogo
+ jmp NOGOSUB   ;RETURN WITHOUT GOSUB
+oldrtn
+ jmp RETURN+2
+;
 ;RETURN [line#]
-return beq oldrtn
- pla          ;discard call to this subroutine
+return
+ beq oldrtn
+ pla           ;discard call to this subroutine
  pla
  tsx
  lda BAD+1,x
  cmp #TOKEN_GOSUB
- beq resume0
- jmp NOGOSUB  ;RETURN WITHOUT GOSUB
-oldrtn jmp RETURN+2
+ bne nogo
+ pla           ;discard GOSUB token
+ pla           ;discard line number
+ pla
+ pla           ;discard TXTPTR
+ pla
+dogoto2
+ jsr CHRGOT
+ jmp GOTO      ;perform GOTO
 ;
 ;*******************
 ; MOVE sprite#, x1, y1 [TO x2, y2, speed]
@@ -4626,17 +4637,16 @@ setport
  lda CIAPRA,y    ;read button flags (bits 2,3) from selected port A or B
  sta $61         ;save button bit flags, 0=pressed, 1=not pressed
 ;wait for data
- ldy #$7f        ;wait for POTX/POTY latches to ensure 8-bit data capture
-waitl dey        ;from the A/D converters in the SID chip that measure pot
+ ldx #$7a        ;wait for POTX/POTY latches to ensure 8-bit data capture
+waitl dex        ;from the A/D converters in the SID chip that measure pot
  bne waitl       ;voltage (0 to +5 Volts) on the pins of the selected port
 ;read the data
  lda $14         ;pot num 1-4
  lsr             ;even or odd pot num?
  bcs readpot     ;odd pot num (1,3) use POTX
- iny             ;even pot num (2,4) use POTY
+ inx             ;even pot num (2,4) use POTY
 readpot
- lda POTX,y      ;read pot value captured from the data port
- tay             ;lobyte of the return value
+ ldy POTX,x      ;read pot value captured from the data port
 ;keyboard on
  pla             ;restore the data direction
  sta CIDDRA      ;register settings for port A
@@ -4699,18 +4709,18 @@ resvec
 ;*********************************************************
 runstp
  lda #$7f
- sta CI2ICR
- ldy CI2ICR
- bmi nothin
+ sta CI2ICR      ;clear CIA #2 irq flags
+ ldy CI2ICR      ;if any CIA #2 source caused an irq
+ bmi nothin      ;then handle it, otherwise
  jsr $f6bc       ;scan keyboard for STOP key with result in $91
- jsr STOP        ;determine if STOP key was pressed
- bne nothin      ;if not, continue with NMI handler
+ jsr STOP        ;if STOP key was pressed then break
+ bne nothin      ;otherwise continue with NMI handler
 ;***************************************************************
 ;* BREAK Instruction IRQ-driven routine via vector CBINV ($0316)
 ;***************************************************************
 brkirq
- jsr norm
- jsr IOINIT
+ jsr norm        ;apply normal state
+ jsr IOINIT      ;initialize CIA I/O devices
  jsr $e518       ;initialize screen and keyboard
  dec R6510       ;LORAM signal select RAM
  jsr newvec      ;init vectors
