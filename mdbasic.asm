@@ -273,10 +273,10 @@ GETADR = $b7f7 ;convert FAC1 to unsigned 16-bit integer in LINNUM
 POKE   = $b824 ;perform POKE
 WAIT   = $b82d ;perform WAIT
 FADDH  = $b849 ;add 0.5 to FAC1
+FADD   = $b867 ;add a number in memory to FAC1
 DIV10  = $bafe ;divide FAC1 by 10
 MUL10  = $bae2 ;multiply FAC1 by 10
 FMULT  = $ba28 ;copy mem pointed by Y(hi),A(lo) to FAC2 then FAC1=FAC1*FAC2
-FDIVT  = $bb12 ;divide FAC2 by FAC1 FAC1 = (FAC2/FAC1)
 MOVFM  = $bba2 ;copy a 5-byte float from memory to FAC1, A=lobyte, Y=hibyte
 MOV2F  = $bbc7 ;copy a 5-byte float from FAC1 to memory, $57-$5B
 MOVEF  = $bc0f ;copy FAC1 to FAC2 without rounding
@@ -393,7 +393,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;CBM80
 ;
 mesge .byte 147
-.text "mdbasic 25.03.21"
+.text "mdbasic 25.03.28"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -915,8 +915,8 @@ nexto jsr CHRGET
  lda $61    ;exponent
  beq zero3
  adc #3     ;increase by 2^3 = 8
+ bcs over
  sta $61
- beq over
 zero3 txa
  beq nexto
  jsr FINLOG
@@ -978,26 +978,26 @@ end1 rts
 ; TIME CLR    reset time to all zeros
 ; TIME$ = T$  set the time start, format="00:00:00"
 time
- cmp #TOKEN_CLR
- beq timeclr
- cmp #"$"
- beq settime
-badtime jmp SNERR
-badtime2 jmp TMERR
-;set the clock
-settime
+ tax
  jsr CHRGET
+ cpx #TOKEN_CLR
+ beq timeclr
+ cpx #"$"
+ bne badtime
+;set the clock
  cmp #TOKEN_EQUAL
  bne badtime
  jsr getstr
  dec R6510
- jsr settimee
+ jsr settime
  inc R6510
  bcs badtime2
  rts
+;
+badtime jmp SNERR
+badtime2 jmp TMERR
 ;reset clock to 12AM
 timeclr
- jsr CHRGET      ;skip over CLR token
  lda #%10010010  ;BCD 12 (am/pm flag=1 since it flips on write when hour is 12)
  sta TO2HRS      ;writing this reg stops time reg updates
  lda #0
@@ -1346,6 +1346,7 @@ clsmdb
 zzz
  lda mdbout
  beq clsclr
+zzzz
  jsr CLOSE
 clscmd
  lda #0
@@ -1827,24 +1828,31 @@ stopkey
  dec R6510
  jmp stpkey
 ;
+initrun
+ cmp #"@"
+ bne initmdb
+ jsr CHRGET
+ jmp initmdb1
 initmdb
- lda #0         ;clear all MDBASIC IRQ flags
+ lda #0
  sta MDBIRQ     ;if MDBASIC IRQ is active it will restore original irq
+ sta NDX        ;clear keyboard buffer
  sta SPENA      ;turn off all sprites
- jsr troff      ;turn off tracing
- jsr detrap     ;turn off error trapping in case it was enabled in previous run
+ jsr sidclr     ;clear SID registers
  jsr clearerr   ;clear last error info
- jsr keyoff     ;ensure key trapping is off
- jmp sidclr     ;clear SID registers
+ jsr clsall     ;close all open files and restore default devices
+initmdb1
+ jsr detrap     ;turn off error trapping
+ jsr keyoff     ;turn off key trapping
+ jmp troff      ;turn off tracing
 ;
 ;*******************
-; RUN
-; RUN linenum
-; RUN filename$ [,device [,secondary]]
+; RUN [linenum]
+; RUN [@] filename$ [,device [,secondary]]
 oldrun jmp RUN  ;CBM BASIC - perform RUN
 newrun
  php
- jsr initmdb    ;initialize MDBASIC
+ jsr initrun    ;initialize MDBASIC
  plp
  beq oldrun     ;RUN without params
  bcc oldrun     ;RUN with line num param
@@ -1854,15 +1862,15 @@ newrun
  jsr RUNC       ;reset TXTPTR to start of program text
  jsr $e16f      ;perform load
  jsr old        ;set BASIC prg ptrs
- lda #0         ;run without line number
- jsr RUN        ;set run mode and clear vars
+ jsr $a663      ;clear variables and stack, lda #0
+ jsr SETMSG     ;disable Kernal and BASIC messages
  jmp NEWSTT     ;enter loop for BASIC program processing
 ;
 ;*******************
 ; MERGE filename$   appends file to end of current BASIC program
 merge
  lda #$00
- sta VERCK
+ sta VERCK   ;load or verify? 0=load, 1=verify
  jsr $e1d4   ;set params for load, verify and save
  lda VARTAB
  sec
@@ -1883,7 +1891,8 @@ okmerg stx VARTAB
  jsr CLEAR-5 ;reset TXTPTR to beginning of prg then perform CLR
  jsr LINKPRG ;relink lines of tokenized prg text
  jmp READY   ;main basic loop
-ioerr jmp $e0f9 ;handle i/o error
+ioerr
+ jmp $e0f9   ;handle i/o error
 ;
 ;*******************
 ;secondary address 16=SCREEN, 17=CHAREN, 18=BITMAP
@@ -1897,8 +1906,7 @@ newlod
 romin
  jsr norm2
  lda LA         ;close current open file
- jsr CLOSE
- jmp CLRCHN     ;restore default I/O devices
+ jmp zzzz       ;close file and restore default I/O channels
 ;
 ; Vector to Kernal LOAD Routine ILOAD ($0330)
 newload
@@ -1948,8 +1956,7 @@ oklod
  jsr ACPTR  ;receive a byte of data from a device on the serial bus
  sta STAL+1 ;remember start address
  jsr $f4e3  ;continue with original LOAD subroutine
- bcc oklod2 ;carry set indicates error
- jmp $e0f9  ;handle i/o error
+ bcs ioerr  ;carry set indicates error
 oklod2
  jsr chkio  ;check the I/O status
  lda MSGFLG ;display message if not in prg mode
@@ -2224,7 +2231,8 @@ seterrln
  sty errline+1
  rts
 raiseerr
- jsr getvalz  ;valid error number is 1-127
+ jsr GETBYTC+3 ;valid error number is 0-127
+ txa
  bmi baderr2  ;128 and over is invalid
  jmp (IERROR)
 ;
@@ -2372,6 +2380,7 @@ nxtcls
  jmp gfn          ;process next file number
 clsfiles
  jsr CHRGET       ;skip over FILES token
+clsall
  jsr CLALL        ;close all open files and restore default devices
  jmp clscmd       ;set default I/O channel and clear MDBASIC file numbers
 ;
@@ -3247,7 +3256,7 @@ pulse
  ldy #>m4095  ;y=hi byte, a=lo byte pointer to 5-byte FAC value
  jsr FMULT    ;multiply FAC1 by a value in memory ptr A=lo byte, Y=hi byte
  jsr doround  ;round FAC1 to nearest whole number
- jsr GETADR   ;convert FAC1 to 2-byte integer in Y (lobyte), A (hibyte)
+ jsr GETADR   ;convert FAC1 to unsigned 16-bit integer Y (lobyte), A (hibyte)
  cmp #$10     ;0-4095 only (12-bit value)
  bcs badwav
  ldx $fe      ;register offset for voice
@@ -3273,7 +3282,8 @@ pulse
 ; 6 pulse + saw tooth 
 ; 7 pulse + saw tooth + triangle
 ; 8 noise
-;WAVE voice#, waveform, [gate], [sync], [ring], [disable]
+;omitted boolean parameters will use the default of 0
+;WAVE voice#, waveform [,gate [,sync [,ring [,disable]]]]
 ;
 badwav
  jmp FCERR
@@ -3318,9 +3328,9 @@ wave
  ora $fe
  sta $fe
 waveit
- pla
+ pla          ;SID register offset
  tax
- lda $fe
+ lda $fe      ;all settings in 8 bits
  sta VCREG1,x ;apply setting for voice
  rts
 ;
@@ -3364,24 +3374,24 @@ getfreq
  plp
  jsr getvoc      ;returns SID register offset (voice#-1)*7 in accumulator
  sta $fe
- jsr CHRGET
+ jsr ckcom2
  jsr FRMNUM      ;convert current expression to a number and store in FAC1
- jsr MOVEF       ;copy FAC1 to FAC2 (numerator) frequency value
  lda PALNTSC     ;clock type 0=NTSC, 1=PAL
  beq is_ntsc
- lda #<pal
- ldy #>pal
+ lda #<palb
+ ldy #>palb
  bne memfac      ;always branches since hibyte of ptr could never be 0
-is_ntsc lda #<ntsc
- ldy #>ntsc
-memfac jsr MOVFM ;copy mem to FAC1 pointed by a & y
- jsr FDIVT       ;FAC1 = (FAC2/FAC1)
+is_ntsc
+ lda #<ntscm
+ ldy #>ntscm
+memfac
+ jsr FMULT       ;multiply FAC1 by a value in memory ptr A=lo byte, Y=hi byte
  jsr doround     ;round FAC1 to nearest whole number
  jsr GETADR      ;convert FAC1 to unsigned 16-bit int
- ldx $fe
+ ldx $fe         ;register offset for voice
  sta FREHI1,x
  tya
- sta FRELO1,x    ;store result in data control reg for voice
+ sta FRELO1,x
 done5 rts
 ;
 ;*******************
@@ -4046,17 +4056,6 @@ adsr
 ;FREQ=(REGVAL*5.8)+30Hz
 ;since we need to convert a freq to regval, rewrite expression:
 ;REGVAL = (FREQ-30)/5.8
-;to simplify the math:
-;REGVAL = (FREQ/5.8)-(30/5.8)  note 30/5.8=5.172...or just 5 (close enough)
-;REGVAL = (FREQ/5.8)-5
-;Summary of steps in code:
-;1. get freq in FAC format
-;2. divide by 5.8 using FAC DIV subroutine
-;3. round up the value to whole number
-;4. convert FAC value to a 2-byte binary value using FAC subroutine
-;5. subtract 5 from binary value
-;6. range check to ensure not larger than 2047, error if so
-;7. store the result in SID registers
 ;
 novoice
  jmp illvoc     ;illegal voice number
@@ -4091,25 +4090,18 @@ getfreq1
  cmp #","
  beq reson
  jsr FRMNUM     ;convert current expression to a number and store in FAC1
- jsr MOVEF      ;copy FAC1 to FAC2 (numerator) frequency value 
+ lda #<neg30
+ ldy #>neg30
+ jsr FADD       ;add -30
  lda #<five8
  ldy #>five8
- jsr MOVFM      ;copy mem to FAC1 pointed by a & y
- jsr FDIVT      ;FAC1 = (FAC2/FAC1)
+ jsr FMULT      ;multiply FAC1 with value in memory pointed to by A and Y
  jsr doround    ;round FAC1 to nearest whole number
  jsr GETADR     ;convert FAC1 to unsigned 16-bit int
-;now subtract 30/5.8 = 5.172...or just 5 (close enough)
- tax            ;hibyte
- tya            ;lobyte
- sec            ;subtract 5 from 2-byte binary value
- sbc #5         ;to complete freq conversion formula
- tay            ;save lobyte
- txa            ;hibyte
- sbc #0
- bmi illqty5    ;if bit 7 in hibyte set then we rolled over from 0
 ;range check register value max from 0-2047 allowed
  cmp #8         ;2048 or larger is above SID's range
  bcc okfilt
+;
 illqty5 jmp FCERR ;illegal qty err
 mop2 jmp missop
 ;
@@ -4129,7 +4121,6 @@ okfilt
  sta XSAV   ;save hibyte
 ;store lobyte in SID lower byte register (bits 3-7 will be ignored by SID)
  tya        ;lobyte
- sta CUTLO  ;since upper 5 bits are not used by SID, no need to set them to 0
 ;shift lobyte right 3 times to demote upper 5 bits
  lsr
  lsr
@@ -4137,6 +4128,7 @@ okfilt
 ;merge upper and lower bits as hibyte and store in SID upper byte register
  ora XSAV
  sta CUTHI
+ sty CUTLO  ;since upper 5 bits are not used by SID, no need to set them to 0
 ;
 ;get the resonance parameter (if present)
 ;set the filter resonance control register $d417
@@ -4264,7 +4256,7 @@ cpystr lda ($50),y
  iny
  cpy $52
  bne cpystr
- lda #0         ;default voice 1 (index 0)
+ lda #0         ;default voice 1 (SID register offset 0)
  sta playbuf1,y ;zero-byte terminator
  sta playindex  ;start index of string
  jsr initvoice
@@ -5138,14 +5130,14 @@ getstr2 jsr FRESTR ;discard temp string
 ;2=Lower-case and symbols  3=Reverse of set 2
 ;accumulator holds the hibyte of the base address of CHAREN
 getchrset
- sta INPFLG   ;either $d0 (BITMAP mode) or $f0 (DESIGN mode)
+ sta INPFLG        ;either $d0 (BITMAP mode) or $f0 (DESIGN mode)
  jsr getvalg
- cmp #4       ;0 to 3 only
+ cmp #4            ;0 to 3 only
  bcs illqty4
- asl          ;calc hibyte offset
- asl          ;0=0, 1=4, 2=8, 3=12
- adc INPFLG   ;carry is already clear
- sta INPFLG   ;charset 0=$d000,1=$d400,2=$d800,3=$dc00
+ asl               ;calc hibyte offset
+ asl               ;0=0, 1=4, 2=8, 3=12
+ adc INPFLG        ;carry is already clear
+ sta INPFLG        ;charset 0=$d000,1=$d400,2=$d800,3=$dc00
  rts
 ;*******************
 getboolg jsr CHRGET
@@ -5193,7 +5185,7 @@ getvalueg jsr CHRGET
 getvaluez beq missop
 getvalue  jsr FRMNUM ;eval numeric expr & type
 getvalu
- jsr GETADR          ;convert FAC1 to unsigned 2 byte int in LINNUM
+ jsr GETADR          ;convert FAC1 to unsigned 16-bit int in LINNUM
  ldx LINNUM          ;return lobyte in x reg
  ldy LINNUM+1        ;return hibyte in y reg
  rts                 ;processor zero flag set based on hibyte
@@ -5329,21 +5321,23 @@ sidoff .byte 0,7,14
 ;VOICE command use VOICE voc#, frequency
 ;REGVAL=FREQ/(CLOCK/16777216)
 ;FREQ=REGVAL*(CLOCK/16777216)Hz
-;where CLOCK NTSC=1022727.143, PAL=985248.611
-;NTSC 1Hz Freq Value = 1022727.143/16777216 = 0.060959288
-;PAL  1Hz Freq Value =  985248.611/16777216 = 0.058725393
+;NTSC-M CLOCK = 1022727.143, PAL-B CLOCK = 985248.444
+;NTSC-M 1Hz Freq Value = 16777216/1022727.143 = 16.404391059
+;PAL-B  1Hz Freq Value = 16777216/985248.444  = 17.028411567
 ;below are the FAC values for 1 unit in Hz for both CLOCK speeds
 ;
-ntsc .byte $7c,$79,$b0,$72,$44
-pal  .byte $7c,$70,$8a,$09,$a8
+ntscm .byte $85,$03,$3c,$31,$62 ;16.404391059
+palb  .byte $85,$08,$3a,$2e,$54 ;17.02840868
 ;
 ;PULSE command use PULSE voc#, width%
 ;used for converting register value to frequency in Hz
 ;Formula REGVAL=40.95*width%
-m4095 .byte $86,$23,$cc,$cc,$cd ;FAC binary representation of 40.95
+m4095 .byte $86,$23,$cc,$cc,$cc ;FAC binary representation of 40.95
 ;FILTER command use FILTER frequency, resonance, type
-five8 .byte $83,$39,$99,$99,$9a  ;FAC binary representation of 5.8
+;five8 .byte $83,$39,$99,$99,$99 ;FAC binary representation of 5.8
+five8 .byte $7e,$30,$8d,$3d,$c8 ;FAC binary representation of 1/5.8
 ;
+neg30 .byte $85,$f0,$00,$00,$00 ;FAC binary represenation of -30
 
 ;********************************************************************
 ;* Global Variable Storage
@@ -7770,8 +7764,12 @@ wdone
 ;--------------
 ;play next note
 nextn0          ;start over from beginning
- lda #0
- sta playindex
+ ldy #1
+ sty playtime
+ dey
+ sty playindex
+ lda playvoice  ;SID reg offset
+ jmp initvoice
 nextn2
  jsr notegot
  beq endply
@@ -7853,18 +7851,16 @@ nextn3
 nonnote
  cmp #"v"
  bne notepause
- jsr getdigitval
- beq skipnote   ;voice 0 invalid
- cmp #4         ;voice 1,2 or 3 only
- bcs skipnote
- jsr getvoff    ;get voice register offset
- cmp playvoice  ;already using this voice?
- beq skipnote
- tax            ;new voice register offset
- ldy playvoice  ;old voice register offset
- lda playwave   ;current waveform
- sta VCREG1,y   ;start decay cycle for current voice
- jsr inivoc     ;set new voice
+ jsr getdigitval ;sustain volume
+ cmp #16        ;valid value range 0-15
+ bcs skipnote   ;invalid volume so skip it
+ asl            ;move to hi nybble
+ asl
+ asl
+ asl
+ ora #6         ;release duration to 204ms (lo nybble)
+ ldx playvoice  ;SID reg offset
+ sta SUREL1,x
  jmp nextn2
 
 notepause
@@ -8728,7 +8724,7 @@ cpytimfun
  rts
 ;
 ;set time from string
-settimee
+settime
  lda CI2CRB      ;bit7: select target 0=clock,1=alarm
  and #%01111111  ;writing to TOD registers set the clock
  sta CI2CRB
@@ -9271,5 +9267,5 @@ stopit
 stopr
  jmp memnorm
 ;
-.repeat 4, 0 ;filler to complete 8KB
+.repeat 5, 0 ;filler to complete 8KB
 .end
