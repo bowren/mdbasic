@@ -3,11 +3,11 @@
 ; (c)1985-2025 Bowren Consulting, Inc. (www.bowren.com)
 ;
 ;zero-page registers
-R6510  = $01 ;LORAM/HIRAM/CHAREN RAM/ROM selection and cassette control register
+R6510  = $01 ;LORAM/HIRAM/CHAREN RAM/ROM selection and cassette control reg
 CHARAC = $07 ;Search Character for Scanning BASIC Text Input
 ENDCHR = $08 ;Search Character for Statement Termination or Quote
 TRMPOS = $09 ;Column position of the Cursor before the Last TAB or SPC
-VERCK  = $0a ;flag for LOAD or VERIFY
+VERCK  = $0a ;flag for BASIC LOAD=0, VERIFY=1
 COUNT  = $0b ;general counter
 VALTYP = $0d ;Type of Data (255=String, 0=Numeric)
 INTFLG = $0e ;Type of Numeric Data (128=Integer, 0=Floating Point)
@@ -95,7 +95,7 @@ SCROLY = $d011 ;Vertical Fine Scrolling and Control Register
 ;Bit 3 Select a 24-row or 25-row text display (1=25 rows, 0=24 rows)
 ;Bit 4 Blank the entire screen to the same color as the background (0=blank)
 ;Bit 5 Enable bitmap graphics mode (1=enable)
-;Bit 6 Enable extended color text mode (1=enable)
+;Bit 6 Enable extended background color mode (1=enable)
 ;Bit 7 High bit (Bit 8) of raster compare register at 53266 ($D012)
 ;
 LPENX  = $d013 ;Light Pen Horizontal Position (0-160) must by multiplied by 2
@@ -304,6 +304,7 @@ LODERR = $e19c ;load error
 ;Commodore 64 Kernal functions
 SYS    = $e12a ;perform SYS
 VERIFY = $e165 ;perform VERIFY
+FPARAMS= $e1d4 ;get params for load, verify or save statements
 HALT   = $e386 ;halt program and return to main BASIC loop
 INIT   = $e3bf ;initialize BASIC
 LP2    = $e5b4 ;get a character from the keyboard buffer
@@ -393,7 +394,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .byte $c3,$c2,$cd,$38,$30  ;CBM80
 ;
 mesge .byte 147
-.text "mdbasic 25.03.28"
+.text "mdbasic 25.05.11"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -1858,7 +1859,7 @@ newrun
  bcc oldrun     ;RUN with line num param
  lda #$00       ;RUN with file params
  sta VERCK      ;load or verify? 0=load, 1=verify
- jsr $e1d4      ;process file parameters
+ jsr FPARAMS    ;process file parameters
  jsr RUNC       ;reset TXTPTR to start of program text
  jsr $e16f      ;perform load
  jsr old        ;set BASIC prg ptrs
@@ -1869,9 +1870,9 @@ newrun
 ;*******************
 ; MERGE filename$   appends file to end of current BASIC program
 merge
- lda #$00
- sta VERCK   ;load or verify? 0=load, 1=verify
- jsr $e1d4   ;set params for load, verify and save
+ jsr CLEAR+2    ;clear BASIC variables
+ jsr FPARAMS    ;set params for load
+;calculate mem ptr for beginning of load
  lda VARTAB
  sec
  sbc #$02
@@ -1879,20 +1880,23 @@ merge
  lda VARTAB+1
  sbc #$00
  tay
- lda #$00
- jsr LOAD    ;load from a device
- bcs ioerr   ;carry set indicates error
- jsr READST  ;read i/o status word
+;perform LOAD
+ lda #$00       ;0=LOAD, 1=VERIFY
+ jsr LOAD       ;load from a device
+ bcs ioerr      ;carry set indicates error
+ jsr READST     ;read i/o status word
  and #%10111111 ;did an error occur other than EOF/EOI (bit6)?
- beq okmerg  ;no error
- jmp LODERR  ;raise LOAD ERROR
-okmerg stx VARTAB
+ bne loderr
+;adjust mem ptr for new prg size
+ stx VARTAB     ;set new variable storage start ptr
  sty VARTAB+1
- jsr CLEAR-5 ;reset TXTPTR to beginning of prg then perform CLR
- jsr LINKPRG ;relink lines of tokenized prg text
- jmp READY   ;main basic loop
+ jsr CLEAR-5    ;reset TXTPTR to beginning of prg then perform CLR
+ jsr LINKPRG    ;relink lines of tokenized prg text
+ jmp READY      ;main basic loop
 ioerr
- jmp $e0f9   ;handle i/o error
+ jmp $e0f9      ;handle i/o error
+loderr
+ jmp LODERR     ;raise LOAD ERROR
 ;
 ;*******************
 ;secondary address 16=SCREEN, 17=CHAREN, 18=BITMAP
@@ -1910,7 +1914,7 @@ romin
 ;
 ; Vector to Kernal LOAD Routine ILOAD ($0330)
 newload
- sta $93     ;flag for load routine 0=Load, 1=Verify
+ sta $93     ;flag for kernal load routine 0=Load, 1=Verify
  ldx SA      ;secondary address
  stx $fe     ;used after load to determine if mem ptrs need to be restored
  cpx #16     ;mdbasic secondary address 16,17,18
@@ -1922,7 +1926,7 @@ oldload
  lda FA     ;get current device number
  bne xf4b2  ;0=keyboard
 xf4af
- jmp $f713  ;load from keyboard or screen
+ jmp $f713  ;handle error #9 - ILLEGAL DEVICE NUMNER (keyboard or screen)
 xf4b2
  cmp #3
  beq xf4af  ;3=screen
@@ -2027,7 +2031,7 @@ bsave
 ;set file defaults
  lda #$00     ;default file#
  ldx #$01     ;default device 1 (tape)
- ldy #$00     ;default secondary 0
+ tay          ;default secondary 0
  jsr SETLFS   ;set logical file params, A=file#,X=device,Y=secondary
 ;check last expression evaluated data type
  lda VALTYP   ;numeric or string?
@@ -2046,7 +2050,7 @@ bsaver
  stx EAL
  sty EAL+1
  jsr CHRGET   ;advance to next param or end of statement
- jsr $e1d4    ;set parms for LOAD, VERIFY, SAVE
+ jsr FPARAMS  ;set parms for LOAD, VERIFY, SAVE
  ldx EAL      ;ptr to end address
  ldy EAL+1    ;in x and y reg
  lda #$c1     ;first byte in zero-page used as ptr to start address
@@ -2131,7 +2135,7 @@ noline
  tay
  bcs deldone
  txa
- clc
+; clc not needed since already clear
  adc VARTAB
  sta VARTAB
  tya
@@ -2844,8 +2848,7 @@ sprptr
  jsr ptrhi      ;get hibyte of sprite ptr start address
  sta $62        ;sprite pointers are in the last 8 bytes of 1K screen RAM
  lda #$f8       ;lobyte of offset to first byte of sprite data ptrs
- sta $61        ;ptr to first sprite ptr, ie bank 0 with 1K offset is $07F8
-
+ sta $61        ;ptr to first sprite ptr, ie bank 0 with 1K offset is $07f8
 ;apply ptr param
  lda XSAV       ;sprite ptr from cmd param
  ldy $be        ;sprite# 0-7
@@ -2867,32 +2870,30 @@ okpri lda $bf   ;2^sprite#
  ora SPBGPR     ;turn on bit for sprite
  sta SPBGPR     ;apply new value
 ;sprite horizontal and vertical expansion size
+;0=none, 1=Horiz Only, 2=Vertical Only, 3=Both
 sprsize
  jsr chkcomm    ;check for comma, if end of statement then do not return here
  jsr GETBYTC+3  ;size 0-3
  txa
  lsr
  tax
- bcs a1
+ bcs a1         ;values 1,3
  jsr clrx       ;values 0,2
- jmp a2
-a1 jsr magx     ;values 1,3
+ bcc a2
+a1 jsr magx
 a2 txa
  lsr
  bne illqty9    ;values more than 3
- bcs a3
- jmp clry       ;values 0,1
-a3 jmp magy     ;values 2,3
-;
-magy ldy #0
- .byte $2c
+ bcc clry       ;for values 0,1
+ ldy #0         ;for values 2,3
+.byte $2c       ;defeat ldy #6
 magx ldy #6
-;load y reg with xpand reg offset 0=Y, 6=X
+;load y reg with xypand reg offset 0=Y, 6=X
  lda YXPAND,y
  ora $bf        ;2^sprite#
  bne setmag     ;always branches
 clry ldy #0
- .byte $2c
+.byte $2c       ;defeat ldy #6
 clrx ldy #6
 ;load y reg with xpand reg offset 0=Y, 6=X
  lda $bf
@@ -2903,37 +2904,57 @@ setmag
  rts
 ;
 ;*******************
-;MULTI [TEXT] [cc1], [cc2]         - multicolor text mode
+;MULTI [TEXT] [cc1], [cc2]         - multicolor text or bitmap mode
 ;MULTI COLOR  [eb1], [eb2], [eb3]  - extended background color mode
-;MULTI SPRITE [sc1], [sc2]         - multicolor sprite mode, bit patterns 01,11
+;MULTI SPRITE [sc1], [sc2]         - multicolor sprite mode
 multi
+ beq chrmap        ;no params
  cmp #TOKEN_SPRITE
  beq mcspri
  cmp #TOKEN_COLOR
  bne chrmap
 
 ;MULTI COLOR [eb1], [eb2], [eb3]
- lda #%01000000    ;bit 6=1 to enable extended background color mode for text
- jsr setscrly2
+ jsr mcoff         ;ensure multi color text mode is off
+ lda SCROLY
+ and #%11011111    ;bit5=0 to disable bitmap mode
+ ora #%01000000    ;bit6=1 to enable extended background color text mode
+ sta SCROLY
  jsr getcc1x       ;get and apply eb1 and eb2 params
  jsr chkcomm       ;if no more params then stop, otherwise continue
  jsr getval15      ;get eb3 param
  sta BGCOL3        ;apply to ext bkgnd color reg#3
  rts
 
+mcon
+;ensure ext bkgrd color mode off (not compatable)
+ lda #%10111111    ;bit#6=0, ext bkgrd color mode off (not compatable)
+ jsr setscrly      ;apply value to control register
+;enable multicolor text or bitmap mode
+ lda #%00010000    ;turn on bit 4 - enable multi color text or bitmap mode
+ ora SCROLX        ;horiz fine scrolling and control reg
+ bne setsclx       ;always branches
+mcoff
+ lda #%11101111    ;set bit#4 0=off, 1=on
+ and SCROLX        ;turn off mulicolor mode
+setsclx
+ sta SCROLX        ;apply setting to control register
+ rts
+
 ;MULTI [TEXT] [cc1], [cc2]
 chrmap
+ php
  tax
 ;enable multi color text or bitmap mode
- lda #%00010000    ;turn on bit 4
- ora SCROLX        ;horiz fine scrolling and control reg
- sta SCROLX
-;skip over optional TEXT token if present
+ jsr mcon
  txa
+ plp
+ beq mtdone        ;no params
  cmp #TOKEN_TEXT
  bne getcc1        ;skip over if present
 getcc1x
  jsr CHRGET        ;skip over token
+ beq mtdone        ;no params
 ;BGCOL1 and BGCOL2 used for both modes
 getcc1
  cmp #","
@@ -2943,15 +2964,17 @@ getcc1
 geteb2
  jsr chkcomm       ;check for comma and don't return here if missing
  cmp #","
- beq geteb3
+ beq mtdone
  jsr getval15      ;eb2
  sta BGCOL2        ;ext bkgnd color reg#2
-geteb3
+mtdone
  rts
 
 ;MULTI SPRITE [sc1], [sc2]
+;set colors for bit patterns 01,11 for all sprites in mc mode
 mcspri
  jsr CHRGET
+ beq mop6
  cmp #","
  beq getsc2
  jsr getval15      ;sc1
@@ -2966,7 +2989,7 @@ getsc2
 mop6 jmp missop    ;missing operand error
 ;
 ;*******************
-; COLOR [foregndColor (0-31)], [backgndColor (0-15)], [borderColor (0-15)]
+; COLOR [foregndColor (0-15)], [backgndColor (0-15)], [borderColor (0-15)]
 color
  beq mop6
  cmp #","
@@ -2986,7 +3009,6 @@ noback jsr chkcomm
 ;
 ;*****************
 designon
- jsr CHRGET
 ;select video matrix and dot data offsets
  lda #2         ;page 2, offset $0800
 setpage         ;valid page index 0 to 3
@@ -3005,10 +3027,6 @@ setpage         ;valid page index 0 to 3
  lda #%11111100 ;bits 0-1 mem bank, 00=bank3, 01=bank2, 10=bank1, 11=bank0
  and CI2PRA
  sta CI2PRA     ;base address is now $c000
-;turn off multicolor text/bitmap mode
- lda #%11101111 ;bit 4 off disables multicolor text/bitmap mode
- and SCROLX
- sta SCROLX
 ;turn off bitmap mode
  lda #%11011111 ;bit 5 off disables bitmap mode
  jmp setscrly
@@ -3019,11 +3037,13 @@ setpage         ;valid page index 0 to 3
 ; DESIGN scancode, charset, d0,d1,d2,d3,d4,d5,d6,d7
 design
  beq mop6
- cmp #TOKEN_ON
+ tay
+ jsr CHRGET
+ cpy #TOKEN_ON
  beq designon
- cmp #TOKEN_OFF
+ cpy #TOKEN_OFF
  beq designoff
- cmp #TOKEN_NEW
+ cpy #TOKEN_NEW
  bne dodesign
 ;copy CHAREN ROM into HIRAM (std c64 char dot data)
  lda #$f0    ;target location $f000-$ffff
@@ -3049,9 +3069,10 @@ nexbyt lda ($be),y
  pla
  sta R6510     ;back to normal
  cli
- jmp CHRGET
+ rts
 ;
 dodesign
+ jsr txtback
  jsr GETBYTC+3 ;get screen code
  txa
  jsr times8    ;multiply A reg value by 8 result in $be,$bf
@@ -3073,8 +3094,7 @@ gtdata
  bne gtdata
  rts
 
-designoff jsr norm
- jmp CHRGET
+designoff jmp norm
 
 ;*******************
 ;
@@ -3123,36 +3143,32 @@ pokcol sta $c800,y  ;fill color mem for entire screen
 ;
 bitmap
  beq mop7
- cmp #TOKEN_CLR
- beq bmclr
- cmp #TOKEN_OFF
- beq designoff
- cmp #TOKEN_ON
- beq bmon
- cmp #TOKEN_FILL
- bne bitscr
-; BITMAP FILL x1,y1 TO x2, y2, plotType, color
+ tay
  jsr CHRGET
+ cpy #TOKEN_CLR
+ beq bitmapclr
+ cpy #TOKEN_ON
+ beq bitmapon
+ cpy #TOKEN_OFF
+ beq designoff
+ cpy #TOKEN_FILL
+ bne bitscr
+ tax                ;set Z flag as needed
+; BITMAP FILL x1,y1 TO x2, y2, plotType, color
  jsr getxy          ;get point1
  jsr point2         ;get point2
  jsr types          ;get plot type and color
  dec R6510
  jmp bitfil         ;perform FILL on rect; put code under ROM
 ;
-bmon jsr bitmapon
- jmp CHRGET
-bmclr jsr bitmapclr
- jmp CHRGET
-;
 mop7 jmp missop
 ;
 ;BITMAP [colorMode], [bkgndColor], [clear]
 bitscr
+ jsr txtback
  jsr getbool        ;colorMode 0 or 1
  beq hiresmode
- lda SCROLX         ;horiz fine scrolling and control reg
- ora #%00010000     ;turn on bit 4 - enable multi color text or bitmap mode
- sta SCROLX
+ jsr mcon           ;enable multi color text or bitmap mode
 ;get bkgndColor for mc mode
  jsr comchk
  bne bitmapon       ;no more params so turn bitmap mode on
@@ -3160,9 +3176,7 @@ bitscr
  sta BGCOL0         ;color for 00 bit pair
  jmp bclr
 hiresmode
- lda SCROLX         ;turn off mulicolor mode
- and #%11101111     ;set bit#4 0=off, 1=on
- sta SCROLX         ;apply setting to control register
+ jsr mcoff          ;disable multi color text or bitmap mode
 ;get bkgndColor for hires mode
  jsr comchk
  bne bitmapon
@@ -3178,20 +3192,22 @@ bclr
  jsr bitmapclr
 ;
 bitmapon
- lda C2DDRA         ;data direction for port A (CI2PRA)
- ora #%00000011     ;bits 0-1 are set to 1=output (default)
+ lda #%00000011     ;bits 0-1 are set to 1=output (default)
+ ora C2DDRA         ;data direction for port A (CI2PRA)
  sta C2DDRA
- 
+;select VIC-II memory bank
  lda #%11000100     ;bits 0-1 VIC-II 16K memory bank 00=bank3 ($C000-$FFFF)
  sta CI2PRA         ;send bits out data port register
-
- lda SCROLY         ;turn on bitmap graphics mode
- ora #%00100000     ;bit#5 1=on, 0=off
- sta SCROLY         ;apply setting to control register
+;select VIC-II memory offsets
  lda #%00101100     ;bit 0 unused
                     ;bits 1-3 text dot-data base offset of 6K $c000+6K=$d800
                     ;bits 4-7 video matrix base offset of 2K $c000+2K=$c800
  sta VMCSB          ;apply setting to control register
+;turn on bitmap graphics mode
+ lda SCROLY
+ and #%10111111     ;bit#6=0, ext bkgrd color mode off (not compatable)
+ ora #%00100000     ;bit#5=1, bitmap mode on
+ sta SCROLY         ;apply setting to control register
  rts
 ;
 ;*******************
@@ -3520,7 +3536,7 @@ pntswp
 ;
 ;*******************
 ; LINE INPUT ["prompt",] S$ [,S2$,...,S3$]
-; LLINE INPUT# filenum, S1$ [,S2$,...,S3$]
+; LINE INPUT# filenum, S1$ [,S2$,...,S3$]
 ; LINE x1,y1 TO x2, y2, plotType, color
 line
  beq mop3
@@ -3530,17 +3546,9 @@ line
  cmp #TOKEN_INPUT  ;input token (line input)
  bne baddraw       ;SYNTAX ERROR
  jsr ERRDIR        ;if not in prg mode, illegal direct error
-;check next required txt char without advancing TXTPTR
- ldy #1            ;should be a quote symbol or str var name
-peekop
- lda (TXTPTR),y
- beq mop3          ;end of line terminator
- iny
- cmp #" "          ;skip over spaces
- beq peekop
- cmp #":"          ;end of statement terminator?
- beq mop3          ;sorry, parameter is required
-;check for quoted prompt string
+ jsr CHRGET
+ beq mop3
+ jsr txtback
  cmp #"""
  bne readline
  jsr getstr   ;string is returned in registers y=hi byte, x=lo byte, a=length
@@ -3638,9 +3646,7 @@ hellno
 ;
 ;get x,y coordinates
 getxy
- beq mop3
- jsr getvalue   ;get x coordinate, returns lobyte in x, hibyte in y
-getxy2
+ jsr getvaluez  ;get x coordinate, returns lobyte in x, hibyte in y
  lda SCROLX
  and #%00010000 ;check if multicolor mode on or off
  beq chkpnt     ;hires mode
@@ -3649,16 +3655,18 @@ getxy2
  tax
  tya
  rol
+ bcs hellno     ;x value was >= 32768
  tay
 chkpnt          ;validate the x coordinate
- tya
- beq okvalu
- cpy #2         ;valid value is 0 or 1 for x coord hibyte
- bcs hellno
- cpx #$40       ;valid values 0 to 63
- bcs hellno
-okvalu stx $fb
+ stx $fb
  sty $fc
+ tya
+ beq okvalu     ;x < 256
+ dey            ;valid hibyte is 0 or 1
+ bne hellno     ;x >= 512
+ cpx #64        ;when hibyte is 1 lobyte must be between 0 and 63
+ bcs hellno     ;x >= 320
+okvalu
  jsr ckcom2     ;check for and skip over comma, misop err if missing
  jsr getvalue   ;x=lobyte, y=hibyte
  bne hellno     ;y reg has hibyte for y coordinate and must be zero
@@ -3669,7 +3677,8 @@ okvalu stx $fb
 ;
 ;*******************
 ; PAINT x,y [,color]
-paint jsr getpnt
+paint
+ jsr getpnt
  ldx #1           ;always use plot type 1 (set)
  jsr types2       ;get plot color if present
  dec R6510
@@ -5088,6 +5097,13 @@ chrget ldy #0
  bne ne7a
  inc TXTPTR+1
 ne7a lda (TXTPTR),y
+ rts
+txtback
+ ldx TXTPTR
+ bne txtbak
+ dec TXTPTR+1
+txtbak
+ dec TXTPTR
  rts
 ;*******************
 comchk
@@ -7920,7 +7936,6 @@ digit9
  beq digitdone  ;end of string; use first digit as value
  sec            ;calc valid 10's place value
  sbc #"0"
- bmi digitdone  ;non digit; use first digit as value
  cmp #10
  bcs digitdone  ;non-digit; use first digit as value
  sta temp2      ;save as new 1's place value
@@ -9267,5 +9282,5 @@ stopit
 stopr
  jmp memnorm
 ;
-.repeat 5, 0 ;filler to complete 8KB
+.repeat 7, 0 ;filler to complete 8KB
 .end
