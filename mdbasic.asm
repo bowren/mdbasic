@@ -391,10 +391,10 @@ TOKEN_PI      = $ff  ;PI symbol token
 
 ;cartridge identifier
 .word resvec,runstp        ;new reset and runstop vectors
-.byte $c3,$c2,$cd,$38,$30  ;CBM80
+.text "CBM80"
 ;
 mesge .byte 147
-.text "mdbasic 25.05.11"
+.text "mdbasic 25.05.23"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -658,12 +658,12 @@ norma cmp #" "  ;space character?
  beq getchr
  bit GARBFL     ;variable used by Program Tokenization process
  bvs takchr
- cmp #"?"
+ cmp #"?"       ;replace ? with PRINT token
  bne skip
  lda #TOKEN_PRINT
  bne takchr
 skip
- cmp #"'"
+ cmp #"'"       ;alternate REM
  bne skipp
  lda #0
  beq rem
@@ -1826,8 +1826,16 @@ oldstop
  sec
  jmp $a82f      ;perform STOP
 stopkey
- dec R6510
- jmp stpkey
+ jsr CHRGET
+ ldx #239     ;lobyte ptr for STOP ON
+ cmp #TOKEN_OFF
+ beq stopit
+ cmp #TOKEN_ON
+ bne etrace   ;allow syntax error to occur
+ ldx #237     ;lobyte ptr for STOP OFF
+stopit
+ stx ISTOP
+ jmp CHRGET
 ;
 initrun
  cmp #"@"
@@ -2026,7 +2034,7 @@ newsav
 ;
 ;MDBASIC binary save
 bsave
- beq osave
+ beq osave    ;no params saves to tape device
  jsr FRMEVL   ;eval expression
 ;set file defaults
  lda #$00     ;default file#
@@ -2041,7 +2049,7 @@ bsave
  jsr $e1e6    ;get remaining save params
  jmp $e159    ;save BASIC prg to device
 osave
- jmp $e156
+ jmp $e156    ;perform SAVE
 bsaver
  jsr getvalue+3 ;start address
  stx STAL
@@ -2057,8 +2065,8 @@ bsaver
  jmp $e15f    ;save RAM to device - finish save
 ;
 ;*******************
-; FIND cmd - tokenized search, ie: FIND FOR
-; FIND"chars - text search, ie: FIND"FOR
+; FINDstatment(s)   - tokenized search,  ie: FINDFORI=
+; FIND"chars        - ASCII text search, ie: FIND"FOR
 find
  dec R6510
  jsr findd
@@ -3354,13 +3362,15 @@ waveit
 ; VOL n   where n=0 to 15
 vol
  jsr getval15z  ;only values from 0-15 allowed
+setvolum
  stx XSAV
  lda md418      ;get current volume (lo nybble) and resonance (hi nybble)
  and #%11110000 ;clear volume bits only
+setvolu
  ora XSAV       ;apply new volume bits only
 setvol
  sta SIGVOL     ;SID register volume (lo nybble) and resonance (hi nybble)
-setvol2
+setvo
  sta md418      ;mock register for $d418 Volume and Filter Select Register
  rts
 ;
@@ -3372,7 +3382,7 @@ sidclr
 clrsid sta FRELO1,y
  dey
  bpl clrsid
- bmi setvol2
+ bmi setvo
 ;
 ;*******************
 ;NTSC and PAL hold the value of 1Hz (based on clock speed)
@@ -3871,6 +3881,7 @@ keyeq
 ; KEY WAIT [var]  -wait for keypress, optionally put result in var of any type
 ; KEY GET var     -get key (or null) from buffer into var of any type
 ; KEY n, "string" -assign a function key n (1 to 8)
+; KEY = n         -assign KEY variable value to n
 key
  beq mop
  cmp #TOKEN_CLR
@@ -4053,6 +4064,18 @@ adsr
  sta SUREL1,x  ;apply sustain and release
  rts
 ;
+;*******************
+;get voice number param (1-3) then calc its SID register offset
+getvoc
+ jsr getvalz    ;get voice number 1,2,3
+ dex            ;voice index 0,1,2
+ cpx #3
+ bcs illvoc
+ lda sidoff,x   ;register offset 0,7,14
+ rts
+illvoc ldx #32  ;illegal voice number
+ jmp (IERROR)
+
 ;******************
 ;FILTER cutoff, [resonance], [type]
 ;FILTER VOICE voice#, [boolean]
@@ -4066,18 +4089,15 @@ adsr
 ;since we need to convert a freq to regval, rewrite expression:
 ;REGVAL = (FREQ-30)/5.8
 ;
-novoice
- jmp illvoc     ;illegal voice number
 filter
  beq mop2
  cmp #TOKEN_VOICE
  bne getfreq1
 ;FILTER VOICE voice# [,boolean]
  jsr getvalg    ;get voice 1-4
- beq novoice
- cpx #5         ;4=external input via pin 5 of audio/video port
- bcs novoice
  dex            ;voice 1 to 4 -> index 0 to 3
+ cpx #4         ;voice 4=external input via pin 5 of audio/video port
+ bcs illvoc
  lda bitweights,x ;bit pattern for RESON register
  sta XSAV       ;remember for later
  jsr comchk     ;check if they supplied a boolean?
@@ -4194,8 +4214,7 @@ settype
  sta XSAV     ;temp storage
  lda md418    ;current value using SID mock register
  and #%10001111 ;clear bits 4-6, keep the rest
- ora XSAV     ;apply new value
- jmp setvol
+ jmp setvolu  ;apply new value
 ;
 ;*******************
 ; PLAY S$
@@ -4342,19 +4361,19 @@ inivoc
  lda #0
  sta FRELO1,x
  sta FREHI1,x
+ sta ATDCY1,x   ;set attack 2ms (hi nybble), decay 6ms (lo nybble)
  sta PWLO1,x    ;set pulse waveform to 50%
  lda #$08       ;duty cycle is a 12-bit value 0-4095, 50%=2048
  sta PWHI1,x    ;lower nybble only, upper nybble is not used
 
- lda #0         ;set attack duraction to 2ms (hi nybble)
- sta ATDCY1,x   ;and decay duration to 6ms (lo nybble)
- lda #$F6       ;set sustain volume to 15 (hi nybble)
- sta SUREL1,x   ;and release duration to 204ms (lo nybble)
-
- lda md418      ;all voices volume register mirror
+ lda #$f5       ;set sustain volume to 15 (hi nybble)
+ sta SUREL1,x   ;and release duration to 168ms (lo nybble)
+;set main volume if needed
+ lda #%00001111 ;master volume is in lo nybble 15=max
+ bit md418      ;master volume mirror register
  bne plydone    ;if volume is 0 (off) turn it up!
- ora #%00001111 ;set volume to max
- jmp setvol
+ tax
+ jmp setvolum
 ;
 ;******************************************************************************
 ;* MDBASIC Functions
@@ -4543,10 +4562,10 @@ fnkey
 ;JOY(2) labeled "Port 2" uses CIA #1 Data Port A
 joy
  jsr getfnparam
- beq illqty7
- cmp #3
- bcs illqty7
- lsr             ;joy 1 or 2 becomes joy index 0 or 1
+ dex             ;joy num 1 or 2 becomes joy index 0 or 1
+ cpx #2          ;valid joy index 0 or 1 (joy num 1 or 2)
+ bcs illqty7     ;invalid joy index
+ txa             ;valid joy index
 joy1
  eor #%00000001  ;joy index 0 or 1 becomes data port index 1 or 0
  tay             ;data port B is joy 1 (port 1)
@@ -4590,8 +4609,7 @@ fnerr
 ;
 pen
  jsr getfnparam
- sec             ;set flag for JOY(1)
- beq joy1        ;PEN button is JOY(1)
+ beq joy1        ;PEN button PEN(0) = JOY(1)
  cmp #3          ;valid values 0 to 2
  bcs illqty7
  tax             ;0=button 1=x axis, 2=y axis
@@ -4650,13 +4668,13 @@ int2float
 ;labeled "Port 2" (pots 3 and 4) buttons on CIA #1 Data Port A
 ;data latches: POTX (pots 1 and 3), POTY (pots 2 and 4)
 pot
- jsr getfnparam  ;get pot number param
- beq illqty7     ;zero is invalid
- cmp #5          ;5 and over is invalid
- bcs illqty7     ;valid pot numbers are 1 to 4
+ jsr getfnparam  ;get pot number param value
+ stx $62         ;save pot num for later
+ dex             ;convert to pot index 0 to 3
+ cpx #4          ;valid pot nums are 1 to 4
+ bcs illqty7     ;valid pot indexes are 0 to 3
 ;
- sta $62         ;save pot num for later
- cmp #3          ;set carry flag if pot num 3 or 4
+ cpx #2          ;set carry flag if pot num 3 or 4 (index 2 or 3)
  ldx #%11000000  ;bits 6,7 set to select output for port 1 or 2 paddle read
                  ;bits 3,4 cleared to select input for paddle buttons
  ldy #0          ;port index 0=A (labeled "Port 2"), 1=B (labeled "Port 1")
@@ -4774,7 +4792,8 @@ brkirq
  lda #%01111111  ;with bit7=0 irq event flags (bits0-6) will be cleared
  sta CI2ICR      ;clear NMI event flags and enable NMI events
  jmp ($a002)     ;warm start vector
-nothin jmp $fe72 ;NMI RS-232 Handler
+nothin
+ jmp $fe72       ;NMI RS-232 Handler
 ;
 ;*******************************************************
 ;* MDBASIC ERROR HANDLER
@@ -4902,38 +4921,6 @@ fkey
  ldx #$ff
  jmp $eae9      ;continue regular key decode func
 ;
-;*****************************************
-; IRQ driven key pump into keyboard buffer
-;*****************************************
-keypump
- ldx NDX        ;if keyboard buffer is empty then put next char
- bne irqdone2   ;otherwise forward to original IRQ vector
- lda R6510
- pha
- and #%11111110
- sta R6510      ;switch LOROM to LORAM
- ldx keyidx     ;offset to next char to process
- ldy keybuf,x   ;get next char
- lda keystrflg  ;manual key string flag?
- beq nostrflg
- ldy paintbuf3,x
-nostrflg
- pla
- sta R6510      ;switch LORAM to LOROM
- tya
- beq alldone    ;zero-terminated string
- sta KEYD       ;place char in keyboard buffer
- inc NDX        ;indicate 1 char waiting in buffer
- inc keyidx     ;advance index to next char
- bne irqdone2   ;continue original IRQ vector
-alldone
- lda #0
- sta keystrflg
- lda #%11111011 ;key pump irq flag off
- jmp irqoff
-irqdone2
- rts
-;
 ;*************************
 ;MDBASIC IRQ Handler
 ;*************************
@@ -4964,6 +4951,36 @@ mdbirqoff2
  jsr mdbirqoff
  jmp (TMPIRQ)   ;orgininal irq vector
 ;
+;*****************************************
+; IRQ driven key pump into keyboard buffer
+;*****************************************
+keypump
+ ldx NDX        ;if keyboard buffer is empty then put next char
+ bne irqdone2   ;otherwise forward to original IRQ vector
+ lda R6510
+ pha
+ and #%11111110
+ sta R6510      ;switch LOROM to LORAM
+ ldx keyidx     ;offset to next char to process
+ ldy keybuf,x   ;get next char
+ lda keystrflg  ;manual key string flag?
+ beq nostrflg
+ ldy paintbuf3,x
+nostrflg
+ pla
+ sta R6510      ;switch LORAM to LOROM
+ tya
+ beq alldone    ;zero-terminated string
+ sta KEYD       ;place char in keyboard buffer
+ inc NDX        ;indicate 1 char waiting in buffer
+ inc keyidx     ;advance index to next char
+ bne irqdone2   ;continue original IRQ vector
+alldone
+ lda #0
+ sta keystrflg
+ lda #%11111011 ;key pump irq flag off
+ jmp irqoff
+;
 ;****************************
 ;Sprite animation IRQ routine
 ;****************************
@@ -4991,6 +5008,7 @@ ptr2ref         ;this ptr ref is used to change
 nxtani
  dex
  bpl chkani
+irqdone2
  rts
 anioff
  lda #%11111101
@@ -5266,20 +5284,6 @@ ptrhi
  adc $62        ;base+offset
  adc #3         ;the end of screen RAM is 1K more
  rts
-;*******************
-;get voice number param (1-3) then calc its SID register offset
-getvoc
- jsr getvalz
- beq illvoc
- cmp #4         ;valid voice numbers 1,2,3
- bcs illvoc
-getvoff
- tax
- dex            ;voice index 0,1,2
- lda sidoff,x   ;register offset 0,7,14
- rts
-illvoc ldx #32  ;illegal voice number
- jmp (IERROR)
 ;*******************
 ;these routines are used while BASIC ROM is switched out
 rom1 inc R6510   ;switch to rom (a000-bfff)
@@ -7582,8 +7586,7 @@ aldone
  lda #27    ;ESC
  jsr CHROUT
  lda #"2"
- jsr CHROUT
- rts
+ jmp CHROUT
 ;
 ;***********************
 ;scroll up
@@ -7780,11 +7783,10 @@ wdone
 ;--------------
 ;play next note
 nextn0          ;start over from beginning
- ldy #1
- sty playtime
- dey
- sty playindex
- lda playvoice  ;SID reg offset
+ lda #0
+ sta playtime
+ sta playindex
+ lda playvoice
  jmp initvoice
 nextn2
  jsr notegot
@@ -7865,8 +7867,8 @@ nextn3
  jmp nextn2
 
 nonnote
- cmp #"v"
- bne notepause
+ cmp #"s"
+ bne chgvoice
  jsr getdigitval ;sustain volume
  cmp #16        ;valid value range 0-15
  bcs skipnote   ;invalid volume so skip it
@@ -7878,6 +7880,24 @@ nonnote
  ldx playvoice  ;SID reg offset
  sta SUREL1,x
  jmp nextn2
+
+chgvoice
+ cmp #"v"
+ bne notepause
+ jsr getdigitval
+ tay
+ dey
+ cpy #3         ;voice 1,2 or 3 only
+ bcs skipnote
+ ldx sidoff,y   ;get voice register offset
+ cpx playvoice  ;already using this voice?
+ beq skipnote
+ lda #0
+ sta playtime
+ ldy playvoice  ;old voice register offset
+ lda playwave   ;current waveform
+ sta VCREG1,y   ;start decay cycle for current voice
+ jmp inivoc     ;set new voice
 
 notepause
  cmp #"p"
@@ -8362,14 +8382,11 @@ getparity
  beq gethndshk
  jsr rom3       ;parity (0 to 4)
  bne badserial  ;hibyte must be zero
- cmp #5
+ cpx #5         ;lobyte must not exceed 4
  bcs badserial
- tay
- lda parity,y   ;convert param value to bit pattern value
- sta XSAV
  lda M51CDR
  and #%00011111 ;clear target bits 5-7
- ora XSAV       ;parity param value
+ ora parity,x   ;indexed parity value
  sta M51CDR
  jsr CHRGOT
  beq open232
@@ -8559,7 +8576,7 @@ findd
  beq doneit     ;nothing to find
  cmp #"""
  bne noquo
- jsr CHRGET
+ jsr chrget
 noquo lda TXTTAB
  clc
  adc #4
@@ -9268,19 +9285,5 @@ pntreq lda $22
  cmp $25
 gbhah rts
 ;
-stpkey
- jsr CHRGET
- ldx #239     ;lobyte ptr for STOP ON
- cmp #TOKEN_OFF
- beq stopit
- cmp #TOKEN_ON
- bne stopr    ;allow syntax error to occur
- ldx #237     ;lobyte ptr for STOP OFF
-stopit
- stx ISTOP
- jsr CHRGET
-stopr
- jmp memnorm
-;
-.repeat 7, 0 ;filler to complete 8KB
+;.repeat 40, 0 ;filler to complete 8KB
 .end
