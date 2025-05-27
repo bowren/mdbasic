@@ -25,6 +25,7 @@ CURLIN = $39 ;Current BASIC Line Number (lobyte)
 OLDLIN = $3b ;Previous BASIC Line Number (lobyte)
 OLDTXT = $3d ;Pointer to the Address of the Current BASIC Statement
 DATPTR = $41 ;Pointer to the Address of the Current DATA Item
+VARPNT = $47 ;Pointer to the Current BASIC Variable Value
 TXTPTR = $7a ;Pointer to the Address of the Current BASIC text char
 STATUS = $90 ;Kernal I/O Status Word (ST)
 XSAV   = $97 ;Temporary .X Register Save Area
@@ -655,7 +656,7 @@ norma cmp #" "  ;space character?
  beq takchr
  sta ENDCHR     ;search char for statement terminator or quote
  cmp #"""
- beq getchr
+ beq savech
  bit GARBFL     ;variable used by Program Tokenization process
  bvs takchr
  cmp #"?"       ;replace ? with PRINT token
@@ -707,7 +708,7 @@ remlop lda BUF,x
  beq takchr
  cmp ENDCHR
  beq takchr
-getchr iny
+savech iny
  sta BUF-5,y
  inx
  bne remlop
@@ -833,7 +834,7 @@ valll
  jmp VAL          ;perform VAL
 ;
 valfn
- jsr chrget       ;advance TXTPTR one byte
+ jsr getchr       ;advance TXTPTR one byte
  cmp #"b"
  bcc valll
  sta $c3          ;save fn type for later
@@ -1010,7 +1011,7 @@ timeclr
 ; T$ = TIME$  get current time as string value
 ; T  = TIME   get current time as float number of seconds since start
 fntime
- jsr chrget   ;advance TXTPTR 1 position and get the char
+ jsr getchr   ;advance TXTPTR 1 position and get the char
  dec R6510
  cmp #"$"
  bne time2
@@ -1738,7 +1739,7 @@ doauto
  tay
  txa
 ;convert binary value of line number to string
- jsr int2float  ;convert 2-byte int in FAC1 to float
+ jsr uint2f     ;convert 16-bit unsigned int to float into FAC1
  jsr FOUT       ;convert FAC1 to ASCII String at BAD ($0100)
 ;put line number in keyboard buffer
  ldy #1         ;start at 1 to skip sign char (space)
@@ -1840,7 +1841,7 @@ stopit
 initrun
  cmp #"@"
  bne initmdb
- jsr CHRGET
+ jsr getchr     ;skip over @ char
  jmp initmdb1
 initmdb
  lda #0
@@ -2356,14 +2357,14 @@ cpyvar lda (LINNUM),y ;save param1 in FAC2
  bpl cpyvar
  txa
  tay
-cpyvr2 lda ($47),y ;param2->param1
+cpyvr2 lda (VARPNT),y ;param2->param1
  sta (LINNUM),y
  dey
  bpl cpyvr2
  txa
  tay
 faccpy lda $0069,y ;param1->param2
- sta ($47),y
+ sta (VARPNT),y
  dey
  bpl faccpy
  rts
@@ -2391,7 +2392,7 @@ nxtcls
  jsr chkcomm      ;check for comma, quit if none otherwise skip over it
  jmp gfn          ;process next file number
 clsfiles
- jsr CHRGET       ;skip over FILES token
+ jsr getchr       ;skip over FILES token
 clsall
  jsr CLALL        ;close all open files and restore default devices
  jmp clscmd       ;set default I/O channel and clear MDBASIC file numbers
@@ -2751,7 +2752,7 @@ spriteoff
  jmp CHRGET
 ;
 sprexp
- jsr chrget
+ jsr getchr
  cmp #TOKEN_AND
  bne badspr
  lda #$ff    ;all sprites
@@ -2785,7 +2786,7 @@ sprite
 chkexp
  cmp #TOKEN_EXP
  bne sprvis
- jsr chrget
+ jsr getchr
  cmp #TOKEN_AND
  bne badspr
  jsr CHRGET
@@ -2963,7 +2964,7 @@ chrmap
 getcc1x
  jsr CHRGET        ;skip over token
  beq mtdone        ;no params
-;BGCOL1 and BGCOL2 used for both modes
+;BGCOL1 and BGCOL2 are used for both mc and ext bkgd color modes
 getcc1
  cmp #","
  beq geteb2
@@ -3374,6 +3375,9 @@ setvo
  sta md418      ;mock register for $d418 Volume and Filter Select Register
  rts
 ;
+voiceclr
+ plp            ;discard saved flags
+ jsr getchr     ;skip CLR token
 ;subroutine to clear SID
 sidclr
  ldy #$18       ;clear all 24 SID registers
@@ -3392,11 +3396,7 @@ clrsid sta FRELO1,y
 voice
  php
  cmp #TOKEN_CLR  ;clr token?
- bne getfreq
- plp
- jsr sidclr
- jmp CHRGET
-getfreq
+ beq voiceclr
  plp
  jsr getvoc      ;returns SID register offset (voice#-1)*7 in accumulator
  sta $fe
@@ -3689,8 +3689,8 @@ okvalu
 ; PAINT x,y [,color]
 paint
  jsr getpnt
- ldx #1           ;always use plot type 1 (set)
- jsr types2       ;get plot color if present
+ ldx #1         ;always use plot type 1 (set)
+ jsr types2     ;get plot color if present
  dec R6510
  jmp painter
 ;
@@ -3918,21 +3918,21 @@ cpystr2
 illqty3 jmp FCERR
 ;
 keynum
- jsr GETBYTC+6    ;convert FAC1 to an unsigned byte value 0-255 into X reg
+ jsr GETBYTC+6  ;convert FAC1 to an unsigned byte value 0-255 into X reg
  txa
  beq illqty3
- cmp #9           ;only func keys 1-8
+ cmp #9         ;only func keys 1-8
  bcs illqty3
 ;assign function key
- pha              ;save key#
- jsr ckcom2       ;check for and skip over comma, misop err if missing
+ pha            ;save key#
+ jsr ckcom2     ;check for and skip over comma, misop err if missing
  jsr getstr0
  dec R6510
  pla
  jmp keyy
 ;
 onkeyoff
- jsr CHRGET
+ jsr getchr     ;skip over OFF token
 keyoff
  lda #0
  sta keyflag
@@ -3941,7 +3941,7 @@ setkey
 kdone rts
 ;
 keyget
- jsr CHRGET
+ jsr getchr      ;skip over KEY token
 getkey
  jsr getvar
  ldx #0
@@ -3961,9 +3961,9 @@ setvar
 keywait
  lda NDX
  beq keywait
- jsr CHRGET
- bne getkey
- rts
+ jsr CHRGET      ;end of line?
+ bne getkey      ;no, put result in specified variable
+ rts             ;yes, end of statement
 ;
 ;*******************
 ; SCROLL x1, y1 TO x2, y2, [direction 0-3], [wrap 0-1]
@@ -4038,30 +4038,30 @@ getcoords
 ; ENVELOPE voice#, attack, decay, sustain, release
 adsr
  jsr getvoc
- sta XSAV      ;SID register offset for voice
- jsr ckcom2    ;check for and skip over comma, misop err if missing
- jsr getval15  ;attack
+ sta XSAV       ;SID register offset for voice
+ jsr ckcom2     ;check for and skip over comma, misop err if missing
+ jsr getval15   ;attack
  asl
  asl
  asl
  asl
- sta $fe       ;attack duration
- jsr getval15g ;decay duration
+ sta $fe        ;attack duration
+ jsr getval15g  ;decay duration
  ora $fe
  ldx XSAV
- sta ATDCY1,x  ;apply attack and decay
+ sta ATDCY1,x   ;apply attack and decay
 ;sustain and release params
- jsr chkcomm   ;if end of statement quit now
- jsr getval15  ;sustain volume
+ jsr chkcomm    ;if end of statement quit now
+ jsr getval15   ;sustain volume
  asl
  asl
  asl
  asl
  sta $fe
- jsr getval15g ;release duration
+ jsr getval15g  ;release duration
  ora $fe
  ldx XSAV
- sta SUREL1,x  ;apply sustain and release
+ sta SUREL1,x   ;apply sustain and release
  rts
 ;
 ;*******************
@@ -4225,21 +4225,22 @@ play
  beq mop2
  cmp #TOKEN_OFF
  bne playy
+;PLAY OFF
  jsr endplay
- jmp CHRGET
+ jmp getchr     ;skip over OFF token
 playy
  cmp #TOKEN_SPRITE
  bne playyy
-;PLAY SPRITE sprite#, startPtr, endPtr, speed
-;PLAY SPRITE [sprite#] OFF
 plyspr
  jsr CHRGET
  cmp #TOKEN_OFF
  bne getani
+;PLAY SPRITE OFF
  lda #0         ;all sprite animation off
  sta aniopt
 plysprx
- jmp CHRGET
+ jmp getchr     ;skip over OFF token
+; PLAY SPRITE [sprite#] OFF
 getani
  jsr sprnum     ;$be=sprite index, A reg and $bf=2^sprite#
 ;turn off animation for sprite specified
@@ -4250,6 +4251,7 @@ getani
  jsr CHRGOT
  cmp #TOKEN_OFF
  beq plysprx
+;PLAY SPRITE sprite#, startPtr, endPtr, speed
  jsr getvalg    ;startPtr
  ldx $be        ;sprite index 0-7
  sta ptrbegin,x
@@ -4435,7 +4437,7 @@ nextchr
  ldy $fe      ;index of beginning of str found in source str
 .byte $2c     ;defeat ldy #0 as BIT $00A0
 notfound
- ldy #0
+ ldy #0       ;lobyte 0 is an invalid string index indicating not found
  lda #0       ;hibyte 0 since strings cannot be longer than 255
  jsr GIVAYF   ;convert 16-bit signed int in A,Y regs to 5-byte float in FAC1
  jmp CHKCLS   ;check for and skip closing parentheses
@@ -4445,9 +4447,9 @@ notfound
 ptr
  jsr CHRGET
  jsr PARCHK     ;get term inside parentheses
- lda $48        ;pointer to variable
- ldy $47
- jmp GIVAYF     ;convert 16-bit signed int in A,Y regs to 5-byte float in FAC1
+ lda VARPNT     ;pointer to variable
+ ldy VARPNT+1
+ jmp uint2f     ;convert 16-bit unsigned int to float into FAC1
 ;
 ;*******************
 ; I = FIX(float)  truncate the fractional portion
@@ -4547,7 +4549,7 @@ xmul10
 ; K = KEY    -get ASCII value, no key = 0
 ; K$ = KEY$  -get string value of length 1, no key has ASC(KEY$)=0
 fnkey
- jsr chrget
+ jsr getchr
  ldy keyentry    ;y=lobyte
  cmp #"$"
  bne nobutt
@@ -4589,14 +4591,14 @@ illqty7 jmp FCERR ;display illegal qty error
 ; EN = ERR    -error number
 ; EL = ERRL   -error line number
 fnerr
- jsr chrget      ;advance TXTPTR one byte
+ jsr getchr      ;advance TXTPTR one byte
  ldy errnum      ;assume ERR (error number)
  cmp #"l"        ;ERRL?
  bne nobutt      ;return error number
- jsr CHRGET      ;skip over letter
+ jsr getchr      ;skip over letter
  lda errline     ;return error line number
  ldy errline+1
- jmp int2float   ;convert 2-byte signed int to float into FAC1 then return
+ jmp uint2f      ;convert 16-bit unsigned int to float into FAC1
 ;
 ;*******************
 ; P = PEN(n) where n: 0=button state, 1=x-coordinate, 2=y-coordinate
@@ -4654,10 +4656,12 @@ inf
  dec R6510
  jsr inff
  inc R6510
-;convert binary 2-byte unsigned int in X,Y regs to float in FAC1
-int2float
+;convert 16-bit unsigned int in A,Y regs to float into FAC1
+uint2f
  sta $63         ;lobyte second
  sty $62         ;hibyte first (big endian format)
+ ldx #0          ;assert that FAC1 is numeric value type
+ stx VALTYP      ;0=numeric, 255=string
  ldx #$90        ;FAC1 exponent
  sec             ;flag for unsinged int
  jmp $bc49       ;convert 2-byte int in FAC1 to float
@@ -4718,7 +4722,7 @@ btnmsk bit $61   ;test associated bit for button press
  inx             ;hibyte = 1 to indicate button pressed
 nobutt2          ;reg y holds the lobyte
  txa             ;reg a holds the hibyte
- jmp GIVAYF      ;convert 2-byte int into a 5-byte float with result in FAC1
+ jmp GIVAYF      ;convert 16-bit signed int to 5-byte float into FAC1
 ;
 ;*******************
 ;H$ = HEX$(n) where n is a signed 32-bit signed integer
@@ -4926,7 +4930,7 @@ fkey
 ;*************************
 mdbirqhdl
  lda MDBIRQ
- beq mdbirqoff2
+ beq mdbirqoff
  bit bitweights
  beq irq1
  jsr playit
@@ -4947,9 +4951,11 @@ irq3
  jsr sprcolchg
 irqnorm
  jmp (TMPIRQ)   ;orgininal irq vector
-mdbirqoff2
- jsr mdbirqoff
- jmp (TMPIRQ)   ;orgininal irq vector
+mdbirqoff
+ ldx TMPIRQ     ;restore IRQ vector
+ ldy TMPIRQ+1   ;back to original $EA31 or user-defined address
+ jsr setirq
+ jmp (CINV)     ;orgininal irq vector
 ;
 ;*****************************************
 ; IRQ driven key pump into keyboard buffer
@@ -5049,10 +5055,6 @@ setirq
  stx CINV
  sty CINV+1
 irqset rts
-mdbirqoff
- ldx TMPIRQ   ;restore IRQ vector
- ldy TMPIRQ+1 ;back to original $EA31 or user-defined address
- jmp setirq
 ;
 ;*******************************
 ;* general purpose subroutines *
@@ -5110,12 +5112,13 @@ linnul
  sta LINNUM+1
 opgot rts
 ;*******************
-chrget ldy #0
+getchr ldy #0
  inc TXTPTR
  bne ne7a
  inc TXTPTR+1
 ne7a lda (TXTPTR),y
  rts
+;*******************
 txtback
  ldx TXTPTR
  bne txtbak
@@ -5404,7 +5407,7 @@ lastplotx  .word 0      ;last plot x coord
 lastploty  .byte 0      ;last plot y coord
 lastplott  .byte 1      ;last plot type used
 mapcolc1c2 .byte $15    ;last plot color, hinybble c1=white, lonybble c2=green
-mapcolc3   .byte 7      ;last plot multicol, c3 (1-3) for bit pattern 11=yellow
+mapcolc3   .byte 7      ;last plot multicolor for bit pattern 11, c3=yellow
 mapcolbits .byte 8      ;(8,16,24) used for plotting a dot on a multicol bitmap
 
 ;PLAY command use only - used during IRQ
@@ -5952,17 +5955,20 @@ setdot jsr ydiv8
  sta R6510
  cli
  rts
-flipit lda ptab3,x
+flipit
+ lda ptab3,x
  eor #$ff
  and ($c3),y
  ora ptab2,x
  eor ($c3),y
  jmp colorb
-dotoff lda ptab2,x  ;read ptab2 and ptab3 in LORAM
+dotoff
+ lda ptab2,x
  eor #$ff
- and ($c3),y        ;read bitmap in HIRAM
+ and ($c3),y
  jmp colorb
-doton lda ($c3),y
+doton
+ lda ($c3),y
  and ptab3,x
  ora ptab2,x
 ;write byte with bit pattern for the one bit in hires or 2 bits in mc mode
@@ -5991,6 +5997,7 @@ colorb sta ($c3),y
  lda mapcolc1c2 ;hires dot color (hi nybble), bkgnd color of 8x8 sq (lo nybble)
  ldy #0
  sta ($c3),y
+;apply multicolor byte for bit pattern 11 in lo nybble of color RAM
  lda $c4
  clc
  adc #$10     ;calculate beginning of color RAM
@@ -8576,7 +8583,7 @@ findd
  beq doneit     ;nothing to find
  cmp #"""
  bne noquo
- jsr chrget
+ jsr getchr     ;skip over quote
 noquo lda TXTTAB
  clc
  adc #4
@@ -9135,28 +9142,28 @@ ffff lda nolin,y
  rts
 ;
 renumer
- jsr chrget
- jsr chrget
+ jsr getchr
+ jsr getchr
  bne serch
  jsr tofac
-strnum jsr chrget
- jsr chrget
+strnum jsr getchr
+ jsr getchr
  beq f65535  ;end of renum process
- jsr chrget
+ jsr getchr
  lda $63
  sta (TXTPTR),y
- jsr chrget
+ jsr getchr
  lda $62
  sta (TXTPTR),y
  jsr addinc
  beq strnum
-serch jsr chrget
- jsr chrget
-nocrap jsr chrget
+serch jsr getchr
+ jsr getchr
+nocrap jsr getchr
 craper cmp #"""
  bne tokgo
 ;skip over expression in quotes
-crap jsr chrget
+crap jsr getchr
  beq renumer  ;end of line
  cmp #"""
  bne crap
@@ -9229,22 +9236,22 @@ workdone
  jmp craper
 ;
 replac jsr tofac
-goagan jsr chrget
- jsr chrget
+goagan jsr getchr
+ jsr getchr
  bne isline
  lda #$ff
  sta $62
  sta $63
  bmi pnl
-isline jsr chrget
+isline jsr getchr
  cmp LINNUM
  bne nexlin
- jsr chrget
+ jsr getchr
  cmp LINNUM+1
  bne nexlin+3
 pnl jmp fltstr
 ;
-nexlin jsr chrget
+nexlin jsr getchr
  jsr addinc
  beq goagan
 inc2d jsr clrflg
@@ -9274,7 +9281,7 @@ addinc lda $63
  lda $62
  adc FREETOP+1
  sta $62
-necg jsr chrget
+necg jsr getchr
  bne necg
  rts
 ;
@@ -9285,5 +9292,4 @@ pntreq lda $22
  cmp $25
 gbhah rts
 ;
-;.repeat 40, 0 ;filler to complete 8KB
 .end
