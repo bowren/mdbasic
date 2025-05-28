@@ -2093,9 +2093,9 @@ oldnew jmp NEW
 ;;*******************
 ; OLD takes no params
 old
- lda #$08
- ldy #1
- sta (TXTTAB),y ;should be $0802
+ lda TXTTAB+1   ;hibyte of the beginning of BASIC prg text is used to
+ ldy #1         ;restore hibyte of the first pointer in the linked list
+ sta (TXTTAB),y ;(likely at $0802) that points to the next line number
 old2
  jsr LINKPRG
  lda $22        ;apply calculated end-of-prg pointer
