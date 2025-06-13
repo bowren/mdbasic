@@ -7497,7 +7497,7 @@ dumpbitmap2
  sta $fb
  lda #$fe
  sta $fc
- jsr screenon   ;turn screen off for exclusive use of data bus (faster)
+ jsr screenoff   ;turn screen off for exclusive use of data bus (faster)
  lda #$28
  sta $fe
  lda #15
@@ -7588,7 +7588,7 @@ tcic dec $fe
  beq aldone
  jmp nxtbit
 aldone
- jsr screenoff    ;turn screen back on
+ jsr screenon    ;turn screen back on
 ;restore printer to 1/6 inch line using control codes for ESC/P printers
  lda #27    ;ESC
  jsr CHROUT
