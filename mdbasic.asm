@@ -395,7 +395,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge .byte 147
-.text "mdbasic 25.05.23"
+.text "mdbasic 25.05.30"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -2767,7 +2767,7 @@ badspr jmp SNERR
 ;SPRITE EXPAND ON | OFF
 ;SPRITE sprite# EXPAND size
 ;SPRITE sprite# DATA index
-;SPRITE sprite#, [visibile] [,color] [,colormode] [,index] [,priority] [,size]
+;SPRITE sprite#, [visible] [,color] [,colorMode] [,index] [,priority] [,size]
 sprite
  cmp #TOKEN_EXP
  beq sprexp
@@ -2913,9 +2913,9 @@ setmag
  rts
 ;
 ;*******************
-;MULTI [TEXT] [cc1], [cc2]         - multicolor text or bitmap mode
+;MULTI [TEXT] [cc1], [cc2]         - multicolor text mode
 ;MULTI COLOR  [eb1], [eb2], [eb3]  - extended background color mode
-;MULTI SPRITE [sc1], [sc2]         - multicolor sprite mode
+;MULTI SPRITE [sc1], [sc2]         - sprite multicolor bit patterns 01, 11
 multi
  beq chrmap        ;no params
  cmp #TOKEN_SPRITE
@@ -2998,7 +2998,7 @@ getsc2
 mop6 jmp missop    ;missing operand error
 ;
 ;*******************
-; COLOR [foregndColor (0-15)], [backgndColor (0-15)], [borderColor (0-15)]
+; COLOR [foreground] [,background] [,border]
 color
  beq mop6
  cmp #","
@@ -3017,9 +3017,6 @@ noback jsr chkcomm
  rts
 ;
 ;*****************
-designon
-;select video matrix and dot data offsets
- lda #2         ;page 2, offset $0800
 setpage         ;valid page index 0 to 3
 ;set hibyte ptr for Kernal prints
  asl            ;each page is 4 blocks of 256 bytes (1K)
@@ -3041,19 +3038,13 @@ setpage         ;valid page index 0 to 3
  jmp setscrly
 
 ;*****************
-; DESIGN ON | OFF
 ; DESIGN NEW
 ; DESIGN scancode, charset, d0,d1,d2,d3,d4,d5,d6,d7
 design
  beq mop6
- tay
- jsr CHRGET
- cpy #TOKEN_ON
- beq designon
- cpy #TOKEN_OFF
- beq designoff
- cpy #TOKEN_NEW
+ cmp #TOKEN_NEW
  bne dodesign
+ jsr getchr  ;skip over NEW token
 ;copy CHAREN ROM into HIRAM (std c64 char dot data)
  lda #$f0    ;target location $f000-$ffff
  sta $bc
@@ -3081,7 +3072,6 @@ nexbyt lda ($be),y
  rts
 ;
 dodesign
- jsr txtback
  jsr GETBYTC+3 ;get screen code
  txa
  jsr times8    ;multiply A reg value by 8 result in $be,$bf
@@ -3102,10 +3092,10 @@ gtdata
  cpy #8        ;process exactly 8 data elements
  bne gtdata
  rts
-
-designoff jmp norm
-
 ;*******************
+
+bitmapoff
+ jmp norm
 ;
 bitmapclr
  lda #$e0  ;8K bitmap $e000-$ffff
@@ -3151,7 +3141,7 @@ pokcol sta $c800,y  ;fill color mem for entire screen
 ;as a color parameter to select the color from tri-color pallete
 ;
 bitmap
- beq mop7
+ beq bitmapon       ;no params turns on bitmap mode
  tay
  jsr CHRGET
  cpy #TOKEN_CLR
@@ -3159,7 +3149,7 @@ bitmap
  cpy #TOKEN_ON
  beq bitmapon
  cpy #TOKEN_OFF
- beq designoff
+ beq bitmapoff
  cpy #TOKEN_FILL
  bne bitscr
  tax                ;set Z flag as needed
@@ -3174,7 +3164,12 @@ mop7 jmp missop
 ;
 ;BITMAP [colorMode], [bkgndColor], [clear]
 bitscr
- jsr txtback
+ ldy #0
+ jsr txtback        ;back up TXTPTR by 1 byte
+ lda (TXTPTR),y     ;then check if current byte
+ cmp #" "           ;is a space char, if so then
+ beq bitscr+2       ;keep going back by 1 char
+;
  jsr getbool        ;colorMode 0 or 1
  beq hiresmode
  jsr mcon           ;enable multi color text or bitmap mode
@@ -3551,24 +3546,23 @@ pntswp
 line
  beq mop3
  cmp #TOKEN_INPUTN ;input# token (line input#)
- bcc liner         ;line x,y to a,z
  beq lineinput
  cmp #TOKEN_INPUT  ;input token (line input)
- bne baddraw       ;SYNTAX ERROR
+ bne liner         ;assume bitmap line
  jsr ERRDIR        ;if not in prg mode, illegal direct error
- jsr CHRGET
- beq mop3
- jsr txtback
+ jsr CHRGET        ;skip over INPUT token and get next non-space char
+ beq mop3          ;a param is required
+ jsr txtback       ;back up TXTPTR by 1 byte
  cmp #"""
- bne readline
- jsr getstr   ;string is returned in registers y=hi byte, x=lo byte, a=length
- txa          ;x reg has low byte of str ptr but next func needs it in a reg
- jsr STROUT   ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
+ bne readline      ;if not quote then perform input without prompt
+ jsr getstr        ;string returned in registers y=hibyte, x=lobyte, a=length
+ txa               ;x reg has lobyte of ptr but next func needs it in a reg
+ jsr STROUT        ;print str whose addr is y reg (hibyte) and a reg (lobyte)
  jsr comchk
  bne mop3
 readline
- jsr INLIN    ;input a line into buffer from keyboard (80 chars max)
- ldy #$ff     ;count number of chars
+ jsr INLIN         ;input a line into buffer from keyboard (80 chars max)
+ ldy #$ff          ;count number of chars
 fndend iny
  lda BUF,y
  sta paintbuf1,y
@@ -3580,7 +3574,7 @@ inpend
  rts
 ; LINE INPUT# filenum, S1$ [,S2$,...,S3$]
 lineinput
- jsr getvalg   ;get single byte param in a reg, misop err if missing
+ jsr getvalg
  sta $24
 lnin
  ldx $24
@@ -3857,8 +3851,14 @@ setscrly2
  sta SCROLY
  rts
 ;
-docls jsr CLS
- jmp CHRGET
+docls
+ jsr CHRGET
+ lda #%00100000  ;bit5 bitmap mode
+ bit SCROLY
+ bne clrbmp
+ jmp CLS
+clrbmp
+ jmp bitmapclr
 ;
 
 mop jmp missop
