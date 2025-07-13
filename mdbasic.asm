@@ -57,6 +57,7 @@ KEYTAB = $f5 ;vector to keyboard decode table
 ;BASIC and Kernal work registers
 BAD    = $0100 ;Tape Input Error Log and string work area
 BUF    = $0200 ;BASIC Line Editor Input Buffer
+KEYD   = $0277 ;Keyboard Buffer (Queue)
 COLOR  = $0286 ;Current Foreground Color for Text
 GDCOL  = $0287 ;Color of Character under Cursor
 HIBASE = $0288 ;Top Page of Screen Memory
@@ -82,9 +83,6 @@ RIDBS  = $029c ;Index to Start of Receive Buffer
 RODBS  = $029d ;Index to Start of Transmit Buffer
 RODBE  = $029e ;Index to End of Transmit Buffer
 ENABL  = $02a1 ;IRQ Statuses, 1=Transmittinging, 2=Receiving, 16=Waiting
-
-;SYS command mock registers
-SAREG  = $030c ;Storage Area for processor registers A,X,Y,P
 
 ;Memory-Mapped I/O Registers
 SP0X   = $d000 ;Sprite 0 Horizontal Position
@@ -189,11 +187,6 @@ CI2CRB = $dd0f ;Control Register B
 ; 0=writing to TOD registers sets clock
 ; 1=writing to ROD registers sets alarm
 
-;CBM command line functions
-CHRGET = $0073 ;Get Next BASIC Text Character
-CHRGOT = $0079 ;Get Current BASIC Text Character
-KEYD   = $0277 ;Keyboard Buffer (Queue)
-
 ;Vectors to various subroutines
 KEYLOG = $028f ;Keyboard Table Setup Routine
 IERROR = $0300 ;Print BASIC Error Message Routine
@@ -202,6 +195,7 @@ ICRNCH = $0304 ;Crunches ASCII to Tokens
 IQPLOP = $0306 ;Lists BASIC Program Token as ASCII Text
 IGONE  = $0308 ;Executes the Next BASIC Program Token
 IEVAL  = $030a ;Evaluates a Single-Term Arithmetic Expression
+SAREG  = $030c ;Storage Area for processor registers A,X,Y,P for SYS
 CINV   = $0314 ;IRQ Interrupt Routine
 CBINV  = $0316 ;BRK Instruction Interrupt
 ILOAD  = $0330 ;Kernal LOAD Routine
@@ -216,6 +210,10 @@ TMPIRQ = $0334 ;2-byte temp storage for original IRQ vector
 TMPERR = $0336 ;original error handling vector
 TMPERRP= $0338 ;TXTPTR of statement for ON ERR GOTO line#
 TMPKEYP= $033a ;TXTPTR of statement for ON KEY GOSUB line#
+
+;CBM command line functions
+CHRGET = $0073 ;Get Next BASIC Text Character
+CHRGOT = $0079 ;Get Current BASIC Text Character
 
 ;CBM BASIC subroutines
 GETSTK = $a3fb ;check for space on stack
@@ -277,7 +275,9 @@ FADDH  = $b849 ;add 0.5 to FAC1
 FADD   = $b867 ;add a number in memory to FAC1
 DIV10  = $bafe ;divide FAC1 by 10
 MUL10  = $bae2 ;multiply FAC1 by 10
+FSUB   = $b850 ;subtract FAC1 from a number in memory
 FMULT  = $ba28 ;copy mem pointed by Y(hi),A(lo) to FAC2 then FAC1=FAC1*FAC2
+FDIV   = $bb0F ;divide a number in memory by FAC1
 MOVFM  = $bba2 ;copy a 5-byte float from memory to FAC1, A=lobyte, Y=hibyte
 MOV2F  = $bbc7 ;copy a 5-byte float from FAC1 to memory, $57-$5B
 MOVEF  = $bc0f ;copy FAC1 to FAC2 without rounding
@@ -376,16 +376,15 @@ TOKEN_DELETE  = $d6
 TOKEN_FILES   = $d7
 TOKEN_COLOR   = $d8
 TOKEN_SPRITE  = $da
-TOKEN_BITMAP  = $df
+TOKEN_TRACE   = $df
 TOKEN_TEXT    = $e6
 TOKEN_SCREEN  = $e7
 TOKEN_RESUME  = $e8
 TOKEN_VOICE   = $eb
-TOKEN_TRACE   = $f2
+FIRST_FUN_TOK = $f2  ;first MDBASIC function
+TOKEN_ERR     = $f2
+TOKEN_KEY     = $f3
 TOKEN_TIME    = $f4
-FIRST_FUN_TOK = $f3  ;first MDBASIC function
-TOKEN_KEY     = $f6
-TOKEN_ERR     = $f7
 TOKEN_PI      = $ff  ;PI symbol token
 
 *=$8000 ;"MDBASIC RAM Memory Block"
@@ -395,7 +394,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge .byte 147
-.text "mdbasic 25.05.30"
+.text "mdbasic 25.07.14"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -405,7 +404,7 @@ newcmd
 .shift "off"  ;OFF keyword token $CB
 .shift "else"
 
-;commands
+;keywords for statements and commands
 .shift "merge"
 .shift "dump"
 .shift "vars"
@@ -420,11 +419,11 @@ newcmd
 .shift "color"
 .shift "move"
 .shift "sprite"
-.shift "multi"
+.shift "sprcol"
 .shift "find"
 .shift "serial"
 .shift "design"
-.shift "bitmap"
+.shift "trace"
 .shift "mapcol"
 .shift "plot"
 .shift "line"
@@ -443,15 +442,14 @@ newcmd
 .shift "play"
 .shift "auto"
 .shift "old"
-.shift "trace"
-;functions
-.shift "fix"
-.shift "time"
-.shift "round"
-;statement & function
-keystr .shift "key"
+;keywords that are statements and functions
 .shift "err"
-;functions only
+keystr .shift "key"
+.shift "time"
+;keywords that are only functions
+.shift "round"
+.shift "fix"
+.shift "mod"
 .shift "ptr"
 .shift "inf"
 .shift "pen"
@@ -560,11 +558,11 @@ cmdtab
 .rta color   ;$d8
 .rta move    ;$d9
 .rta sprite  ;$da
-.rta multi   ;$db
+.rta sprcol  ;$db
 .rta find    ;$dc
 .rta serial  ;$dd
 .rta design  ;$de
-.rta bitmap  ;$df
+.rta trace   ;$df
 .rta mapcol  ;$e0
 .rta plot    ;$e1
 .rta line    ;$e2
@@ -583,19 +581,18 @@ cmdtab
 .rta play    ;$ef
 .rta auto    ;$f0
 .rta old     ;$f1
-.rta trace   ;$f2
-.rta SNERR   ;$f3 placeholder for fix (not a command, func only)
-.rta time    ;$f4 cmd and func
-.rta SNERR   ;$f5 placeholder for round (not a command, func only)
-.rta key     ;$f6 cmd & func
-.rta error   ;$f7 cmd & func
+;statements & functions
+.rta error   ;$f2 cmd and func
+.rta key     ;$f3 cmd & func
+.rta time    ;$f4 cmd & func
 ;
 ;MDBASIC Function Dispatch Table
 funtab
-.rta fix,fntime, fnround          ;$f3,$f4,$f5
-.rta fnkey, fnerr                 ;$f6,$f7 are both a command and a function
-.rta ptr, inf, pen, joy, pot, hex ;$f8,$f9,$fa,$fb,$fc,$fd
-.rta instr, $ae9e                 ;$fe,$ff (PI Constant)
+.rta fnerr, fnkey, fntime   ;$f2,$f3,$f4
+.rta fnround, fix, mod      ;$f5,$f6,$f7
+.rta ptr, inf, pen          ;$f8,$f9,$fa
+.rta joy, pot, hex          ;$fb,$fc,$fd
+.rta instr, $ae9e           ;$fe,$ff (PI Constant)
 ;
 ;*** error messages ***
 ;To invoke, load x register with error# then jmp ($0300)
@@ -1294,7 +1291,7 @@ prtopen
 ;
 ;*******************
 ;DUMP LIST [start]-[end]
-;DUMP SCREEN | BITMAP | VARS
+;DUMP SCREEN | VARS
 ;DUMP FILES [volume$], [device]
 ;DUMP {expression}
 dump
@@ -1302,8 +1299,6 @@ dump
  beq dumplist
  cmp #TOKEN_SCREEN
  beq dumpscreen
- cmp #TOKEN_BITMAP
- beq dumpbitmap
  cmp #TOKEN_VARS
  beq dumpvars
  cmp #TOKEN_FILES
@@ -1325,15 +1320,17 @@ dumplist
  jmp clsmdb
 dumpscreen
  dec R6510
+ lda #%00100000 ;bit5=bitmap mode
+ bit SCROLY
+ bne dumpbitmap
  jsr dumpscreen2
+ jmp closer
+dumpbitmap
+ jsr dumpbitmap2
 closer
  inc R6510
  jsr clsmdb
  jmp CHRGET
-dumpbitmap
- dec R6510
- jsr dumpbitmap2
- jmp closer
 dumpfiles
  jsr opnprt0
  lda mdbout  ;current mdbasic output channel
@@ -2197,8 +2194,8 @@ oldrst
 poke
  jsr getvaluez   ;get 2-byte int in LINNUM
  jsr CHRGOT
- cmp #","
- bne newpoke
+ cmp #","        ;comma for original POKE
+ bne newpoke     ;TO token for new POKE
  jsr GETBYTC     ;get single byte int in x reg
  jmp $b827       ;do single byte poke
 newpoke
@@ -2210,9 +2207,9 @@ newpoke
  jsr ckcom2      ;check for and skip over comma, misop err if missing
  jsr GETBYTC+3   ;get poke value
  stx $fe         ;set poke value
- lda #0          ;default poke operation 0=SET
- sta $fd         ;set poke operation 0=SET,1=AND,2=OR,3=EOR
- jsr comchk      ;is poke operation param present?
+ ldx #0          ;default poke operation 0=SET
+ stx $fd         ;set poke operation 0=SET,1=AND,2=OR,3=EOR
+ cmp #","        ;is poke operation param present?
  bne gopoke      ;if not then use default
  jsr GETBYTC     ;get poke operation param
  stx $fd         ;set poke operation
@@ -2246,7 +2243,7 @@ seterrln
 raiseerr
  jsr GETBYTC+3 ;valid error number is 0-127
  txa
- bmi baderr2  ;128 and over is invalid
+ bmi baderr2   ;128 and over is invalid
  jmp (IERROR)
 ;
 baderr2 jmp FCERR   ;ILLEGAL QUANTITY
@@ -2349,24 +2346,16 @@ swap
  bne isint     ;int uses 2 bytes 0-1
  asl           ;float uses 5 bytes 0-4
 isstr asl
-isint tax      ;hold that value
- tay
-cpyvar lda (LINNUM),y ;save param1 in FAC2
- sta $0069,y
- dey
- bpl cpyvar
- txa
- tay
-cpyvr2 lda (VARPNT),y ;param2->param1
+isint tay
+cpyvar
+ lda (LINNUM),y ;save param1 in FAC2
+ tax
+ lda (VARPNT),y
  sta (LINNUM),y
- dey
- bpl cpyvr2
  txa
- tay
-faccpy lda $0069,y ;param1->param2
  sta (VARPNT),y
  dey
- bpl faccpy
+ bpl cpyvar
  rts
 mop4 jmp missop
 nomtch jmp TMERR  ;TYPE MISMATCH ERROR
@@ -2913,129 +2902,138 @@ setmag
  rts
 ;
 ;*******************
-;MULTI [TEXT] [cc1], [cc2]         - multicolor text mode
-;MULTI COLOR  [eb1], [eb2], [eb3]  - extended background color mode
-;MULTI SPRITE [sc1], [sc2]         - sprite multicolor bit patterns 01, 11
-multi
- beq chrmap        ;no params
- cmp #TOKEN_SPRITE
- beq mcspri
- cmp #TOKEN_COLOR
- bne chrmap
-
-;MULTI COLOR [eb1], [eb2], [eb3]
- jsr mcoff         ;ensure multi color text mode is off
- lda SCROLY
- and #%11011111    ;bit5=0 to disable bitmap mode
- ora #%01000000    ;bit6=1 to enable extended background color text mode
- sta SCROLY
- jsr getcc1x       ;get and apply eb1 and eb2 params
- jsr chkcomm       ;if no more params then stop, otherwise continue
- jsr getval15      ;get eb3 param
- sta BGCOL3        ;apply to ext bkgnd color reg#3
- rts
-
-mcon
-;ensure ext bkgrd color mode off (not compatable)
- lda #%10111111    ;bit#6=0, ext bkgrd color mode off (not compatable)
- jsr setscrly      ;apply value to control register
-;enable multicolor text or bitmap mode
- lda #%00010000    ;turn on bit 4 - enable multi color text or bitmap mode
- ora SCROLX        ;horiz fine scrolling and control reg
- bne setsclx       ;always branches
-mcoff
- lda #%11101111    ;set bit#4 0=off, 1=on
- and SCROLX        ;turn off mulicolor mode
-setsclx
- sta SCROLX        ;apply setting to control register
- rts
-
-;MULTI [TEXT] [cc1], [cc2]
-chrmap
- php
- tax
-;enable multi color text or bitmap mode
- jsr mcon
- txa
- plp
- beq mtdone        ;no params
- cmp #TOKEN_TEXT
- bne getcc1        ;skip over if present
-getcc1x
- jsr CHRGET        ;skip over token
- beq mtdone        ;no params
-;BGCOL1 and BGCOL2 are used for both mc and ext bkgd color modes
-getcc1
- cmp #","
- beq geteb2
- jsr getval15      ;eb1
- sta BGCOL1        ;ext bkgnd color reg#1
-geteb2
- jsr chkcomm       ;check for comma and don't return here if missing
- cmp #","
- beq mtdone
- jsr getval15      ;eb2
- sta BGCOL2        ;ext bkgnd color reg#2
-mtdone
- rts
-
-;MULTI SPRITE [sc1], [sc2]
-;set colors for bit patterns 01,11 for all sprites in mc mode
-mcspri
- jsr CHRGET
+;SPRCOL [sc1], [sc2] [,colorModeFlags]
+;bit patterns: 01 = sc1, 11 = sc2
+;colorModeFlags bit flags for multicolor mode 1=enabled, 0=disabled
+sprcol
  beq mop6
  cmp #","
- beq getsc2
+ beq sc2
  jsr getval15      ;sc1
- sta SPMC0         ;mcspr reg#0
-getsc2
+ sta SPMC0         ;for bit pattern 01
+sc2
  jsr chkcomm
+ cmp #","
+ beq mcbits
  jsr getval15      ;sc2
- sta SPMC1         ;mcspr reg#1
+ sta SPMC1         ;for bit pattern 11
+mcbits
+ jsr chkcomm
+ jsr GETBYTC+3     ;mcbits, 8 bit flags for 8 sprites
+ stx SPMC          ;multicolor mode for all 8 sprites
  rts
 ;
 ;*****************
-mop6 jmp missop    ;missing operand error
-;
-;*******************
-; COLOR [foreground] [,background] [,border]
+; COLOR [foreground] [,bgcol0] [,border], [,bgcol1], [,bgcol2], [,bgcol3]
 color
  beq mop6
- cmp #","
+ cmp #","         ;skip param?
  beq nochar
  jsr getval15
- sta COLOR      ;current cursor foreground color
+ sta COLOR        ;current foreground color for text prints
 nochar
- jsr chkcomm    ;if no more params then stop now, otherwise get next char
- cmp #","       ;another comma?
+ jsr chkcomm      ;if no more params then stop now, otherwise get next char
+ cmp #","         ;skip param?
  beq noback
- jsr getval15
- sta BGCOL0     ;background color
+ jsr getval15     ;background color for all text modes, sprites
+ sta BGCOL0       ;and multicolor bitmap with bit pattern 00
 noback jsr chkcomm
+ cmp #","
+ beq getbgcol1
  jsr getval15
- sta EXTCOL     ;border color
+ sta EXTCOL       ;border color
+;BGCOL1 and BGCOL2 are used for both mc text and ext bkgd color modes
+getbgcol1
+ jsr chkcomm      ;if no more params then stop now, otherwise get next char
+ cmp #","         ;skip param?
+ beq getbgcol2
+ jsr getval15     ;ext bkgnd color for chars with screen code 64 to 127
+ sta BGCOL1       ;or multicolor text with bit pattern 01
+getbgcol2
+ jsr chkcomm      ;if no more params then stop now, otherwise get next char
+ cmp #","         ;skip param?
+ beq getbgcol3
+ jsr getval15     ;ext bkgnd color for chars with screen code 128 to 191
+ sta BGCOL2       ;or multicolor text with bit pattern 10
+getbgcol3
+ jsr chkcomm      ;if no more params then stop, otherwise continue
+ jsr getval15     ;color for chars with screen code 192 to 255
+ sta BGCOL3
  rts
-;
 ;*****************
-setpage         ;valid page index 0 to 3
+illq jmp FCERR    ;illegal quantity error
+mop6 jmp missop   ;missing operand error
+;*****************
+setpage
+ lda SCROLY
+ bpl setpage
+ cpx #5
+ bne page4
+;page 5, turn on bitmap graphics mode
+ lda $fb
+ beq nobmclr
+ jsr bitmapclr
+ lda #0
+ sta $fb
+nobmclr
+ lda #8
+ jsr page+3
+rwait
+ lda SCROLY
+ bpl rwait
+ and #%10111111 ;bit#6=0, ext bkgrd color mode off (not compatable)
+ ora #%00100000 ;bit#5=1, bitmap mode on
+ sta SCROLY     ;apply setting to control register
+ rts
+page4
+ bcs illq       ;page 0 to 5 only
+;ensure bitmap mode is off
+ and #%11011111 ;bit 5 off disables bitmap mode
+ sta SCROLY
+ dex            ;page index 0 to 4
+ bpl page
+;page 0
+ lda #4
+ sta HIBASE
+ jsr chkclr     ;clear if requested
+ jmp norm3      ;page 0, select normal text screen
+;pages 1-4
+page
+ txa            ;valid page index 0 to 3
 ;set hibyte ptr for Kernal prints
  asl            ;each page is 4 blocks of 256 bytes (1K)
  asl
  ora #%11000000 ;video matrix base is at $c000
  sta HIBASE     ;page 0=$c0, 1=$c4, 2=$c8, 3=$cc
+ jsr chkclr     ;clear if requested
 ;set video matrix and char dot data address offsets
  asl            ;discard bits 6,7
  asl            ;while moving bits 2,3 to positions 4,5
                 ;bits 4-7 video matrix offset (4*page*1K)
  ora #%00001100 ;bits 1-3 char dot data offset (6*1K) = $1800
  sta VMCSB      ;bit 0 unused
+;set data direction of bits 0,1 to output
+ lda #%00000011 ;bits 0-1 are set to 1=output (default)
+ ora C2DDRA     ;data direction for port A (CI2PRA)
+ sta C2DDRA
 ;select VIC-II 16K mem bank 3 ($c000-$ffff)
  lda #%11111100 ;bits 0-1 mem bank, 00=bank3, 01=bank2, 10=bank1, 11=bank0
  and CI2PRA
  sta CI2PRA     ;base address is now $c000
-;turn off bitmap mode
- lda #%11011111 ;bit 5 off disables bitmap mode
- jmp setscrly
+ rts
+;
+;clear if requested
+chkclr
+ ldy $fb
+ beq chkclrd
+ pha
+ jsr CLS
+rwait2
+ lda SCROLY
+ bpl rwait2
+ pla
+chkclrd
+ rts
 
 ;*****************
 ; DESIGN NEW
@@ -3071,6 +3069,59 @@ nexbyt lda ($be),y
  cli
  rts
 ;
+;MAPCOL changes the default colors to be used when plotting dots on a bitmap
+;In hires mode (c1,c2):
+; c1 plot color (0-15) of dot in 8x8 square (upper nybble from Video Matrix)
+; c2 background color (0-15) of dot in 8x8 square (lower 4-bits in Color RAM)
+;In multi color mode (c1,c2,c3,c4):
+; c1 01 Upper nybble of Video Matrix (scan code)
+; c2 10 Lower nybble of Video Matrix (scan code)
+; c3 11 Lower nybble of Color RAM for Video Matrix ($D800-$DBE8)
+; c4 00 Background Color Register 0 BGCOL0 ($D021)
+;hires example:
+;mapcol 0,1  is dot color black, background (of 8x8 square of dot) white
+;multicolor example:
+;mapcol 1,2,3,0 is bit patterns 01=white, 10=red, 11=cyan, 00 is black
+mapcol
+ beq design      ;branches to misop
+ cmp #","
+ beq getc2
+ jsr getc1
+getc2
+ jsr chkcomm
+ cmp #","
+ beq getc3
+ lda mapcolc1c2  ;again, get global variable storage but for low nybble
+ and #%11110000  ;erase lo nybble
+ sta XSAV        ;temp var for final byte value calculation
+ jsr getval15    ;c2 (0-15) changes the background of the 8 x 8 square
+ ora XSAV
+ sta mapcolc1c2  ;update global variable for colors
+getc3
+ jsr chkcomm
+ cmp #","
+ beq getc4
+ jsr getval15    ;c3 (0-15) is used in multicolor mode only bit pattern 11
+ sta mapcolc3    ;this color can be in the same 8x8 square that c1 & c2 occupy
+getc4            ;c4 is provided for convenience
+ jsr chkcomm     ;c4 avoids the need to use the COLOR statement separately
+ jsr getval15    ;c4 (0-15) is used in multicolor mode only bit pattern 00
+ sta BGCOL0      ;this color is also used as the text background color
+ rts
+;
+getc1
+ lda mapcolc1c2  ;last plot color plotted
+ and #%00001111  ;erase hi nybble
+ sta XSAV        ;tmp storage
+ jsr getval15    ;c1 (0-15) changes the color of the plotting dots
+ asl             ;move low nybble to high nybble
+ asl
+ asl
+ asl
+ ora XSAV        ;apply new high nybble while keeping original low nybble
+ sta mapcolc1c2  ;replace global variable storage for c1 (plot color)
+ rts
+;
 dodesign
  jsr GETBYTC+3 ;get screen code
  txa
@@ -3093,179 +3144,7 @@ gtdata
  bne gtdata
  rts
 ;*******************
-
-bitmapoff
- jmp norm
 ;
-bitmapclr
- lda #$e0  ;8K bitmap $e000-$ffff
- sta $63
- lda #$00
- sta $62
- tay
-clrbyt sta ($62),y
- iny
- bne clrbyt
- inc $63
- bne clrbyt
-;apply background color in screen RAM bytes
- lda mapcolc1c2     ;last set background color
-setbmcol
- ldy #0
-pokcol sta $c800,y  ;fill color mem for entire screen
- sta $c900,y
- sta $ca00,y        ;1000 bytes, not 1024 bytes
- sta $cb00-24,y     ;this overlaps to prevent clearing sprite ptrs
- iny
- bne pokcol
- rts
-;
-;BITMAP CLR
-;BITMAP FILL x1,y1 TO x2,y2, [plotType], [color]
-;BITMAP ON
-;BITMAP OFF
-;BITMAP [colorMode], [bkgndColor], [clear]
-;colorMode 0=hires, 1=multicolor (mc)
-;bkgndColor is applied based on colorMode:
-;clear 0=no clear, 1=clear
-;hires mode sets color RAM in video matrix with init of all 1000 bytes
-;mc mode sets the single bkgrnd color register BGCOL0
-;MAPCOL c1,c2,c3 (c3 mc mode only) to change colors:
-;hires c1 (0-15) dot color, c2 (0-15) 8x8 square bkgnd color
-;multicolor uses dual plotted bit pattern to select the color:
-;  00 from BGCOL0 (0-15)
-;  01 from video matrix hi-nybble: c1 (0-15)
-;  10 from video matrix lo-nybble: c2 (0-15)
-;  11 from color RAM lo-nybble:    c3 (0-15)
-;when in mc mode all graphics cmds use color index 1-3 instead of color 0-15
-;as a color parameter to select the color from tri-color pallete
-;
-bitmap
- beq bitmapon       ;no params turns on bitmap mode
- tay
- jsr CHRGET
- cpy #TOKEN_CLR
- beq bitmapclr
- cpy #TOKEN_ON
- beq bitmapon
- cpy #TOKEN_OFF
- beq bitmapoff
- cpy #TOKEN_FILL
- bne bitscr
- tax                ;set Z flag as needed
-; BITMAP FILL x1,y1 TO x2, y2, plotType, color
- jsr getxy          ;get point1
- jsr point2         ;get point2
- jsr types          ;get plot type and color
- dec R6510
- jmp bitfil         ;perform FILL on rect; put code under ROM
-;
-mop7 jmp missop
-;
-;BITMAP [colorMode], [bkgndColor], [clear]
-bitscr
- ldy #0
- jsr txtback        ;back up TXTPTR by 1 byte
- lda (TXTPTR),y     ;then check if current byte
- cmp #" "           ;is a space char, if so then
- beq bitscr+2       ;keep going back by 1 char
-;
- jsr getbool        ;colorMode 0 or 1
- beq hiresmode
- jsr mcon           ;enable multi color text or bitmap mode
-;get bkgndColor for mc mode
- jsr comchk
- bne bitmapon       ;no more params so turn bitmap mode on
- jsr getval15g
- sta BGCOL0         ;color for 00 bit pair
- jmp bclr
-hiresmode
- jsr mcoff          ;disable multi color text or bitmap mode
-;get bkgndColor for hires mode
- jsr comchk
- bne bitmapon
- jsr CHRGET
- jsr getc2          ;background color for all 8x8 squares
- jsr setbmcol       ;apply to all 8x8 squares
-;get clear param
-bclr
- jsr comchk
- bne bitmapon       ;no more params so turn bitmap mode on
- jsr getboolg
- beq bitmapon
- jsr bitmapclr
-;
-bitmapon
- lda #%00000011     ;bits 0-1 are set to 1=output (default)
- ora C2DDRA         ;data direction for port A (CI2PRA)
- sta C2DDRA
-;select VIC-II memory bank
- lda #%11000100     ;bits 0-1 VIC-II 16K memory bank 00=bank3 ($C000-$FFFF)
- sta CI2PRA         ;send bits out data port register
-;select VIC-II memory offsets
- lda #%00101100     ;bit 0 unused
-                    ;bits 1-3 text dot-data base offset of 6K $c000+6K=$d800
-                    ;bits 4-7 video matrix base offset of 2K $c000+2K=$c800
- sta VMCSB          ;apply setting to control register
-;turn on bitmap graphics mode
- lda SCROLY
- and #%10111111     ;bit#6=0, ext bkgrd color mode off (not compatable)
- ora #%00100000     ;bit#5=1, bitmap mode on
- sta SCROLY         ;apply setting to control register
- rts
-;
-;*******************
-;
-;MAPCOL changes the default colors to be used when plotting dots on a bitmap
-;In hires mode (c1,c2):
-; c1 plot color (0-15) of dot in 8x8 square (upper nybble from Video Matrix)
-; c2 background color (0-15) of dot in 8x8 square (lower 4-bits in Color RAM)
-;In multi color mode (c1,c2,c3):
-;    00 Background Color Register 0 BGCOL0 ($D021)
-; c1 01 Upper nybble of Video Matrix (scan code)
-; c2 10 Lower nybble of Video Matrix (scan code)
-; c3 11 Lower nybble of Color RAM for Video Matrix ($D800-$DBE8)
-;hires example:
-;mapcol 0,1  is dot color black, background (of 8x8 square of dot) white
-;multicolor example:
-;mapcol 0,1,2 is bit patterns 01=black, 10=white, 11=red (00 is BGCOL0)
-mapcol
- beq mop7
- cmp #","
- beq getc2a
- jsr getc1
-getc2a
- jsr chkcomm
- cmp #","
- beq getc3
- jsr getc2
-getc3
- jsr chkcomm
- jsr getval15    ;c3 (0-15) is used in multicolor mode only bit pattern 11
- sta mapcolc3    ;this color can be in the same 8x8 square that c1 & c2 are in
- rts
-getc1
- lda mapcolc1c2  ;last plot color plotted
- and #%00001111  ;erase hi nybble
- sta XSAV        ;tmp storage
- jsr getval15    ;c1 (0-15) changes the color of the plotting dots
- asl             ;move low nybble to high nybble
- asl
- asl
- asl
- ora XSAV        ;apply new high nybble while keeping original low nybble
- sta mapcolc1c2  ;replace global variable storage for c1 (plot color)
- rts
-getc2
- lda mapcolc1c2  ;again, get global variable storage but for low nybble
- and #%11110000  ;erase lo nybble
- sta XSAV        ;temp var for final byte value calculation
- jsr getval15    ;c2 (0-15) changes the background of the 8 x 8 square
- ora XSAV
- sta mapcolc1c2  ;update global variable for colors
- rts
-;
-;*******************
 ; PULSE voc#(1-3), width%(0-100)
 pulse
  jsr getvoc
@@ -3447,7 +3326,7 @@ drawloop
  cmp #"c"
  bne chkplottype
  jsr CHRGET
- jsr getc1
+ jsr getpcol
  jmp nxtmov
 chkplottype cmp #"p"
  bne godraw
@@ -3682,7 +3561,16 @@ okvalu
 ;*******************
 ; PAINT x,y [,color]
 paint
- jsr getpnt
+ jsr getxy      ;get point1
+ jsr CHRGOT
+ cmp #TOKEN_TO
+ bne flood
+; PAINT x1,y1 TO x2, y2, plotType, color
+ jsr point2     ;get point2
+ jsr types      ;get plot type and color
+ dec R6510
+ jmp bitfil     ;perform FILL on rect
+flood
  ldx #1         ;always use plot type 1 (set)
  jsr types2     ;get plot color if present
  dec R6510
@@ -3730,16 +3618,17 @@ norm
  sta SCROLX      ;40 columns, 0 horizontal scroll scan lines
  lda #%00011011  ;extended color text mode off, bitmap mode off
  sta SCROLY      ;display on, 25 rows, 3 vertical scroll scan lines
+ lda #$04        ;text page for kernal prints
+ sta HIBASE      ;top page of screen mem for Kernal prints
 norm3
  lda #%00111111  ;reset data direction to default value
  sta C2DDRA      ;data direction for port A on CIA #2
  lda CI2PRA      ;with direction set to output on bits 0 & 1
  ora #%00000011  ;select VIC-II 16K mem bank 0 ($0000-$3FFF)
  sta CI2PRA      ;apply mem bank selection
- lda #$04        ;text page for kernal prints
- sta HIBASE      ;top page of screen mem for Kernal prints
  lda #%00010101  ;bit0 always 1; bits1-3 text dot data base addr in 1K chunks
  sta VMCSB       ;bits 4-7 video matrix base address in 1K chunks
+ jsr $e56c       ;set cursor ptr to current screen line
 norm2
  lda R6510
  ora #%00000111  ;switch mem banks to normal
@@ -3778,7 +3667,6 @@ text
  jsr getvalg  ;y size 1 to 31
  beq illqty8
  cmp #32
-illqty8a
  bcs illqty8
  sta VERCK    ;save user specified y size
  jsr comchk
@@ -3792,13 +3680,52 @@ screenoffg
  jsr CHRGET
 screenoff
  lda #%11101111  ;bit4 = 0 screen off
-setscrly
  and SCROLY
  sta SCROLY
  rts
 ;
+screenong
+ jsr CHRGET
+screenon
+ lda #%00010000  ;bit4 = 1 screen on
+ ora SCROLY
+ sta SCROLY
+ rts
+;
+docls
+ jsr CHRGET
+ bne pager
+cls ;clear current screen
+ lda #%00100000  ;bit5 bitmap mode
+ bit SCROLY
+ bne bitmapclr
+ jmp CLS
+;clear 8K bitmap $e000-$ffff
+bitmapclr
+ lda #$e0
+ sta $63
+ lda #$00
+ sta $62
+ tay
+clrbyt
+ sta ($62),y
+ iny
+ bne clrbyt
+ inc $63
+ bne clrbyt
+;initialize bitmap colors in page 3 screen RAM
+ lda mapcolc1c2   ;hires mode is bkgnd color and dot color
+pokcol            ;multicolor mode is bit patterns 01 and 10
+ sta $c800,y      ;bit pattern 11 is from bytes in color RAM at $D800
+ sta $c900,y      ;initializing all bytes on page
+ sta $ca00,y      ;1000 bytes, not 1024 bytes
+ sta $cb00-24,y   ;this overlaps to prevent clearing sprite ptrs
+ iny
+ bne pokcol
+ rts
+;
 ;*******************
-; SCREEN CLR
+; SCREEN CLR [page]
 ; SCREEN ON|OFF
 ; SCREEN [page], [xoffset], [yoffset]
 ; page (0-4, initially 0, 0=normal text page, 1-4=redefined char mode)
@@ -3813,17 +3740,49 @@ screen
  cmp #TOKEN_CLR
  beq docls
  cmp #","
- beq xbits
- jsr GETBYTC+3   ;page 0-4, 0=norm
- cpx #5
- bcs illqty8a
- dex
- bpl page
- jsr norm3       ;page 0, select normal text screen
- bne xbits       ;always branches
-page             ;pages 1-4
- txa
+ beq colmode
+ lda #0
+pager
+ sta $fb
+ jsr GETBYTC+3   ;page 0-5, 0=norm, 1-4=design, 5=bitmap
  jsr setpage
+;get color mode
+colmode
+ jsr chkcomm
+ cmp #","
+ beq xbits
+ jsr GETBYTC+3   ;colorMode 0,1,2
+ txa
+ beq hiresmode   ;0=normal color mode or hires bitmap
+ dex
+ beq mcmode      ;1=multicolor mode
+ dex
+ bne badpage     ;2=ext bkgnd color text mode
+;enable ext bkgrd color mode
+ lda SCROLY
+ and #%11011111  ;bit5=0 to disable bitmap mode
+ ora #%01000000  ;bit6=1 to enable extended background color text mode
+ sta SCROLY
+ bne hiresmode   ;always braches and ensures mc mode is off
+;
+badpage jmp FCERR        ;illegal quantity error
+mop jmp missop
+;
+;ensure ext bkgrd color mode off (not compatable)
+mcmode
+ lda #%10111111  ;bit#6=0, ext bkgrd color mode off (not compatable)
+ and SCROLY
+ sta SCROLY
+;enable multicolor text or bitmap mode
+ lda #%00010000  ;turn on bit 4 - enable multi color text or bitmap mode
+ ora SCROLX      ;horiz fine scrolling and control reg
+ bne setsclx     ;always branches
+hiresmode
+ lda #%11101111  ;set bit#4 0=off, 1=on
+ and SCROLX      ;turn off mulicolor mode
+setsclx
+ sta SCROLX      ;apply setting to control register
+;get xoffset param
 xbits jsr chkcomm
  cmp #","
  beq ybits
@@ -3842,27 +3801,7 @@ ybits jsr chkcomm
  sta SCROLY
  rts
 ;
-screenong
- jsr CHRGET
-screenon
- lda #%00010000  ;bit4 = 1 screen on
-setscrly2
- ora SCROLY
- sta SCROLY
- rts
-;
-docls
- jsr CHRGET
- lda #%00100000  ;bit5 bitmap mode
- bit SCROLY
- bne clrbmp
- jmp CLS
-clrbmp
- jmp bitmapclr
-;
-
-mop jmp missop
-;
+;*******************
 keyclr
  lda #0
  sta NDX
@@ -4386,7 +4325,7 @@ inivoc
 ;if first param is numeric then use as offset, otherwise offset=1 (default)
 instr
  jsr CHRGET   ;process next cmd text
- jsr CHKOPN   ;Check for and Skip Opening Parentheses
+ jsr CHKOPN   ;check for and skip opening parentheses
  jsr FRMEVL   ;eval expression
  lda VALTYP   ;check if numeric (offset param) or string (source$ param)
  beq getoff
@@ -4452,11 +4391,49 @@ ptr
  jmp uint2f     ;convert 16-bit unsigned int to float into FAC1
 ;
 ;*******************
+; R = MOD(dividend, divisor)   modulo is the remainder after division
+mod
+ jsr getfnp1     ;get and save param1 (dividend)
+;get param2
+ jsr CHKCOM      ;check for and skip over comma, syntax err if missing
+ jsr FRMNUM      ;get numeric param2 called the divisor or modulus
+ jsr CHKCLS      ;check for and skip closing parentheses
+;save param2 (divisor)
+ ldx #<BUF+$4f
+ ldy #>BUF+$4f
+ jsr MOV2F+16    ;copy a 5-byte floating point number from FAC1 to memory
+;FAC1 = N/D
+ lda #<BUF+$54   ;dividend pointer
+ ldy #>BUF+$54
+ jsr FDIV        ;divide a number in memory by FAC1 pointed to by A (lobyte) Y (hibyte) result in FAC1
+;FAC1=FIX(FAC1)
+ jsr trunc       ;truncate fractional portion
+;FAC1 = FAC1 * divisor
+ lda #<BUF+$4f   ;divisor pointer
+ ldy #>BUF+$4f
+ jsr FMULT       ;multiply FAC1 by value in memory with result in FAC1
+;FAC1 = dividend - FAC1
+ lda #<BUF+$54   ;dividend pointer
+ ldy #>BUF+$54
+ jmp FSUB        ;subtract FAC1 from a number in memory
+
+;get first numeric function param (used by ROUND and MOD)
+getfnp1
+ jsr CHRGET
+ jsr CHKOPN      ;check for and skip opening parentheses
+ jsr FRMNUM      ;get numeric param1 - numerator
+;save param1 (numerator)
+ ldx #<BUF+$54
+ ldy #>BUF+$54
+ jmp MOV2F+16    ;copy a 5-byte floating point number from FAC1 to memory
+
+;*******************
 ; I = FIX(float)  truncate the fractional portion
 fix
  jsr CHRGET
  jsr PARCHK     ;get term inside parentheses
  jsr TESTNUM    ;ensure expression was numeric, error if not
+trunc
  lda $66        ;FAC1 sign byte
  pha            ;save sign byte
  jsr ABS        ;ensure positive number for floor calculation
@@ -4485,13 +4462,7 @@ signed rts
 ; n is the 32-bit floating point number to round, d is the precision
 ; d(-9 to +9) is the number of places left (-) or right (+) of decimal point
 fnround
- jsr CHRGET
- jsr CHKOPN     ;check for and skip opening parentheses
- jsr FRMNUM     ;get numeric param1 - number to round
-;save param1
- ldx #<BUF+$54  ;5-byte buffer pointer to unused
- ldy #>BUF+$54  ;memory area at end of line input buffer
- jsr MOV2F+16   ;copy a 5-byte floating point number from FAC1 to memory
+ jsr getfnp1    ;get and save param1
 ;prepare param2 default values
  lda #0
  sta $fb        ;default 0 decimal places (round to whole number)
@@ -5231,15 +5202,16 @@ getvalu
 types
  jsr chkcomm     ;if current char is not a comma then do not return here
  cmp #","        ;if the next char is also a comma
- beq noparam     ;then skip the plot type param
+ beq getcol      ;then skip the plot type param
  jsr GETBYTC+3   ;get plot type value
  cpx #4          ;plot type 0=erase, 1=plot, 2=toggle, 3=none (locate only)
  bcs illqty4
 types2
  stx lastplott
-noparam
+getcol
  jsr chkcomm     ;if current char is not a comma do not return here
 ;apply color based on mode
+getpcol
  lda SCROLX
  and #%00010000  ;check if multicolor mode on or off
  bne mcplot
@@ -5406,7 +5378,7 @@ sprcolopt  .byte 0      ;bit flags for which sprites to change color
 lastplotx  .word 0      ;last plot x coord
 lastploty  .byte 0      ;last plot y coord
 lastplott  .byte 1      ;last plot type used
-mapcolc1c2 .byte $15    ;last plot color, hinybble c1=white, lonybble c2=green
+mapcolc1c2 .byte $1c    ;last plot color, hinybble c1=white, lonybble c2=gray1
 mapcolc3   .byte 7      ;last plot multicolor for bit pattern 11, c3=yellow
 mapcolbits .byte 8      ;(8,16,24) used for plotting a dot on a multicol bitmap
 
@@ -5939,7 +5911,8 @@ mowait dex
 linedon rts
 ;
 ;**************************
-setdot jsr ydiv8
+setdot
+ jsr ydiv8
  lda R6510
  pha
  and #%11111101 ;bit1 0=HIRAM
@@ -5974,39 +5947,39 @@ doton
 ;write byte with bit pattern for the one bit in hires or 2 bits in mc mode
 colorb sta ($c3),y
  pla
- sta R6510   ;restore Kernal HIROM ($e000-$ffff)
+ sta R6510      ;restore Kernal HIROM ($e000-$ffff)
  cli
 ;apply color using video matrix and color RAM
- lda $fd     ;y coordinate
+ lda $fd        ;y coordinate
  lsr
  lsr
- lsr         ;video matrix line# (0-24) = y/8
+ lsr            ;video matrix line# (0-24) = y/8
  tay
- lda $fc     ;x coordinate hibyte
- lsr         ;into carry
- lda $fb     ;x coordinate lobyte
- ror         ;out of carry
- lsr         ;to calc x/8
+ lda $fc        ;x coordinate hibyte
+ lsr            ;into carry
+ lda $fb        ;x coordinate lobyte
+ ror            ;out of carry
+ lsr            ;to calc x/8
  lsr
  clc
- adc $ecf0,y ;video matrix lowbyte at line y
+ adc $ecf0,y    ;video matrix lowbyte at line y
  sta $c3
- lda btab,y  ;video maxtrix hibyte offset
- adc #$c8    ;video matrix starts at $c800 in bitmap mode
+ lda btab,y     ;video maxtrix hibyte offset
+ adc #$c8       ;video matrix starts at $c800 in bitmap mode
  sta $c4
  lda mapcolc1c2 ;hires dot color (hi nybble), bkgnd color of 8x8 sq (lo nybble)
  ldy #0
  sta ($c3),y
-;apply multicolor byte for bit pattern 11 in lo nybble of color RAM
+;apply multicolor byte for bit pattern 11 in low nybble of color RAM
  lda $c4
- clc
- adc #$10     ;calculate beginning of color RAM
- sta $c4      ;which starts at $d800
- lda mapcolc3 ;background color mem used for mc mode
- sta ($c3),y
+; clc not needed here since it is already cleared
+ adc #$10       ;calculate color RAM hibyte
+ sta $c4        ;color RAM always starts at $d800
+ lda mapcolc3   ;background color mem is used by mc mode only
+ sta ($c3),y    ;has no effect on hires bitmap
  rts
 ;---
-ydiv8 lda $fd  ;y coordinate
+ydiv8 lda $fd   ;y coordinate
  lsr
  lsr
  lsr
@@ -8976,25 +8949,25 @@ bufrd
  beq buf0       ;yes, stop reading now
  sta paintbuf1,y
  iny
- bne bufrd     ;keep looking for zero byte or CR char
- beq buf2      ;255 byte string
+ bne bufrd      ;keep looking for zero byte or CR char
+ beq buf2       ;255 byte string
 buf0
- lda #0        ;set zero-byte terminator
+ lda #0         ;set zero-byte terminator
 buf1
  sta paintbuf1,y
 buf2
- jsr READST    ;last read status
- sta $61       ;save for returning the read status
- jsr stdout    ;switch current i/o channel to output channel
- bcs iodone1   ;carry indicates error, accumulator holds error#
- lda XSAV      ;write flag
+ jsr READST     ;last read status
+ sta $61        ;save for returning the read status
+ jsr stdout     ;switch current i/o channel to output channel
+ bcs iodone1    ;carry indicates error, accumulator holds error#
+ lda XSAV       ;write flag
  beq iodone1
  ldy #0
 bufwr
  lda paintbuf1,y
- beq iodone    ;stop if zero-byte termination found
+ beq iodone     ;stop if zero-byte termination found
  jsr CHROUT
- bcs iodone1   ;stop if output error
+ bcs iodone1    ;stop if output error
  iny
  bne bufwr
 iodone
@@ -9292,4 +9265,6 @@ pntreq lda $22
  cmp $25
 gbhah rts
 ;
+.byte 0  ;filler to complete 8KB $a000-$bfff
+
 .end
