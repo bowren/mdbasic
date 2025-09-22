@@ -394,7 +394,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge .byte 147
-.text "mdbasic 25.07.14"
+.text "mdbasic 25.09.21"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -4442,6 +4442,7 @@ trunc
 ;round FAC1 to the nearest whole number
 ;add 0.5 to the absolute value then truncate remainder
 doround
+ jsr ROUND      ;adjust FAC1 rounding byte
  lda $66        ;FAC1 sign byte
  pha            ;save sign byte
  jsr ABS        ;ensure positive number
@@ -4504,13 +4505,11 @@ movedec
  bpl xmul10
 xdiv10
  jsr DIV10      ;divide FAC1 by 10
- jsr ROUND      ;adjust FAC1 rounding byte
  dec COUNT
  bne xdiv10     ;keep moving till done
  beq signit     ;always branches
 xmul10
  jsr MUL10      ;multiply FAC1 by 10
- jsr ROUND      ;adjust FAC1 rounding byte
  dec COUNT
  bne xmul10     ;keep moving till done
  beq signit     ;always branches
