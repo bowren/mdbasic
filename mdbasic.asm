@@ -394,7 +394,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge .byte 147
-.text "mdbasic 25.09.21"
+.text "mdbasic 25.09.25"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -4436,25 +4436,25 @@ fix
 trunc
  lda $66        ;FAC1 sign byte
  pha            ;save sign byte
- jsr ABS        ;ensure positive number for floor calculation
+ lsr $66        ;ensure positive number for floor calculation
  jmp trunca     ;truncate remainder
 
 ;round FAC1 to the nearest whole number
 ;add 0.5 to the absolute value then truncate remainder
 doround
- jsr ROUND      ;adjust FAC1 rounding byte
  lda $66        ;FAC1 sign byte
  pha            ;save sign byte
- jsr ABS        ;ensure positive number
+ lsr $66        ;ensure positive number
  jsr FADDH      ;add .5 to value in FAC1
+ jsr ROUND      ;adjust rounding byte
+ jsr $b96f      ;increment FAC1 mantissa
 trunca
  jsr INT        ;convert FAC1 value to its lowest integer value (floor)
 signit
  pla            ;recall original FAC1 sign byte
- tax            ;if rounding or fixing results in zero
- jsr SIGN       ;then leave the sign byte alone
- beq signed     ;otherwise restore it as it was
- stx $66        ;before rounding or fixing began
+ ldx $61        ;if FAC1 became zero after rounding or fixing
+ beq signed     ;then leave the sign byte alone
+ sta $66        ;otherwise restore original sign byte
 signed rts
 
 ;*******************
@@ -4466,8 +4466,8 @@ fnround
  jsr getfnp1    ;get and save param1
 ;prepare param2 default values
  lda #0
- sta $fb        ;default 0 decimal places (round to whole number)
- sta $fc        ;default first move direction right
+ sta $c3        ;default 0 decimal places (round to whole number)
+ sta $c4        ;default first move direction right
  jsr comchk
  bne round1
 ;get param2, move decimal direction
@@ -4475,33 +4475,33 @@ fnround
  jsr FRMNUM
  jsr SIGN       ;get FAC1 0=Zero, 1=Positive, 255=Negative
  beq round1     ;zero value, no move needed
- sta $fc        ;save sign, negative move left, positive move right
- jsr ABS        ;ensure FAC1 is a positive number
+ sta $c4        ;save sign, negative move left, positive move right
+ lsr $66        ;ensure FAC1 is a positive number
  jsr GETBYTC+6  ;convert FAC1 to 1-byte unsigned int into x reg
  cpx #10
  bcs illqty7    ;range is -9 to +9
- stx $fb        ;decimal places to round
+ stx $c3        ;decimal places to round
 round1
  jsr CHKCLS     ;check for and skip closing parentheses
+ lda $c3        ;decimal places to round
+ beq doround    ;zero will round to nearest whole number
 ;restore param1 to FAC1
  lda #<BUF+$54  ;5-byte buffer pointer to unused
  ldy #>BUF+$54  ;memory area at end of line input buffer
  jsr MOVFM      ;copy a 5-byte float from memory to FAC1 A=lo, Y=hi
- lda $fb        ;decimal places to round
- beq doround    ;zero will round to nearest whole number
 ;move decimal point to the right or left based on sign of num places
  jsr movedec    ;move decimal to left or right based on sign of param2
- lda $fc        ;move direction
- eor #$ff       ;toggle move direction for 2nd call
- sta $fc
+ lda $c4        ;move direction
+ eor #$ff       ;toggle move direction
+ sta $c4
  jsr doround    ;round FAC1 to nearest whole number
 ;move decimal point
- lda $fb        ;decimal places to round
 movedec
+ lda $c3        ;decimal places to round
  sta COUNT
  lda $66        ;save FAC1 sign byte
  pha            ;before moving decimal
- lda $fc        ;direction: 255=left else right
+ lda $c4        ;direction: 255=left else right
  bpl xmul10
 xdiv10
  jsr DIV10      ;divide FAC1 by 10
