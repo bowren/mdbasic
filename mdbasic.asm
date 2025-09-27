@@ -394,7 +394,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge .byte 147
-.text "mdbasic 25.09.25"
+.text "mdbasic 25.09.26"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -4016,12 +4016,12 @@ illvoc ldx #32  ;illegal voice number
  jmp (IERROR)
 
 ;******************
-;FILTER cutoff, [resonance], [type]
+;FILTER [cutoff], [resonance], [type]
 ;FILTER VOICE voice#, [boolean]
 ;
 ;The cutoff frequency has an 11-bit range (which corresponds to the
 ;numbers 0 to 2047).  This is made up of a high-byte and three low
-;bits. The range of cutoff freqnencies represented by these 2048 values
+;bits. The range of cutoff frequencies represented by these 2048 values
 ;stretches from 30 Hz to about 12,000 Hz.
 ;The exact frequency may be calculated with the formula:
 ;FREQ=(REGVAL*5.8)+30Hz
@@ -4033,6 +4033,11 @@ filter
  cmp #TOKEN_VOICE
  bne getfreq1
 ;FILTER VOICE voice# [,boolean]
+;select the voice to filter using control register RESON ($d417)
+;bit0: voice 1? 0=no, 1=yes
+;bit1: voice 2? 0=no, 1=yes
+;bit2: voice 3? 0=no, 1=yes
+;bit3: the output from the external input? 0=no, 1=yes
  jsr getvalg    ;get voice 1-4
  dex            ;voice 1 to 4 -> index 0 to 3
  cpx #4         ;voice 4=external input via pin 5 of audio/video port
@@ -4042,13 +4047,14 @@ filter
  jsr comchk     ;check if they supplied a boolean?
  bne filteron   ;missing boolean assumes on, syntax FILTER VOICE voice#
  jsr getboolg   ;get on/off expression, 0=off, 1=on
- bne filteron
- eor XSAV       ;flip all bits to turn off voice# bit
- and md417      ;all other bits will remain as they were
+ bne filteron   ;0=filter off, 1=filter on
+ lda md417      ;current settings in SID mock register
+ eor XSAV       ;turn off selected bit for voice
  jmp setfilter
 filteron
- lda XSAV
- ora md417      ;affect only bit for voice
+ lda md417      ;current settings in SID mock register
+setreson
+ ora XSAV       ;turn on selected bit for voice
 setfilter
  sta md417      ;remember this new setting for this register
  sta RESON      ;make setting active in SID register
@@ -4102,15 +4108,18 @@ okfilt
 ;set the filter resonance control register $d417
 ;bits 4-7 set filter resonance 0-15, 0=none, 15=max
 reson
- jsr chkcomm  ;if no more params then quit otherwise continue
- jsr getval15 ;get resonance param
- asl          ;resonance is stored in the upper nybble
- asl          ;so this value must be shifted left
+ jsr chkcomm    ;if no more params then quit otherwise continue
+ cmp #","
+ beq ftype
+ jsr getval15   ;get resonance param
+ asl            ;resonance is stored in the upper nybble
+ asl            ;so this value must be shifted left
  asl
  asl
- ora md417    ;include voice number in lower nybble
- sta md417    ;store for future read (cannot read SID registers, only write)
- sta RESON    ;SID's Output Filter Resonance Control Register
+ sta XSAV
+ lda md417      ;SID mock register has current reasonance setting
+ and #%00001111 ;remove current setting
+ jsr setreson   ;apply new setting to SID and mock register
 ;get the type 0-4 if present, stop otherwise
 ;Store in SID Register $d418 bits 4-6
 ;Bits 0-3 Select output volume (0-15)
@@ -4130,30 +4139,30 @@ reson
 ;notch reject filter, which reduces the volume of the frequency components
 ;nearest the selected frequency.
 ;
-;Bits 4-6 are the target
+;Bits 4-6 are used to set the filter type, bit 7 is not used by MDBASIC
 ;0  = 000  none
 ;1  = 001  low pass
 ;2  = 010  band pass
 ;3  = 100  hi pass
-;4  = 101  notch reject
-;
- jsr chkcomm  ;if no more params then quit otherwise continue
- jsr GETBYTC+3 ;get filter type 0-4
+;4  = 101  notch reject (low and hi pass)
+ftype
+ jsr chkcomm    ;if no more params then quit otherwise continue
+ jsr GETBYTC+3  ;get filter type 0-4
  cpx #5
  bcs illqty5
- cpx #3       ;3 and 4 need to add 1 to achive desired bit pattern
+ cpx #3         ;3 and 4 need to add 1 to achive desired bit pattern
  bcc settype
  inx
 settype
  txa
- asl          ;shift bits 0,1,2 to positions 4,5,6
- asl          ;ie 00000111 becomes 01110000
+ asl            ;shift bits 0,1,2 to positions 4,5,6
+ asl            ;ie 00000111 becomes 01110000
  asl
  asl
- sta XSAV     ;temp storage
- lda md418    ;current value using SID mock register
+ sta XSAV       ;temp storage
+ lda md418      ;current value using SID mock register
  and #%10001111 ;clear bits 4-6, keep the rest
- jmp setvolu  ;apply new value
+ jmp setvolu    ;apply new value
 ;
 ;*******************
 ; PLAY S$
