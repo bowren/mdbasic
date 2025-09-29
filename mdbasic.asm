@@ -394,7 +394,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge .byte 147
-.text "mdbasic 25.09.26"
+.text "mdbasic 25.09.28"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -4454,9 +4454,9 @@ doround
  lda $66        ;FAC1 sign byte
  pha            ;save sign byte
  lsr $66        ;ensure positive number
+ jsr $b96f      ;increment FAC1 mantissa
  jsr FADDH      ;add .5 to value in FAC1
  jsr ROUND      ;adjust rounding byte
- jsr $b96f      ;increment FAC1 mantissa
 trunca
  jsr INT        ;convert FAC1 value to its lowest integer value (floor)
 signit
@@ -4492,12 +4492,12 @@ fnround
  stx $c3        ;decimal places to round
 round1
  jsr CHKCLS     ;check for and skip closing parentheses
- lda $c3        ;decimal places to round
- beq doround    ;zero will round to nearest whole number
 ;restore param1 to FAC1
  lda #<BUF+$54  ;5-byte buffer pointer to unused
  ldy #>BUF+$54  ;memory area at end of line input buffer
  jsr MOVFM      ;copy a 5-byte float from memory to FAC1 A=lo, Y=hi
+ lda $c3        ;decimal places to round
+ beq doround    ;zero will round to nearest whole number
 ;move decimal point to the right or left based on sign of num places
  jsr movedec    ;move decimal to left or right based on sign of param2
  lda $c4        ;move direction
