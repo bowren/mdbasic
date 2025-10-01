@@ -27,6 +27,7 @@ OLDTXT = $3d ;Pointer to the Address of the Current BASIC Statement
 DATPTR = $41 ;Pointer to the Address of the Current DATA Item
 VARPNT = $47 ;Pointer to the Current BASIC Variable Value
 FACSGN = $66 ;Sign of FAC1, 0=positive, otherwise negative
+FACEXP = $61 ;Exponent of FAC1 (Base 2)
 TXTPTR = $7a ;Pointer to the Address of the Current BASIC text char
 STATUS = $90 ;Kernal I/O Status Word (ST)
 XSAV   = $97 ;Temporary .X Register Save Area
@@ -284,7 +285,6 @@ MOV2F  = $bbc7 ;copy a 5-byte float from FAC1 to memory, $57-$5B
 MOVEF  = $bc0f ;copy FAC1 to FAC2 without rounding
 ROUND  = $bc1b ;round FAC1 by adjusting the rounding byte
 SIGN   = $bc2b ;put the sign of FAC1 into accumulator
-ABS    = $bc58 ;perform ABS
 QINT   = $bc9b ;convert FAC1 into a 4-byte (32-bit) signed integer within FAC1
 INT    = $bccc ;perform INT
 FIN    = $bcf3 ;convert ASCII string to a float in FAC1
@@ -395,7 +395,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge .byte 147
-.text "mdbasic 25.09.30"
+.text "mdbasic 25.10.01"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -912,11 +912,11 @@ nexto jsr CHRGET
  cmp #8
  bcs end1
  tax
- lda $61    ;exponent
+ lda FACEXP
  beq zero3
  adc #3     ;increase by 2^3 = 8
  bcs over
- sta $61
+ sta FACEXP
 zero3 txa
  beq nexto
  jsr FINLOG
@@ -933,9 +933,9 @@ nextb jsr CHRGET
  cmp #2
  bcs end1
  tax
- lda $61    ;exponent
+ lda FACEXP
  beq zero2
- inc $61    ;increase by 2^1 = 2
+ inc FACEXP ;increase by 2^1 = 2
  beq over
 zero2 txa
  beq nextb
@@ -955,12 +955,12 @@ nexth jsr CHRGET
 digit sec
  sbc #"0"
  tax
- lda $61    ;exponent
+ lda FACEXP
  beq zero
  clc
  adc #4     ;increase by 2^4 = 16
  bcs over
- sta $61
+ sta FACEXP
 zero txa
  beq nexth
  jsr FINLOG ;add signed int to FAC1
@@ -1087,7 +1087,7 @@ if
  lda #TOKEN_THEN ;THEN token
  jsr CHKCOM+2    ;check for and skip over THEN, error if not there
 condit
- lda $61         ;expression result 0=false, otherwise true
+ lda FACEXP      ;expression result 0=false, otherwise true
  beq isfalse     ;non-zero means expression is true
  jsr CHRGOT      ;check current char is numeric digit
  bcs endlin      ;clear carry means ASCII numerials
@@ -2841,15 +2841,14 @@ spntr
  beq prorty
 ;get sprite data ptr 0-255 (ptr*64)=start address
 sprptr
- jsr GETBYTC+3
- stx XSAV
+ jsr GETBYTC+3  ;get data ptr in x reg
 ;determine VIC-II base addr
  jsr ptrhi      ;get hibyte of sprite ptr start address
  sta $62        ;sprite pointers are in the last 8 bytes of 1K screen RAM
  lda #$f8       ;lobyte of offset to first byte of sprite data ptrs
  sta $61        ;ptr to first sprite ptr, ie bank 0 with 1K offset is $07f8
 ;apply ptr param
- lda XSAV       ;sprite ptr from cmd param
+ txa            ;sprite ptr from cmd param
  ldy $be        ;sprite# 0-7
  sta ($61),y    ;sprite y's data ptr
 ;sprite foreground priority
@@ -4017,12 +4016,12 @@ illvoc ldx #32  ;illegal voice number
  jmp (IERROR)
 
 ;******************
-;FILTER VOICE voice#, [boolean]
+; FILTER VOICE voice#, [boolean]
 filter
  beq mop2
  cmp #TOKEN_VOICE
  bne cutoff
-;FILTER VOICE voice# [,boolean]
+; FILTER VOICE voice# [,boolean]
 ;select the voice to filter using control register RESON ($d417)
 ;bit0: voice 1? 0=no, 1=yes
 ;bit1: voice 2? 0=no, 1=yes
@@ -4050,7 +4049,7 @@ setfilter
  sta RESON      ;make setting active in SID register
  rts
 ;
-;FILTER [cutoff] [,resonance] [,type]
+; FILTER [cutoff] [,resonance] [,type]
 ;
 ;The cutoff frequency has an 11-bit range (which corresponds to the
 ;numbers 0 to 2047).  This is made up of a high-byte and three low
@@ -4092,9 +4091,9 @@ mop2 jmp missop
 ;shift hibyte right 4x to promote lower 3 bits to highest 3 bits, fill with 0
 okfilt
  lsr        ;bit0 into carry, bit7 loaded with 0
- rol        ;shift bits thru carry
- rol        ;into bits0-3
- rol
+ ror        ;shift bits thru carry
+ ror        ;into bits0-3
+ ror
  sta XSAV   ;save hibyte
 ;store lobyte in SID lower byte register (bits 3-7 will be ignored by SID)
  tya        ;lobyte
@@ -4464,7 +4463,7 @@ trunca
  jsr INT        ;convert FAC1 value to its lowest integer value (floor)
 signit
  pla            ;recall original FAC1 sign byte
- ldx $61        ;if FAC1 became zero after rounding or fixing
+ ldx FACEXP     ;if FAC1 became zero after rounding or fixing
  beq signed     ;then leave the sign byte alone
  sta FACSGN     ;otherwise restore original sign byte
 signed rts
