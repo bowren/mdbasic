@@ -26,6 +26,7 @@ OLDLIN = $3b ;Previous BASIC Line Number (lobyte)
 OLDTXT = $3d ;Pointer to the Address of the Current BASIC Statement
 DATPTR = $41 ;Pointer to the Address of the Current DATA Item
 VARPNT = $47 ;Pointer to the Current BASIC Variable Value
+FACSGN = $66 ;Sign of FAC1, 0=positive, otherwise negative
 TXTPTR = $7a ;Pointer to the Address of the Current BASIC text char
 STATUS = $90 ;Kernal I/O Status Word (ST)
 XSAV   = $97 ;Temporary .X Register Save Area
@@ -394,7 +395,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge .byte 147
-.text "mdbasic 25.09.28"
+.text "mdbasic 25.09.30"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -4016,22 +4017,11 @@ illvoc ldx #32  ;illegal voice number
  jmp (IERROR)
 
 ;******************
-;FILTER [cutoff], [resonance], [type]
 ;FILTER VOICE voice#, [boolean]
-;
-;The cutoff frequency has an 11-bit range (which corresponds to the
-;numbers 0 to 2047).  This is made up of a high-byte and three low
-;bits. The range of cutoff frequencies represented by these 2048 values
-;stretches from 30 Hz to about 12,000 Hz.
-;The exact frequency may be calculated with the formula:
-;FREQ=(REGVAL*5.8)+30Hz
-;since we need to convert a freq to regval, rewrite expression:
-;REGVAL = (FREQ-30)/5.8
-;
 filter
  beq mop2
  cmp #TOKEN_VOICE
- bne getfreq1
+ bne cutoff
 ;FILTER VOICE voice# [,boolean]
 ;select the voice to filter using control register RESON ($d417)
 ;bit0: voice 1? 0=no, 1=yes
@@ -4059,14 +4049,28 @@ setfilter
  sta md417      ;remember this new setting for this register
  sta RESON      ;make setting active in SID register
  rts
-; FILTER cutoff [,resonance [,type]]
-getfreq1
+;
+;FILTER [cutoff] [,resonance] [,type]
+;
+;The cutoff frequency has an 11-bit range (which corresponds to the
+;numbers 0 to 2047).  This is made up of a high-byte and three low
+;bits. The cutoff frequencies represented by these 2048 values range
+;from 30 Hz to 11905.5 Hz. SID voices 1-3 can only go to to about
+;4KHz but input from the A/V port pin 5 (voice 4) can go much higher,
+;thus the filter supports a higher range.
+;The frequency may be calculated with the formula:
+;FREQ=(REGVAL*5.8)+30Hz
+;since we need to convert a freq to regval, rewrite expression:
+;REGVAL = (FREQ-30)/5.8
+cutoff
  cmp #","
  beq reson
  jsr FRMNUM     ;convert current expression to a number and store in FAC1
  lda #<neg30
  ldy #>neg30
  jsr FADD       ;add -30
+ lda FACSGN     ;if negative result then < 30 thus illegal
+ bmi illqty5
  lda #<five8
  ldy #>five8
  jsr FMULT      ;multiply FAC1 with value in memory pointed to by A and Y
@@ -4085,13 +4089,12 @@ mop2 jmp missop
 ;  $d416     $d415    Target Filter frequency registers
 ; 11111111  XXXXX111  Target bits to map from parameter value, X=not used
 ;
-;shift hibyte left 5x to promote lower 3 bits to highest 3 bits, fill with 0
+;shift hibyte right 4x to promote lower 3 bits to highest 3 bits, fill with 0
 okfilt
- asl
- asl
- asl
- asl
- asl
+ lsr        ;bit0 into carry, bit7 loaded with 0
+ rol        ;shift bits thru carry
+ rol        ;into bits0-3
+ rol
  sta XSAV   ;save hibyte
 ;store lobyte in SID lower byte register (bits 3-7 will be ignored by SID)
  tya        ;lobyte
@@ -4443,17 +4446,17 @@ fix
  jsr PARCHK     ;get term inside parentheses
  jsr TESTNUM    ;ensure expression was numeric, error if not
 trunc
- lda $66        ;FAC1 sign byte
+ lda FACSGN     ;FAC1 sign byte
  pha            ;save sign byte
- lsr $66        ;ensure positive number for floor calculation
+ lsr FACSGN     ;ensure positive number for floor calculation
  jmp trunca     ;truncate remainder
 
 ;round FAC1 to the nearest whole number
 ;add 0.5 to the absolute value then truncate remainder
 doround
- lda $66        ;FAC1 sign byte
+ lda FACSGN     ;FAC1 sign byte
  pha            ;save sign byte
- lsr $66        ;ensure positive number
+ lsr FACSGN     ;ensure positive number
  jsr $b96f      ;increment FAC1 mantissa
  jsr FADDH      ;add .5 to value in FAC1
  jsr ROUND      ;adjust rounding byte
@@ -4463,7 +4466,7 @@ signit
  pla            ;recall original FAC1 sign byte
  ldx $61        ;if FAC1 became zero after rounding or fixing
  beq signed     ;then leave the sign byte alone
- sta $66        ;otherwise restore original sign byte
+ sta FACSGN     ;otherwise restore original sign byte
 signed rts
 
 ;*******************
@@ -4485,7 +4488,7 @@ fnround
  jsr SIGN       ;get FAC1 0=Zero, 1=Positive, 255=Negative
  beq round1     ;zero value, no move needed
  sta $c4        ;save sign, negative move left, positive move right
- lsr $66        ;ensure FAC1 is a positive number
+ lsr FACSGN     ;ensure FAC1 is a positive number
  jsr GETBYTC+6  ;convert FAC1 to 1-byte unsigned int into x reg
  cpx #10
  bcs illqty7    ;range is -9 to +9
@@ -4508,7 +4511,7 @@ round1
 movedec
  lda $c3        ;decimal places to round
  sta COUNT
- lda $66        ;save FAC1 sign byte
+ lda FACSGN     ;save FAC1 sign byte
  pha            ;before moving decimal
  lda $c4        ;direction: 255=left else right
  bpl xmul10
