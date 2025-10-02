@@ -149,10 +149,10 @@ PWHI1  = $d403 ;Voice 1 Pulse Waveform Width (high nybble)
 VCREG1 = $d404 ;Voice 1 Control Register
 ATDCY1 = $d405 ;Voice 1 Attack/Decay Register
 SUREL1 = $d406 ;Voice 1 Sustain/Release Control Register
-CUTLO  = $d415 ;Filter Cutoff Frequency (lo byte)
-CUTHI  = $d416 ;Filter Cutoff Frequency (high byte)
-RESON  = $d417 ;Filter Resonance Control Register
-SIGVOL = $d418 ;Volume and Filter Select Register
+CUTLO  = $d415 ;Filter Cutoff Frequency (3-bit lobyte)
+CUTHI  = $d416 ;Filter Cutoff Frequency (8-bit hibyte)
+RESON  = $d417 ;Filter Control (bits 0-3) and Resonance (bits 4-7) Register
+SIGVOL = $d418 ;Volume (bits 0-3) and Filter Select (bits 4-6) Register
 POTX   = $d419 ;Read Game Paddle 1 or 3, POTX+1 ($d41a) = Paddle 2 or 4
 
 ;Complex Interface Adapter (CIA) #1 Registers ($DC00-$DC0F)
@@ -4085,26 +4085,28 @@ mop2 jmp missop
 ;the SID filter frequency register is an 11-bit value stored in a wacky way
 ;  hibyte    lobyte   Frequency binary value from parameter
 ; *****111  11111111  Possible bits used, *=not used since out of range
-;  $d416     $d415    Target Filter frequency registers
+;  CUTHI     CUTLO    Target Filter frequency registers ($d415, $d416)
 ; 11111111  XXXXX111  Target bits to map from parameter value, X=not used
 ;
 ;shift hibyte right 4x to promote lower 3 bits to highest 3 bits, fill with 0
 okfilt
- lsr        ;bit0 into carry, bit7 loaded with 0
- ror        ;shift bits thru carry
- ror        ;into bits0-3
- ror
- sta XSAV   ;save hibyte
-;store lobyte in SID lower byte register (bits 3-7 will be ignored by SID)
- tya        ;lobyte
-;shift lobyte right 3 times to demote upper 5 bits
+ lsr        ;param bit0 into carry, bit7 loaded with 0
+ ror        ;shifting bit positions 0,1,2 thru carry
+ ror        ;into bit positions 5,6,7
+ ror        ;for partial value for CUTHI
+ sta XSAV   ;temp save partial CUTHI value
+;store entire param lobyte in CUTLO (bits 3-7 will be ignored by SID)
+;also copy param lobyte bits 4-7 into CUTHI bits 0-3
+ tya        ;entire param lobyte
+;shift lobyte right 3 times to move bits 3-7 to bits 0-4
  lsr
  lsr
  lsr
-;merge upper and lower bits as hibyte and store in SID upper byte register
+;merge upper and lower bits for complete value of CUTHI
  ora XSAV
- sta CUTHI
- sty CUTLO  ;since upper 5 bits are not used by SID, no need to set them to 0
+;apply 11-bit value to filter cutoff freqency registers
+ sta CUTHI  ;entire 8 bits
+ sty CUTLO  ;bits 0-2 only, bits 3-7 are ignored by SID so no need clear them
 ;
 ;get the resonance parameter (if present)
 ;set the filter resonance control register $d417
@@ -4122,31 +4124,31 @@ reson
  lda md417      ;SID mock register has current reasonance setting
  and #%00001111 ;remove current setting
  jsr setreson   ;apply new setting to SID and mock register
-;get the type 0-4 if present, stop otherwise
-;Store in SID Register $d418 bits 4-6
+;store the filter type in SID register SIGVOL ($d418) using bits 4-6
 ;Bits 0-3 Select output volume (0-15)
 ;Bit4 Select low-pass filter, 1=low-pass on, 0=off
 ;Bit5 Select band-pass filter, 1=band-pass on, 0=off
 ;Bit6 Select high-pass filter, 1=high-pass on, 0=off
 ;Bit7 Disconnect output of voice 3, 1=disconnect, 0=connect
-;since SID registers can only be written to, an alternate var will hold it
+;Since SID registers can only be written to, an mock register will hold it.
+;Filter Type (0-4):
 ;0. None.
-;1. A low-pass filter is available, which suppresses the volume of those
-;frequency components that are above a designated cutoff level.
-;2. The high-pass filter reduces the volume of frequency components that are
-;below a certain level.
-;3. The band-pass filter reduces the volume of frequency components on both
-;sides of the chosen frequency.
-;4. The high-pass and low-pass filters can be combined to form a 
-;notch reject filter, which reduces the volume of the frequency components
-;nearest the selected frequency.
+;1. Low-Pass filter attenuates the volume of frequencies above the cutoff
+;   by 12dB per octave
+;2. Band-Pass filter attenuates the volume of frequencies above and below
+;   the cutoff frequency by 6dB per octave.
+;3. High-Pass filter attenuates the volume of frequencies below the cutoff
+;   by 12dB per octave.
+;4. Band-Stop filter (also known as Notch-Reject) combines high-pass and
+;   low-pass filters to attenuate the volume nearest the cutoff frequency
+;   by 12dB per octave.
 ;
 ;Bits 4-6 are used to set the filter type, bit 7 is not used by MDBASIC
 ;0  = 000  none
 ;1  = 001  low pass
 ;2  = 010  band pass
 ;3  = 100  hi pass
-;4  = 101  notch reject (low and hi pass)
+;4  = 101  band stop
 ftype
  jsr chkcomm    ;if no more params then quit otherwise continue
  jsr GETBYTC+3  ;get filter type 0-4
