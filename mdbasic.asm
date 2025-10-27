@@ -55,6 +55,7 @@ TBLX   = $d6 ;Current Cursor Physical Line Number
 TMPASC = $d7 ;ASCII value of last character printed to screen
 INSRT  = $d8 ;Editor Current Insert Character Count
 KEYTAB = $f5 ;vector to keyboard decode table
+BASZPT = $ff ;BASIC Temporary Data for Floating Point to ASCII Conversion
 
 ;BASIC and Kernal work registers
 BAD    = $0100 ;Tape Input Error Log and string work area
@@ -307,7 +308,6 @@ LODERR = $e19c ;load error
 SYS    = $e12a ;perform SYS
 VERIFY = $e165 ;perform VERIFY
 FPARAMS= $e1d4 ;get params for load, verify or save statements
-HALT   = $e386 ;halt program and return to main BASIC loop
 INIT   = $e3bf ;initialize BASIC
 LP2    = $e5b4 ;get a character from the keyboard buffer
 CLS    = $e544 ;init screen line link table and clear the screen
@@ -316,7 +316,7 @@ CLS    = $e544 ;init screen line link table and clear the screen
 CINT   = $ff81 ;initialize screen editor and video chip
 RAMTAS = $ff87 ;initialize RAM, tape buffer, screen
 RESTOR = $ff8a ;restore default I/O vectors
-IOINIT = $fda3 ;initialize CIA I/O devices
+IOINIT = $ff84 ;initialize CIA I/O devices ($fda3)
 SETMSG = $ff90 ;set kernal msg ctrl flag
 TKSA   = $ff96 ;send secondary address after TALK
 ACPTR  = $ffa5 ;input byte from serial bus
@@ -394,8 +394,8 @@ TOKEN_PI      = $ff  ;PI symbol token
 .word resvec,runstp        ;new reset and runstop vectors
 .text "CBM80"
 ;
-mesge .byte 147
-.text "mdbasic 25.10.01"
+mesge
+.text "mdbasic 25.10.27"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -449,7 +449,7 @@ keystr .shift "key"
 .shift "time"
 ;keywords that are only functions
 .shift "round"
-.shift "fix"
+.shift "trim"
 .shift "mod"
 .shift "ptr"
 .shift "inf"
@@ -590,7 +590,7 @@ cmdtab
 ;MDBASIC Function Dispatch Table
 funtab
 .rta fnerr, fnkey, fntime   ;$f2,$f3,$f4
-.rta fnround, fix, mod      ;$f5,$f6,$f7
+.rta fnround, trim, mod     ;$f5,$f6,$f7
 .rta ptr, inf, pen          ;$f8,$f9,$fa
 .rta joy, pot, hex          ;$fb,$fc,$fd
 .rta instr, $ae9e           ;$fe,$ff (PI Constant)
@@ -860,11 +860,11 @@ back1
  lda $c3          ;recall fn type
 ;determine VAL function
  cmp #"h"         ;hexadecimal
- beq hexaa
+ beq base16
  cmp #"b"         ;binary
- beq binary
+ beq base2
  cmp #"o"         ;octal
- beq octal
+ beq base8
 badtok
  jmp SNERR
 ;
@@ -872,23 +872,23 @@ badtok
 newfun lda #$00   ;0=number, 255=string - all funcs take one numeric param
  sta VALTYP       ;Flag Type of Data (String or Numeric) to enforce data type
  jsr CHRGET
- bcc xbcf3        ;numeric digit 0 to 9
+ bcc isnum        ;numeric digit 0 to 9
  jsr $b113        ;Check If .A Register Holds Alphabetic ASCII Character
  bcs isvari       ;is alpha
  cmp #"@"
- beq octal        ;octal value
+ beq base8        ;octal value
  bcs funtok       ;probably token
  cmp #"%"         ;binary value literal?
- beq binary
+ beq base2
  bcs oldfun       ;probably a parenthesis or decimal point
  cmp #"$"         ;hex value literal?
-hexaa beq hexa
+ beq base16
  cmp #"!"         ;NOT short-hand
  beq not          ;otherwise probably a quote
 oldfun jmp $aead  ;execute CBM BASIC function
 not    jmp $aed0  ;perform NOT
 isvari jmp ISVAR  ;get value of variable
-xbcf3  jmp FIN    ;convert ASCII numerals into float with result in FAC1
+isnum  jmp FIN    ;convert ASCII numerals into float with result in FAC1
 funtok
  cmp #TOKEN_VAL
  beq valfn
@@ -897,75 +897,61 @@ funtok
  sbc #FIRST_FUN_TOK
  asl              ;index * 2 for word pointer indexing
  tay              ;prepare for direct indexing
- lda funtab+1,y   ;lobyte value of address for function
- pha              ;lobyte for indirect addressing
- lda funtab,y     ;hibyte value of address for function
+ lda funtab+1,y   ;hibyte value of address for function
  pha              ;hibyte for indirect addressing
+ lda funtab,y     ;lobyte value of address for function
+ pha              ;lobyte for indirect addressing
  rts              ;execute function
 ;
-;evaluate inline octal value denoted by @
-octal jsr clrfac
-nexto jsr CHRGET
+;evaluate inline binary, octal or hex value
+;exponent increment: binary=1, octal=3, hex=4; shifted right = 0,1,2
+base2
+ lda #1
+.byte $2c
+base8
+ lda #3
+.byte $2c
+base16
+ lda #4
+;
+ sta BASZPT    ;exponent of 2^x
+ jsr clrfac    ;clear numeric work area
+nxtdig
+ lda BASZPT    ;convert base2 exponents 1,3,4
+ lsr           ;into index 0,1,2 for table facexpo
+ tax           ;to check max+1 digit value 2,8,16
+;
+ jsr CHRGET    ;get next literal digit char
+ bcc digit     ;carry clear when numeral 0-9
+;non digit, check literal type is hex
+ cpx #2        ;hex?
+ bne end1      ;if not then stop now
+;ensure valid hex char A to F
+ cmp #"a"
+ bcc end1      ;bad hex char
+ cmp #"f"+1
+ bcs end1      ;bad hex char
+ sec           ;prepare char A-F for index conversion
+ sbc #7        ;'0'=0,'1'=1,...'A'=10,...'F'=15
+digit
  sec
  sbc #"0"
  bmi end1
- cmp #8
+ cmp facexpo,x
  bcs end1
  tax
  lda FACEXP
  beq zero3
- adc #3     ;increase by 2^3 = 8
+ adc BASZPT    ;increase by 2^x where x is 1,3 or 4
  bcs over
  sta FACEXP
 zero3 txa
- beq nexto
- jsr FINLOG
- jmp nexto
+ beq nxtdig
+ jsr FINLOG    ;add signed int to FAC1
+ jmp nxtdig
 ;
 over jmp OVERR
-;
-;evaluate inline binary value denoted by %
-binary jsr clrfac
-nextb jsr CHRGET
- sec
- sbc #"0"
- bmi end1
- cmp #2
- bcs end1
- tax
- lda FACEXP
- beq zero2
- inc FACEXP ;increase by 2^1 = 2
- beq over
-zero2 txa
- beq nextb
- jsr FINLOG
- jmp nextb
-;
-;evaluate inline hex value denoted by $
-hexa jsr clrfac
-nexth jsr CHRGET
- bcc digit  ;numeric digits
- cmp #"a"   ;ensure chars A thru F
- bcc end1
- cmp #"f"+1
- bcs end1   ;bad hex value
- sec        ;prepare char A-F for index conversion
- sbc #7     ;'0'=0,'1'=1,...'A'=10,...'F'=15
-digit sec
- sbc #"0"
- tax
- lda FACEXP
- beq zero
- clc
- adc #4     ;increase by 2^4 = 16
- bcs over
- sta FACEXP
-zero txa
- beq nexth
- jsr FINLOG ;add signed int to FAC1
- jmp nexth
-;
+
 ;clear num work area $5d-$60, FAC1 $61-$68 and FAC2 $69-$6E
 clrfac ldx #11
  lda #0
@@ -1016,7 +1002,7 @@ fntime
 ;get time as a string
  jsr getimstr
  inc R6510
- ldy #>BUF
+ ldy #>BUF+$50
  lda #<BUF+$50
  jsr STRLIT
  jmp CHRGET
@@ -1187,23 +1173,27 @@ errmdb
  jmp (IERROR)
 ;
 ;*******************
-;FILES [volume$], [device]
+; FILES [volume$] [,device]
 ;volume$ is an optional string for filtering directory results
 ;the string can include the drive num prefix, ie: "0:DEMO*"
+;a dollar symbol is inserted at the first char
+;file names have a max string length of 16
+;therefore the max length of volume$ is 1+2+16=19, ie: "$0:DEMO*"
 files
  beq onechar    ;no param, just use $ as param
  cmp #","
  beq onechar
  jsr getstr1    ;get volume$ (should never be more than 18 chars)
- clc
- adc #1         ;one more char for $ symbol
- cmp #19        ;DOS volume$ string max length is 18
- bcc prepstr    ;always branches (unless len was 255)
- lda #18        ;truncate string at 18 chars
-.byte $2c       ;ignore next lda
-onechar lda #1
+ tay
+.byte $2c       ;ignore ldy #0
+onechar
+ ldy #0
+ cpy #18        ;DOS volume$ string max length is 18
+ bcc prepstr
+ ldy #17        ;truncate string at 18 chars
 prepstr
- sta $63        ;save length of string
+ iny            ;one more char for $ symbol
+ sty $63
  lda #"$"
  ldy #$ff
 copystr
@@ -1213,8 +1203,8 @@ copystr
  cpy $63        ;reached tmp str len?
  bne copystr    ;no, keep copying
 ;prepare file params
- tya
- ldx #<BAD
+ tya            ;file name length
+ ldx #<BAD      ;file name temp string ptr
  ldy #>BAD
  jsr SETNAM
  jsr getdskdev  ;get disk device num in x reg
@@ -1503,7 +1493,7 @@ goread
  lda $61       ;last read byte
  cmp $fc       ;sentinel reached?
  beq strdone   ;yes, stop reading
- lda $ff       ;string type
+ lda BASZPT    ;string type
  bne goread    ;numeric variable use only 1 byte
 nxtbyte
  inc $fd       ;next index in string
@@ -1521,7 +1511,7 @@ rdone
 
 ;apply value to variable
 setval
- ldy $ff       ;type 0=string, 1=float, 2=int
+ ldy BASZPT    ;type 0=string, 1=float, 2=int
  beq setstr
  dey
  beq setflt
@@ -1602,13 +1592,13 @@ getvar
 ;determine data type to read
  ldx VALTYP    ;0=numeric, 255=string
  inx
- stx $ff       ;0=string,1=float
+ stx BASZPT    ;0=string,1=float
  stx $fd       ;offset to store bytes
  beq rdstr     ;string read 255 bytes at a time
  stx XSAV      ;numeric binary read 1 byte at a time
  ldx INTFLG    ;0=float, 128=int
  beq rdnum     ;float stores 5 bytes
- inc $ff       ;2=int
+ inc BASZPT    ;2=int
  bne rdnum     ;always branches
 ;allocate space for new string
 rdstr
@@ -1869,8 +1859,9 @@ newrun
  jsr FPARAMS    ;process file parameters
  jsr RUNC       ;reset TXTPTR to start of program text
  jsr $e16f      ;perform load
+xxxx
  jsr old        ;set BASIC prg ptrs
- jsr $a663      ;clear variables and stack, lda #0
+ jsr CLEAR+5    ;clear variables and stack, lda #0
  jsr SETMSG     ;disable Kernal and BASIC messages
  jmp NEWSTT     ;enter loop for BASIC program processing
 ;
@@ -2139,8 +2130,8 @@ noline
  tax
  lda $25
  sbc TXTPTR+1
- tay
  bcs deldone
+ tay
  txa
 ; clc not needed since already clear
  adc VARTAB
@@ -2160,11 +2151,9 @@ copy lda (TXTPTR),y
  bcs copy
 deldone
  jsr old2
-relink
- jsr CLEAR-5  ;reset TXTPTR to beginning of prg then perform CLR
 endprg
- jsr $a67a  ;empty the stack
- jmp HALT
+ jsr CLEAR-5  ;reset TXTPTR to beginning of prg then perform CLR
+ jmp $e39d    ;clear stack then enter main basic loop
 ;
 weglst
  jsr FINDLN ;find BASIC line number in LINNUM
@@ -2290,7 +2279,7 @@ hiinc
 ;end of renum; list any go tokens with 65535 as line number (errors)
  jsr old2
  jsr find ;find all 65535
- jmp relink
+ jmp endprg
 ;
 ;these next 3 routine are only called when BASIC ROM is switched out
 evalnum
@@ -2302,9 +2291,7 @@ evalnum
 ;
 fltstr
  inc R6510    ;switch BASIC ROM in
- ldx #$90
- sec          ;flag for unsinged int
- jsr $bc49    ;convert 2-byte int in FAC1 to float
+ jsr uint2fl  ;convert 2-byte unsigned int in FAC1 to float
  jsr FOUT+2   ;convert FAC1 to string without leading space
  dec R6510    ;switch BASIC ROM out
  rts          ;return to caller under BASIC ROM
@@ -2437,7 +2424,8 @@ onerres
  ldy #>resumenext  ;so that all errors will be ignored
  jsr seterrvec     ;and failed statement are skipped
  jmp CHRGET
-errgoto jsr getline
+errgoto
+ jsr getline
  stx TMPERRP       ;of the line# specified
  sty TMPERRP+1
  lda LINNUM
@@ -2472,8 +2460,8 @@ seterrvec
 ;get BASIC line number LINNUM and text ptr-1 in X,Y
 getline
  jsr CHRGET
- jsr LINGET        ;convert an ascii # to 2 byte int
- jsr FINDLN        ;search for line#
+ jsr LINGET    ;convert an ascii # to 2 byte int
+ jsr FINDLN    ;search for line#
  bcc undef
  ldy $60
  ldx $5f
@@ -2481,7 +2469,9 @@ getline
  dey
 dec5f2 dex
  rts
-undef jmp UNDEFST   ;UNDEF'D STATEMENT
+undef
+ jmp UNDEFST   ;UNDEF'D STATEMENT
+
 ;*******************************************
 ; error trap routine for ON ERR RESUME NEXT
 ;*******************************************
@@ -2604,7 +2594,7 @@ nxtstmt       ;prepare next stmt for execution
  ldy #2
  lda (TXTPTR),y
  bne setlin
- jmp endprg    ;return control to main BASIC loop
+ jmp $e39d    ;clear stack then enter main basic loop
 setlin iny
  lda (TXTPTR),y
  sta CURLIN
@@ -2635,12 +2625,7 @@ _a807 cmp #$3a
  jmp REM
 ;
 ;*******************
-nogo
- jmp NOGOSUB   ;RETURN WITHOUT GOSUB
-oldrtn
- jmp RETURN+2
-;
-;RETURN [line#]
+; RETURN [line#]
 return
  beq oldrtn
  pla           ;discard call to this subroutine
@@ -2657,6 +2642,10 @@ return
 dogoto2
  jsr CHRGOT
  jmp GOTO      ;perform GOTO
+oldrtn
+ jmp RETURN+2
+nogo
+ jmp NOGOSUB   ;RETURN WITHOUT GOSUB
 ;
 ;*******************
 ; MOVE sprite#, [x1] [,y1]
@@ -2904,7 +2893,7 @@ setmag
 ;*******************
 ;SPRCOL [sc1], [sc2] [,colorModeFlags]
 ;bit patterns: 01 = sc1, 11 = sc2
-;colorModeFlags bit flags for multicolor mode 1=enabled, 0=disabled
+;colorModeFlags 8 bit flags for 8 sprites, 1=multicolor, 0=normal
 sprcol
  beq mop6
  cmp #","
@@ -2977,7 +2966,7 @@ setpage
  sta $fb
 nobmclr
  lda #8
- jsr page+3
+ jsr pagee
 rwait
  lda SCROLY
  bpl rwait
@@ -2992,19 +2981,33 @@ page4
  sta SCROLY
  dex            ;page index 0 to 4
  bpl page
-;page 0
+;page 0, select normal text screen
+ lda #>pgzero-1
+ pha
+ lda #<pgzero-1
+ pha
  lda #4
+;clear if requested
+chkclr
  sta HIBASE
- jsr chkclr     ;clear if requested
- jmp norm3      ;page 0, select normal text screen
+ ldy $fb
+ beq chkclrd
+ pha
+ jsr CLS
+rwait2
+ lda SCROLY
+ bpl rwait2
+ pla
+chkclrd
+ rts
 ;pages 1-4
 page
  txa            ;valid page index 0 to 3
 ;set hibyte ptr for Kernal prints
  asl            ;each page is 4 blocks of 256 bytes (1K)
- asl
- ora #%11000000 ;video matrix base is at $c000
- sta HIBASE     ;page 0=$c0, 1=$c4, 2=$c8, 3=$cc
+ asl            ;video matrix base is at $c000
+pagee
+ ora #%11000000 ;page 0=$c0, 1=$c4, 2=$c8, 3=$cc
  jsr chkclr     ;clear if requested
 ;set video matrix and char dot data address offsets
  asl            ;discard bits 6,7
@@ -3022,19 +3025,6 @@ page
  sta CI2PRA     ;base address is now $c000
  rts
 ;
-;clear if requested
-chkclr
- ldy $fb
- beq chkclrd
- pha
- jsr CLS
-rwait2
- lda SCROLY
- bpl rwait2
- pla
-chkclrd
- rts
-
 ;*****************
 ; DESIGN NEW
 ; DESIGN scancode, charset, d0,d1,d2,d3,d4,d5,d6,d7
@@ -3082,6 +3072,8 @@ nexbyt lda ($be),y
 ;mapcol 0,1  is dot color black, background (of 8x8 square of dot) white
 ;multicolor example:
 ;mapcol 1,2,3,0 is bit patterns 01=white, 10=red, 11=cyan, 00 is black
+;
+; MAPCOL [c1] [,c2] [,c3] [,c4]
 mapcol
  beq design      ;branches to misop
  cmp #","
@@ -3128,7 +3120,7 @@ dodesign
  jsr times8    ;multiply A reg value by 8 result in $be,$bf
  lda #$f0      ;charset 0 at $f000
  jsr getchrset
- clc
+; clc not needed here since cleared by getchrset
  adc $bf
  sta $bf
  ldy #$00      ;loop for all 8 bytes of data
@@ -3164,28 +3156,33 @@ pulse
  sta PWLO1,x  ;Pulse Waveform Width (lo byte)
  rts
 ;
+badwav jmp FCERR
+;
 ;******************
 ;Voice Control Register Voice 1 $D404, Voice 2 $D40B, Voice 3 $D412
-; Bit 0 Gate Bit 1=Start attack/decay/sustain, 0 = start release
-; Bit 1 Sync Bit 1=Sync Oscillator with Oscillator 3
-; Bit 2 Ring Modulation 1=Ring modulate Oscillators 1 and 3
-; Bit 3 Test Bit 1 = Disable Oscillator
-; Waveform parameter value:
-; Voice Control Register bits 4-7 so this value is multiplied by 16
+;Bit 0 Gate Bit 1=Start attack/decay/sustain, 0=start release
+;Bit 1 Sync Bit 1=Sync Oscillator with other Oscillator
+; Voice 1 syncs with voice 3
+; Voice 2 syncs with voice 1
+; Voice 3 syncs with voice 2
+;Bit 2 Ring Modulation 1=Ring modulate with other Oscillator
+; Voice 1 rings with voice 3
+; Voice 2 rings with voice 1
+; Voice 3 rings with voice 2
+;Bit 3 Test Bit 1 = Disable Oscillator
+;Bits 4-7 Waveform
 ; 0 none
 ; 1 triangle
 ; 2 saw tooth
 ; 3 saw tooth + triangle
-; 4 pulse 
+; 4 pulse
 ; 5 pulse + triangle
-; 6 pulse + saw tooth 
+; 6 pulse + saw tooth
 ; 7 pulse + saw tooth + triangle
 ; 8 noise
 ;omitted boolean parameters will use the default of 0
-;WAVE voice#, waveform [,gate [,sync [,ring [,disable]]]]
 ;
-badwav
- jmp FCERR
+; WAVE voice#, waveform [,gate [,sync [,ring [,disable]]]]
 wave
  jsr getvoc    ;get voice SID register offset (voice#-1)*7
  pha           ;save SID register offset
@@ -3276,14 +3273,11 @@ voice
  sta $fe
  jsr ckcom2
  jsr FRMNUM      ;convert current expression to a number and store in FAC1
- lda PALNTSC     ;clock type 0=NTSC, 1=PAL
- beq is_ntsc
+ lda #<ntscm     ;ptr to 5-byte value for NTSC systems
+ ldy #>ntscm     ;both NTSC and PAL FAC value have same ptr hibyte
+ ldx PALNTSC     ;clock type 0=NTSC, 1=PAL
+ beq memfac      ;if PAL then add 5 byte offset to ptr
  lda #<palb
- ldy #>palb
- bne memfac      ;always branches since hibyte of ptr could never be 0
-is_ntsc
- lda #<ntscm
- ldy #>ntscm
 memfac
  jsr FMULT       ;multiply FAC1 by a value in memory ptr A=lo byte, Y=hi byte
  jsr doround     ;round FAC1 to nearest whole number
@@ -3613,14 +3607,13 @@ docircle
  jmp clrfac
 ;
 ;*******************
+;apply normal VIC-II display state
 norm
  lda #%11001000  ;display on, multicolor text/bitmap mode off
  sta SCROLX      ;40 columns, 0 horizontal scroll scan lines
  lda #%00011011  ;extended color text mode off, bitmap mode off
  sta SCROLY      ;display on, 25 rows, 3 vertical scroll scan lines
- lda #$04        ;text page for kernal prints
- sta HIBASE      ;top page of screen mem for Kernal prints
-norm3
+pgzero
  lda #%00111111  ;reset data direction to default value
  sta C2DDRA      ;data direction for port A on CIA #2
  lda CI2PRA      ;with direction set to output on bits 0 & 1
@@ -3628,6 +3621,8 @@ norm3
  sta CI2PRA      ;apply mem bank selection
  lda #%00010101  ;bit0 always 1; bits1-3 text dot data base addr in 1K chunks
  sta VMCSB       ;bits 4-7 video matrix base address in 1K chunks
+ lda #$04        ;text page for kernal prints
+ sta HIBASE      ;top page of screen mem for Kernal prints
  jsr $e56c       ;set cursor ptr to current screen line
 norm2
  lda R6510
@@ -3752,32 +3747,25 @@ colmode
  cmp #","
  beq xbits
  jsr GETBYTC+3   ;colorMode 0,1,2
- txa
- beq hiresmode   ;0=normal color mode or hires bitmap
- dex
- beq mcmode      ;1=multicolor mode
- dex
- bne badpage     ;2=ext bkgnd color text mode
-;enable ext bkgrd color mode
- lda SCROLY
- and #%11011111  ;bit5=0 to disable bitmap mode
- ora #%01000000  ;bit6=1 to enable extended background color text mode
- sta SCROLY
- bne hiresmode   ;always braches and ensures mc mode is off
-;
-badpage jmp FCERR        ;illegal quantity error
-mop jmp missop
-;
-;ensure ext bkgrd color mode off (not compatable)
-mcmode
+ cpx #2          ;ext bkgnd color mode?
+ beq mode2
+ bcs illqty3     ;invalid color mode
+;modes 0 or 1 (hires or multicolor)
  lda #%10111111  ;bit#6=0, ext bkgrd color mode off (not compatable)
  and SCROLY
  sta SCROLY
-;enable multicolor text or bitmap mode
+ txa
+ beq mode0
+;mode1 (multicolor text/bitmap mode)
  lda #%00010000  ;turn on bit 4 - enable multi color text or bitmap mode
  ora SCROLX      ;horiz fine scrolling and control reg
- bne setsclx     ;always branches
-hiresmode
+ jmp setsclx
+mode2            ;ext bkgrd color mode
+ lda SCROLY
+ and #%11011111  ;bit5=0 to disable bitmap mode (not compatible)
+ ora #%01000000  ;bit6=1 to enable extended background color text mode
+ sta SCROLY
+mode0            ;standard color mode
  lda #%11101111  ;set bit#4 0=off, 1=on
  and SCROLX      ;turn off mulicolor mode
 setsclx
@@ -3800,6 +3788,9 @@ ybits jsr chkcomm
  ora XSAV
  sta SCROLY
  rts
+;
+mop jmp missop
+illqty3 jmp FCERR
 ;
 ;*******************
 keyclr
@@ -3854,20 +3845,18 @@ cpystr2
  lda #%00000100 ;key pump irq flag
  jmp irqon
 ;
-illqty3 jmp FCERR
-;
 keynum
  jsr GETBYTC+6  ;convert FAC1 to an unsigned byte value 0-255 into X reg
  txa
  beq illqty3
  cmp #9         ;only func keys 1-8
+badval
  bcs illqty3
 ;assign function key
  pha            ;save key#
  jsr ckcom2     ;check for and skip over comma, misop err if missing
  jsr getstr0
  dec R6510
- pla
  jmp keyy
 ;
 onkeyoff
@@ -3909,20 +3898,20 @@ keywait
 scroll
  jsr getcoords
  lda #0
- sta $ff         ;default direction 0=up
+ sta BASZPT      ;default direction 0=up
  sta XSAV        ;default wrap 0=no wrap
  jsr comchk
  bne okscroll
  jsr getvalg     ;direction 0-3
  cmp #4
- bcs illqty3
- sta $ff
+ bcs badval
+ sta BASZPT
  jsr comchk
  bne okscroll
  jsr getboolg    ;wrap: 0=no, 1=yes
  sta XSAV        ;wrap param temp var
 okscroll
- lda $ff         ;direction temp var
+ lda BASZPT      ;direction temp var
  asl             ;convert to 2 byte offset
  tay
  dec R6510
@@ -4109,6 +4098,7 @@ okfilt
  sty CUTLO  ;bits 0-2 only, bits 3-7 are ignored by SID so no need clear them
 ;
 ;get the resonance parameter (if present)
+;used to peak the volume of harmonic frequencies nearest the cutoff freq
 ;set the filter resonance control register $d417
 ;bits 4-7 set filter resonance 0-15, 0=none, 15=max
 reson
@@ -4121,34 +4111,32 @@ reson
  asl
  asl
  sta XSAV
- lda md417      ;SID mock register has current reasonance setting
+ lda md417      ;SID mock register has current resonance setting
  and #%00001111 ;remove current setting
  jsr setreson   ;apply new setting to SID and mock register
-;store the filter type in SID register SIGVOL ($d418) using bits 4-6
-;Bits 0-3 Select output volume (0-15)
+;
+;Filter Type (0-4):
+;0. No-Pass filter mutes the entire oscillator (voice) output.
+;1. Low-Pass filter attenuates the volume of frequencies above the cutoff
+;   frequency by 12dB per octave.
+;2. Band-Pass filter attenuates the volume of frequencies above and below
+;   the cutoff (center) frequency by 6dB per octave.
+;3. High-Pass filter attenuates the volume of frequencies below the cutoff
+;   frequency by 12dB per octave.
+;4. Band-Stop filter (Notch-Reject) combines high-pass and low-pass filters
+;   to attenuate the volume of frequencies nearest the cutoff (center)
+;   frequency by 12dB per octave.
+;
+;The filter type is stored in SID register SIGVOL ($d418) using bits 4-6.
+;Since SID registers can only be written to an mock register will hold it.
 ;Bit4 Select low-pass filter, 1=low-pass on, 0=off
 ;Bit5 Select band-pass filter, 1=band-pass on, 0=off
 ;Bit6 Select high-pass filter, 1=high-pass on, 0=off
-;Bit7 Disconnect output of voice 3, 1=disconnect, 0=connect
-;Since SID registers can only be written to, an mock register will hold it.
-;Filter Type (0-4):
-;0. None.
-;1. Low-Pass filter attenuates the volume of frequencies above the cutoff
-;   by 12dB per octave
-;2. Band-Pass filter attenuates the volume of frequencies above and below
-;   the cutoff frequency by 6dB per octave.
-;3. High-Pass filter attenuates the volume of frequencies below the cutoff
-;   by 12dB per octave.
-;4. Band-Stop filter (also known as Notch-Reject) combines high-pass and
-;   low-pass filters to attenuate the volume nearest the cutoff frequency
-;   by 12dB per octave.
-;
-;Bits 4-6 are used to set the filter type, bit 7 is not used by MDBASIC
-;0  = 000  none
-;1  = 001  low pass
-;2  = 010  band pass
-;3  = 100  hi pass
-;4  = 101  band stop
+;0  000  no-pass
+;1  001  low-pass
+;2  010  band-pass
+;3  100  hi-pass
+;4  101  band-stop (notch-reject)
 ftype
  jsr chkcomm    ;if no more params then quit otherwise continue
  jsr GETBYTC+3  ;get filter type 0-4
@@ -4419,7 +4407,7 @@ mod
  lda #<BUF+$54   ;dividend pointer
  ldy #>BUF+$54
  jsr FDIV        ;divide a number in memory by FAC1 pointed to by A (lobyte) Y (hibyte) result in FAC1
-;FAC1=FIX(FAC1)
+;FAC1=TRIM(FAC1)
  jsr trunc       ;truncate fractional portion
 ;FAC1 = FAC1 * divisor
  lda #<BUF+$4f   ;divisor pointer
@@ -4441,9 +4429,49 @@ getfnp1
  jmp MOV2F+16    ;copy a 5-byte floating point number from FAC1 to memory
 
 ;*******************
-; I = FIX(float)  truncate the fractional portion
-fix
+; S$ = TRIM$(string)  remove leading & trailing spaces from string
+trimstr
  jsr CHRGET
+ jsr PARCHK     ;get term inside parentheses
+ jsr FRESTR     ;discard temp string & return ptr & len
+ stx $6f
+ sty $70
+ tay
+ beq strcpy     ;if zero-length string then done
+;trim end of string
+rtrim
+ dey
+ cpy #$ff
+ beq rtdone
+ lda ($6f),y
+ cmp #" "
+ beq rtrim
+rtdone
+ iny
+ beq strcpy     ;if zero-length string then done
+;trim start of string
+ sty COUNT
+ ldy #0
+ltrim
+ lda ($6f),y
+ cmp #" "
+ bne rtnstr
+ inc $6f
+ bne x6f70
+ inc $70
+x6f70
+ dec COUNT
+ bne ltrim
+rtnstr
+ ldy COUNT
+strcpy
+ jmp $b4bf      ;allocate and copy string
+;
+; I = TRIM(float)  truncate the fractional portion
+trim
+ jsr getchr
+ cmp #"$"
+ beq trimstr
  jsr PARCHK     ;get term inside parentheses
  jsr TESTNUM    ;ensure expression was numeric, error if not
 trunc
@@ -4645,6 +4673,7 @@ uint2f
  sty $62         ;hibyte first (big endian format)
  ldx #0          ;assert that FAC1 is numeric value type
  stx VALTYP      ;0=numeric, 255=string
+uint2fl
  ldx #$90        ;FAC1 exponent
  sec             ;flag for unsinged int
  jmp $bc49       ;convert 2-byte int in FAC1 to float
@@ -4710,7 +4739,7 @@ nobutt2          ;reg y holds the lobyte
 ;*******************
 ;H$ = HEX$(n) where n is a signed 32-bit signed integer
 hex
- jsr fix      ;get fn param as 5-byte float truncated
+ jsr trim      ;get fn param as 5-byte float truncated
  jsr QINT     ;convert FAC1 into a signed 32-bit int in FAC1
  dec R6510
  jsr hexx
@@ -4739,6 +4768,8 @@ resvec
  jsr newvec  ;set new vectors to MDBASIC routines
  jsr initclk ;init TOD clocks
  inc R6510   ;restore 8K BASIC ROM
+;comment/uncomment code to select your option, then compile
+;option#1: (default) - go to immediate mode
  lda #<mesge
  ldy #>mesge
  jsr STROUT  ;display MDBASIC banner
@@ -4746,41 +4777,40 @@ resvec
  ldy TXTTAB+1
  jsr REASON  ;check free mem
  jsr $e430   ;prints the BYTES FREE message
- jmp $e39d   ;to basic main loop
+ jmp $e39d   ;clear stack then enter main basic loop
+;option#2: restore current BASIC prg in RAM (OLD) then run it
+;jsr RUNC
+;jmp xxxx
 ;
-;*********************************************************
-;* new RUN-STOP IRQ-driven routine set by cartridge header
-;*********************************************************
-runstp
- lda #$7f
- sta CI2ICR      ;clear CIA #2 irq flags
- ldy CI2ICR      ;if any CIA #2 source caused an irq
- bmi nothin      ;then handle it, otherwise
- jsr $f6bc       ;scan keyboard for STOP key with result in $91
- jsr STOP        ;if STOP key was pressed then break
- bne nothin      ;otherwise continue with NMI handler
 ;***************************************************************
-;* BREAK Instruction IRQ-driven routine via vector CBINV ($0316)
+; NMI-driven routine set by cartridge header for the Restore key.
+; This routine is called by the NMI event handler after first
+; checking if an RS-232 event occured which takes precedence.
+; If the source of the interrupt was not from an RS-232 event
+; then it must have been caused by the Restore key.  If the
+; cartrige header text "CBM80" is found at $8000 then this
+; routine is executed.
+;***************************************************************
+runstp
+ jsr $f6bc       ;scan keyboard for STOP key with result in $91
+ jsr STOP        ;if STOP key was pressed
+ beq brkirq      ;then break
+xfe72
+ jmp $fe72       ;NMI RS-232 Event Handler
+
+;***************************************************************
+;* BRK instruction routine, vector CBINV ($0316)
 ;***************************************************************
 brkirq
- jsr norm        ;apply normal state
- jsr IOINIT      ;initialize CIA I/O devices
- jsr $e518       ;initialize screen and keyboard
+ jsr $a67a       ;empty system and temp string stacks
+ jsr norm        ;init VIC-II settings, select mem bank 0
+ jsr IOINIT      ;init CIA I/O devices
+ jsr RESTOR      ;restore RAM vectors for default I/O routines
  dec R6510       ;LORAM signal select RAM
- jsr newvec      ;init vectors
+ jsr newvec      ;apply MDBASIC RAM vector overrides & init state
  inc R6510       ;LORAM signal select ROM (BASIC)
- jsr CLALL
- ldx $fd9f       ;original CBM IRQ vector ($ea31) for CIA #1
- ldy $fda0       ;driven by CIA #1 Timer B
- lda #0          ;disable all 5 NMI events
- sta CI2ICR      ;CIA #2 NMI control register
- stx CINV        ;restore orignal CBM IRQ vector
- sty CINV+1
- lda #%01111111  ;with bit7=0 irq event flags (bits0-6) will be cleared
- sta CI2ICR      ;clear NMI event flags and enable NMI events
- jmp ($a002)     ;warm start vector
-nothin
- jmp $fe72       ;NMI RS-232 Handler
+ jsr $e51b       ;init screen and keyboard
+ jmp $e39d       ;init stack ptr then enter main basic loop
 ;
 ;*******************************************************
 ;* MDBASIC ERROR HANDLER
@@ -4914,30 +4944,34 @@ fkey
 mdbirqhdl
  lda MDBIRQ
  beq mdbirqoff
- bit bitweights
- beq irq1
+ lsr
+ bcc irq1
+ pha
  jsr playit
- lda MDBIRQ
+ pla
 irq1
- bit bitweights+1
- beq irq2
+ lsr
+ bcc irq2
+ pha
  jsr sprani
- lda MDBIRQ
+ pla
 irq2
- bit bitweights+2
- beq irq3
+ lsr
+ bcc irq3
+ pha
  jsr keypump
- lda MDBIRQ
+ pla
 irq3
- bit bitweights+3
- beq irqnorm
+ lsr
+ bcc irqnorm
  jsr sprcolchg
 irqnorm
  jmp (TMPIRQ)   ;orgininal irq vector
 mdbirqoff
  ldx TMPIRQ     ;restore IRQ vector
  ldy TMPIRQ+1   ;back to original $EA31 or user-defined address
- jsr setirq
+ stx CINV
+ sty CINV+1
  jmp (CINV)     ;orgininal irq vector
 ;
 ;*****************************************
@@ -5034,7 +5068,6 @@ mdbirqon
  sty TMPIRQ+1
  ldx #<mdbirqhdl
  ldy #>mdbirqhdl
-setirq
  stx CINV
  sty CINV+1
 irqset rts
@@ -5195,7 +5228,7 @@ getval
 ;*******************
 ;get an unsigned single byte int parameter enclosed in parenthesis
 getfnparam
- jsr fix            ;get numeric param inside parenthesis and truncate
+ jsr trim           ;get numeric param inside parenthesis and truncate
  jsr GETBYTC+6      ;convert number in FAC1 to an unsigned single-byte int
  txa                ;also return the result in the accumulator
  rts                ;with processor flags Z and N affected
@@ -5273,26 +5306,26 @@ ptrhi
  rts
 ;*******************
 ;these routines are used while BASIC ROM is switched out
-rom1 inc R6510   ;switch to rom (a000-bfff)
+rom1 inc R6510   ;switch in BASIC ROM (a000-bfff)
  jsr GIVAYF      ;convert 16-bit signed int to float (a=hibyte y=lobyte)
  jmp prtnum
-rom2 inc R6510   ;switch to LOROM (a000-bfff)
+rom2 inc R6510   ;switch in BASIC ROM (a000-bfff)
  jsr MOVFM       ;move a float from memory to fac1
 prtnum jsr FOUT  ;convert fac1 to ascii with str ptr in a,y registers
  jsr STROUT      ;print string ptr (a=lobyte y=hibyte)
- dec R6510       ;switch to LORAM (a000-bfff)
+ dec R6510       ;switch out BASIC ROM for RAM (a000-bfff)
  rts
-rom3 inc R6510
+rom3 inc R6510   ;switch in BASIC ROM (a000-bfff)
  jsr getvalue
  php             ;save zero flag indicating hibyte non-zero
  txa             ;lobyte also in A reg for convenience
- dec R6510
+ dec R6510       ;switch out BASIC ROM for RAM (a000-bfff)
  plp
  rts
 rom4
- inc R6510
+ inc R6510       ;switch in BASIC ROM (a000-bfff)
  jsr LINPRT+4    ;print 2-byte binary number in FAC1
- dec R6510
+ dec R6510       ;switch out BASIC ROM for RAM (a000-bfff)
  rts
 ;*******************
 ;print string that ends with either a zero-byte or an ascii > 127
@@ -5322,28 +5355,28 @@ prtchr and #$7f
 ;table for calculating 2^n where n=0-7
 bitweights .byte 1,2,4,8,16,32,64,128
 
+;table for calculating base 2, 8, 16 literal values
+facexpo .byte 2,8,16  ;max+1 digit value: binary=2, octal=8, hex=16
+
 ;SID voice register offsets
 sidoff .byte 0,7,14
 ;
-;VOICE command use VOICE voc#, frequency
+;Constants for VOICE frequency (Hz) conversion to regval
 ;REGVAL=FREQ/(CLOCK/16777216)
 ;FREQ=REGVAL*(CLOCK/16777216)Hz
 ;NTSC-M CLOCK = 1022727.143, PAL-B CLOCK = 985248.444
 ;NTSC-M 1Hz Freq Value = 16777216/1022727.143 = 16.404391059
 ;PAL-B  1Hz Freq Value = 16777216/985248.444  = 17.028411567
 ;below are the FAC values for 1 unit in Hz for both CLOCK speeds
-;
 ntscm .byte $85,$03,$3c,$31,$62 ;16.404391059
 palb  .byte $85,$08,$3a,$2e,$54 ;17.02840868
-;
-;PULSE command use PULSE voc#, width%
-;used for converting register value to frequency in Hz
-;Formula REGVAL=40.95*width%
+
+;Constants for PULSE width% conversion to regval
+;REGVAL=40.95*width%
 m4095 .byte $86,$23,$cc,$cc,$cc ;FAC binary representation of 40.95
-;FILTER command use FILTER frequency, resonance, type
-;five8 .byte $83,$39,$99,$99,$99 ;FAC binary representation of 5.8
+
+;Constants for FILTER center frequency (Hz) conversion to regval
 five8 .byte $7e,$30,$8d,$3d,$c8 ;FAC binary representation of 1/5.8
-;
 neg30 .byte $85,$f0,$00,$00,$00 ;FAC binary represenation of -30
 
 ;********************************************************************
@@ -5576,6 +5609,7 @@ nolin  .null "65535"    ;used by renum to find bad GO statements
 ;KEY (continued)
 keyy
  ldx #0        ;even/odd key string offset
+ pla
  lsr           ;key# 1-8 converted to index 0-4
  bcs oddkey    ;carry set for odd key nums
  sec
@@ -5927,8 +5961,8 @@ setdot
  jsr ydiv8
  lda R6510
  pha
- and #%11111101 ;bit1 0=HIRAM
- sei            ;disable IRQ since kernal HIROM is switching to HIRAM
+ and #%11111101 ;switch out Kernal ROM for RAM at $e000-$ffff
+ sei            ;disable IRQ since kernal ROM is not available
  sta R6510
  lda lastplott  ;plot type 00=off, 01=on, 10=flip, 11=none
  beq dotoff
@@ -6170,7 +6204,7 @@ doloop
  cli
  and $5c
  beq nodot
- lda $ff        ;cmd plot type
+ lda BASZPT     ;cmd plot type
 nodot
  sta lastplott  ;dot plot type
  lda $fc        ;do not plot if x coordinate out of range
@@ -6205,7 +6239,7 @@ dec5b dec $5b
 ;**************************
 texter
  lda lastplott
- sta $ff        ;save plot type
+ sta BASZPT     ;save plot type
 nextchar
  lda #0
  sta $59        ;index variable for current byte of dot data in char
@@ -6248,7 +6282,7 @@ noinc51
  jsr getpoint   ;set current plot coordinates
  dec $52
  bne nextchar
- lda $ff        ;restore original plot type
+ lda BASZPT     ;restore original plot type
  sta lastplott
 texted jmp memnorm
 ;execute function index by y
@@ -6361,19 +6395,19 @@ fillit
  beq epaint
  jmp beginp
 epaint
- jmp memnorm  ;switch LORAM back to LOROM and HIRAM back to HIROM
+ jmp memnorm    ;switch RAM back to Kernal and BASIC ROMs
 ;
 readb jsr ydiv8
  lda R6510
- and #%11111101 ;bit1 0=HIRAM
- sei            ;disable IRQ since kernal HIROM is switching to HIRAM
+ and #%11111101 ;switch out Kernal ROM for RAM at $e000-$ffff
+ sei            ;disable IRQ since kernal ROM is not available
  sta R6510
  lda ptab3,x
  eor #$ff
  and ($c3),y    ;bitmap in HIRAM
  tay
  lda R6510
- ora #%00000010 ;bit1 1=HIROM
+ ora #%00000010 ;restore Kernal ROM, bit1: 1=Kernal ROM, 0=RAM
  sta R6510
  cli
  txa
@@ -7250,7 +7284,7 @@ savbtm
 byteout
  lda R6510
  tax
- and #%11111101 ;switch out Kernal for RAM at $e000-$ffff
+ and #%11111101 ;switch out Kernal ROM for RAM at $e000-$ffff
  sei            ;disable IRQ while Kernal is switched out
  sta R6510
  lda ($50),y
@@ -7511,15 +7545,15 @@ pekbyt
 ;select HIRAM and disable IRQ
  lda R6510
  pha            ;save current mem bank setting
- and #%11111101 ;switch i/o devices out for RAM
- sei            ;disable irqs while i/o devices are not available
- sta R6510      ;apply mem bank new selection
+ and #%11111101 ;switch out Kernal for RAM at $e000-$ffff
+ sei            ;disable irqs while Kernal is not available
+ sta R6510      ;apply mem block selection
 ;read byte from bitmap image in HIRAM
  lda ($fb),y
  tax            ;save in x
  pla
- sta R6510      ;switch out RAM for i/o devices
- cli            ;enable irqs now that i/o devices are restored
+ sta R6510      ;switch out RAM for Kernal
+ cli            ;enable irqs now that Kernal is available
  txa            ;get saved value
  and $61
  cmp #16        ;hi nybble to lo nybble for indexing 
@@ -8154,7 +8188,7 @@ filines
  sta COUNT   ;num lines to fill
 ;calc line width and fill left or right
  lda #0      ;0-=draw right,1=draw left
- sta $ff     ;horizontal fill direction
+ sta BASZPT  ;horizontal fill direction
  lda $50     ;point2 x coordinate lobyte
  sec
  sbc $fb
@@ -8164,7 +8198,7 @@ filines
  tay
  bpl setwidth
 ;x1 > x2 so negate result & reverse draw direction
- inc $ff     ;draw left
+ inc BASZPT  ;draw left
  txa
  eor #$ff    ;16-bit 2's compliment
  clc
@@ -8187,7 +8221,7 @@ setwidth
  sta ENDCHR
 linefil
  jsr setdot
- lda $ff
+ lda BASZPT
  beq fillright
 fillleft
  jsr drawleft
@@ -8991,9 +9025,9 @@ getdot
  jsr ydiv8
  lda R6510
  pha
- and #%11111101 ;bit1 0=HIRAM
- sei            ;disable IRQ since kernal HIROM is switching to HIRAM
- sta R6510
+ and #%11111100 ;switch out Kernal for RAM at $e000-$ffff
+ sei            ;disable IRQ since kernal is unavailable
+ sta R6510      ;apply mem block selection
  lda ($c3),y
  tay
  pla
@@ -9277,6 +9311,5 @@ pntreq lda $22
  cmp $25
 gbhah rts
 ;
-.byte 0  ;filler to complete 8KB $a000-$bfff
 
 .end
