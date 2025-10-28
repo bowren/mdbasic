@@ -4806,10 +4806,10 @@ brkirq
  jsr norm        ;init VIC-II settings, select mem bank 0
  jsr IOINIT      ;init CIA I/O devices
  jsr RESTOR      ;restore RAM vectors for default I/O routines
+ jsr $e51b       ;init screen and keyboard
  dec R6510       ;LORAM signal select RAM
  jsr newvec      ;apply MDBASIC RAM vector overrides & init state
  inc R6510       ;LORAM signal select ROM (BASIC)
- jsr $e51b       ;init screen and keyboard
  jmp $e39d       ;init stack ptr then enter main basic loop
 ;
 ;*******************************************************
