@@ -395,7 +395,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge
-.text "mdbasic 25.10.27"
+.text "mdbasic 25.10.28"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -2179,7 +2179,7 @@ oldrst
 ;
 ;*******************
 ; POKE mem, value
-; POKE mem1 TO mem2, value, [operation]
+; POKE mem1 TO mem2, value [,operation] [,step]
 ;operation is optional (default 0): 0=SET,1=AND,2=OR,3=EOR
 poke
  jsr getvaluez   ;get 2-byte int in LINNUM
@@ -2198,14 +2198,39 @@ newpoke
  jsr GETBYTC+3   ;get poke value
  stx $fe         ;set poke value
  ldx #0          ;default poke operation 0=SET
- stx $fd         ;set poke operation 0=SET,1=AND,2=OR,3=EOR
+ stx $fd         ;set poke operation 0=SET,1=AND,2=OR,3=EOR,4=RASTERAND
+ inx             ;default increment to 1
+ stx $ff         ;set increment
  cmp #","        ;is poke operation param present?
  bne gopoke      ;if not then use default
  jsr GETBYTC     ;get poke operation param
- stx $fd         ;set poke operation
- cpx #4          ;valid values 0=SET,1=AND,2=OR,3=EOR
+ cpx #5          ;valid values 0=SET,1=AND,2=OR,3=EOR,5=RASTERAND
  bcs baderr2
+ stx $fd         ;set poke operation
+ cmp #","        ;is step param present?
+ bne gopoke      ;if not then use default
+ jsr GETBYTC     ;get step increment
+ txa
+ beq baderr2     ;zero is invalid
+ stx $ff         ;set step increment
 gopoke
+;make sure start is less than or equal to end
+ lda LINNUM
+ sec
+ sbc $fb
+ lda LINNUM+1
+ sbc $fc
+ bcs okpoke ;start is less than end
+;swap start and end
+ lda LINNUM
+ ldy $fb
+ sta $fb
+ sty LINNUM
+ lda LINNUM+1
+ ldy $fc
+ sta $fc
+ sty LINNUM+1
+okpoke
  dec R6510
  jmp pokee
 ;
@@ -3271,7 +3296,7 @@ voice
  plp
  jsr getvoc      ;returns SID register offset (voice#-1)*7 in accumulator
  sta $fe
- jsr ckcom2
+ jsr ckcom2      ;check for and skip over comma, misop err if missing
  jsr FRMNUM      ;convert current expression to a number and store in FAC1
  lda #<ntscm     ;ptr to 5-byte value for NTSC systems
  ldy #>ntscm     ;both NTSC and PAL FAC value have same ptr hibyte
@@ -8484,27 +8509,10 @@ xf45c lda RIDBE ;index to end of receive buffer
 ;--------------
 ;perform POKE in specified range
 pokee
-;make sure start is less than or equal to end
- lda LINNUM
- sec
- sbc $fb
- lda LINNUM+1
- sbc $fc
- bcs okpoke ;start is less than end
-;swap start and end
- lda LINNUM
- ldy $fb
- sta $fb
- sty LINNUM
- lda LINNUM+1
- ldy $fc
- sta $fc
- sty LINNUM+1
-okpoke
  ldy #0
 poker
- lda $fe  ;poke value
- ldx $fd  ;poke type 0=set,1=and,2=or,3=eor
+ lda $fe        ;poke value
+ ldx $fd        ;poke type 0=set,1=and,2=or,3=eor
  beq poke0
  dex
  bne poke2
@@ -8515,7 +8523,12 @@ poke2 dex
  ora ($fb),y
  jmp poke0
 poke3
+ dex
+ bne poke4
  eor ($fb),y
+ jmp poke0
+poke4
+ and $d012   ;raster line 8-bits
 poke0 sta ($fb),y
  ldx $fc
  cpx LINNUM+1
@@ -8524,10 +8537,20 @@ poke0 sta ($fb),y
  cpx LINNUM
  beq poked
 nxtpg
- inc $fb
- bne poker
- inc $fc
- bne poker
+ lda $fb
+ clc
+ adc $ff
+ sta $fb
+ lda $fc
+ adc #0
+ sta $fc
+chkdone
+ lda $fc
+ cmp LINNUM+1
+ bcc poker
+ lda LINNUM
+ cmp $fb
+ bcs poker
 poked jmp memnorm
 ;--------------
 ;perform HEX$(s$) for 32-bit number
@@ -9311,5 +9334,5 @@ pntreq lda $22
  cmp $25
 gbhah rts
 ;
-
+.byte 0 ;fillter to complete RAM block
 .end
