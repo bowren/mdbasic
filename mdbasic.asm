@@ -395,7 +395,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge
-.text "mdbasic 25.11.01"
+.text "mdbasic 25.11.08"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -751,8 +751,6 @@ cont1 iny
 ;Evaluate tokens via vector IGONE ($0308)
 ;
 exccmd
- lda traceflag
- beq execut
  jsr trace1
 execut
  jsr CHRGET
@@ -783,12 +781,12 @@ xcmd jsr tstcmd
  pha
  lda CURLIN
  pha
- lda #TOKEN_GOSUB
+ lda #TOKEN_GOSUB ;flag for RETURN with GOSUB
  pha
  lda TMPKEYP
+ ldy TMPKEYP+1
  sta TXTPTR
- lda TMPKEYP+1
- sta TXTPTR+1
+ sty TXTPTR+1
  lda keyline
  ldy keyline+1
 setline
@@ -1331,7 +1329,9 @@ dumpfiles
 ;ensure MDBASIC file handles are closed and restore std io channels
 clsmdb
  lda mdbin
+ beq zzz
  jsr CLOSE
+zzz
  lda mdbout
  beq clsclr
 zzzz
@@ -1742,90 +1742,6 @@ endnum lda #32  ;a space char
  sty NDX        ;set num chars in keyboard buffer
 eauto jmp $a49f ;continue with main loop for direct mode
 ;
-;*******************
-; TRACE [line#]
-;runs the program with trace mode enabled
-trace
- php            ;save flags from CHRGET
- lda #1
- ldx #<exccmd
- ldy #>exccmd
- jsr settrace
- plp            ;restore flags from CHRGET
- jmp RUN
-;**trace subroutine during prg execution
-trace1
- ldy CURLIN+1   ;when current line num hibyte is $FF (invalid)
- iny            ;then immediate mode
- bne trace2
-;turn off trace mode
-troff
- lda #$00
- ldx #<execut
- ldy #>execut
-settrace
- sta traceflag
- stx IGONE
- sty IGONE+1
- rts
-trace2
- lda CURLIN
- sta LINNUM
- lda CURLIN+1
- sta LINNUM+1
-;clear top 2 lines
- ldx #0
- jsr $e9ff
- inx
- jsr $e9ff
-;save current cursor position on stack
- lda PNTR
- pha
- lda TBLX
- pha
- jsr weglst     ;find and display line number in LINNUM
-;restore cursor position from stack
- pla
- tax
- pla
- tay
- clc
- jsr PLOT
-;wait for shift or stop key press
-shftky
- jsr STOP       ;check stop key
- beq etrace     ;stop now
- lda #$01
- bit SHFLAG     ;is the shift key pressed?
- beq shftky     ;wait for it to be pressed
-etrace rts
-;
-;STOP ON | OFF
-;STOP KEY ON | OFF
-stop
- beq oldstop
- cmp #TOKEN_KEY
- beq stopkey
- sec
- sbc #TOKEN_ON
- sta stopflg
- jmp CHRGET     ;skip over ON | OFF token
-oldstop
- lda stopflg    ;0 = STOP enabled, otherwise disabled
- sec
- jmp $a82f      ;perform STOP
-stopkey
- jsr CHRGET
- ldx #239     ;lobyte ptr for STOP ON
- cmp #TOKEN_OFF
- beq stopit
- cmp #TOKEN_ON
- bne etrace   ;allow syntax error to occur
- ldx #237     ;lobyte ptr for STOP OFF
-stopit
- stx ISTOP
- jmp CHRGET
-;
 initrun
  cmp #"@"
  bne initmdb
@@ -1836,6 +1752,8 @@ initmdb
  sta MDBIRQ     ;if MDBASIC IRQ is active it will restore original irq
  sta NDX        ;clear keyboard buffer
  sta SPENA      ;turn off all sprites
+ sta stopflg    ;enable stop statements
+ jsr stpkeyon   ;ensure stop key is enabled by
  jsr sidclr     ;clear SID registers
  jsr clearerr   ;clear last error info
  jsr clsall     ;close all open files and restore default devices
@@ -2154,16 +2072,70 @@ deldone
 endprg
  jsr CLEAR-5  ;reset TXTPTR to beginning of prg then perform CLR
  jmp $e39d    ;clear stack then enter main basic loop
-;
-weglst
- jsr FINDLN ;find BASIC line number in LINNUM
- bcc endprg ;line not found
- jsr $a82c  ;test STOP key for break in program
- lda #19    ;chr 19 = cursor home
- jsr CHROUT
+
+;*******************
+; TRACE [line#]
+;runs the program with trace mode enabled
+trace
+ php            ;save flags from CHRGET
+ ldx #<exccmd
+ ldy #>exccmd
+ jsr settrace
+ plp            ;restore flags from CHRGET
+ jmp RUN
+;**trace subroutine during prg execution
+trace1
+ ldy CURLIN+1   ;when current line num hibyte is $FF (invalid)
+ iny            ;then immediate mode
+ bne trace2
+;turn off trace mode
+troff
+ ldx #<execut
+ ldy #>execut
+settrace
+ stx IGONE
+ sty IGONE+1
+ rts
+trace2
+ lda CURLIN
+ sta LINNUM
+ lda CURLIN+1
+ sta LINNUM+1
+;clear top 2 lines
+ ldx #1
+clrtop2
+ jsr $e9ff
+ dex
+ bpl clrtop2
+;save current cursor position on stack
+ sec            ;flag for read
+ jsr PLOT       ;get cursor position
+ tya            ;logical cursor column
+ pha
+ txa            ;physical cursor line
+ pha
+;find and display line number in LINNUM
+ jsr FINDLN     ;find BASIC line number in LINNUM
+ bcc endprg     ;if carry set then line found
+ jsr $e566      ;home the cursor
  jsr lstrap
  ldy #1
- jmp $a6d7  ;perform LIST of current line
+ jsr $a6d7      ;perform LIST of current line
+;restore cursor position from stack
+ pla
+ tax            ;physical cursor line
+ pla
+ tay            ;logical cursor column
+ clc            ;flag for write
+ jsr PLOT       ;set cursor position
+;wait for shift or stop key press
+shftky
+ jsr STOP       ;check stop key
+ beq etrace     ;stop now
+ lda #$01
+ bit SHFLAG     ;is the shift key pressed?
+ beq shftky     ;wait for it to be pressed
+etrace rts
 ;
 ;******************
 ; RESTORE       - set first data line as next DATA READ
@@ -2400,13 +2372,52 @@ clsall
  jmp clscmd       ;set default I/O channel and clear MDBASIC file numbers
 ;
 ;*******************
+;STOP ON | OFF
+;STOP KEY ON | OFF
+stop
+ beq oldstop
+ tax            ;save current token
+ jsr CHRGET     ;skip over token and get next
+ cpx #TOKEN_KEY
+ beq stopkey
+ ldy #0
+ cpx #TOKEN_ON
+ beq setstpflg
+ cpx #TOKEN_OFF
+ bne baderr
+ iny
+setstpflg
+ sty stopflg    ;stop disabled flag: 0 = enabled, else disabled
+ rts
+oldstop
+ lda stopflg    ;0 = STOP enabled, otherwise disabled
+ sec            ;carry flag to allow CONT
+ jmp $a82f      ;perform STOP
+stopkey
+ tax
+ jsr CHRGET     ;skip over ON|OFF token
+ cpx #TOKEN_ON
+ beq stpkeyon
+ cpx #TOKEN_OFF
+ bne baderr
+;stop key off
+ lda #$ef       ;lobyte ptr for STOP OFF
+.byte $2c       ;ignore lda #$ed
+stpkeyon
+ lda #$ed       ;lobyte ptr for STOP ON
+stopit
+ sta ISTOP
+ rts
+;
+baderr
+ jmp SNERR      ;syntax err
+;
+;*******************
 ; ON ERR GOTO line
 ; ON ERR RESUME NEXT
 ; ON KEY OFF
 ; ON KEY GOSUB line
 ; ON i GOTO|GOSUB line1,line2,...
-baderr jmp SNERR  ;syntax err
-;
 on
  beq mop4
  cmp #TOKEN_ERR
@@ -3365,7 +3376,8 @@ godraw
  jsr godraww
  inc R6510
  bcs nxtmov    ;draw cmd was valid
-baddraw jmp SNERR  ;syntax error in draw string
+baddraw
+ jmp SNERR     ;syntax error in draw string
 nxtmov
  jsr comchk    ;another draw cmd?
  beq drawloop2
@@ -3715,7 +3727,7 @@ screenon
 docls
  jsr CHRGET
  bne pager
-cls ;clear current screen
+;clear current screen
  lda #%00100000  ;bit5 bitmap mode
  bit SCROLY
  bne bitmapclr
@@ -4813,14 +4825,13 @@ resvec
 ; checking if an RS-232 event occured which takes precedence.
 ; If the source of the interrupt was not from an RS-232 event
 ; then it must have been caused by the Restore key.  If the
-; cartrige header text "CBM80" is found at $8000 then this
+; cartrige header text "CBM80" is found at $8004 then this
 ; routine is executed.
 ;***************************************************************
 runstp
  jsr $f6bc       ;scan keyboard for STOP key with result in $91
  jsr STOP        ;if STOP key was pressed
  beq brkirq      ;then break
-xfe72
  jmp $fe72       ;NMI RS-232 Event Handler
 
 ;***************************************************************
@@ -5410,8 +5421,6 @@ neg30 .byte $85,$f0,$00,$00,$00 ;FAC binary represenation of -30
 
 autonum    .word 10     ;last auto line numbering increment
 autoflag   .byte 0      ;auto line numbering flag: 0=off, 1=on
-
-traceflag  .byte 0      ;trace flag: 0=off, 1=on
 
 stopflg    .byte 0      ;0 = STOP enabled, otherwise disabled
 
@@ -9086,7 +9095,7 @@ csraddr         ;get text address of current line
  lda $d1        ;lobyte
  rts
 phycol
-;physical line = (logicalCol > maxCols) ? logicalCol-maxCols : logicalCol
+;physicalCol = (logicalCol > maxCols) ? logicalCol-maxCols : logicalCol
  lda PNTR       ;logical column
  sec
  sbc #40        ;max column number for a physical line
