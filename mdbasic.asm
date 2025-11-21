@@ -225,7 +225,7 @@ READY  = $a474 ;print READY
 LINKPRG= $a533 ;relink lines of tokenized program text
 INLIN  = $a560 ;input a line to buffer from keyboard (max 88 chars)
 FINDLN = $a613 ;search for line number using ptr TXTTAB
-NEW    = $a642 ;perform NEW
+SCRTCH = $a642 ;perform NEW
 CLEAR  = $a65e ;perform CLR
 RUNC   = $a68e ;reset ptr of current text char to the beginning of prg text
 LIST   = $a69c ;perform LIST
@@ -291,7 +291,7 @@ INT    = $bccc ;perform INT
 FIN    = $bcf3 ;convert ASCII string to a float in FAC1
 FINLOG = $bd7e ;add signed integer to FAC1
 INPRT  = $bdc2 ;print IN followed by a line number
-LINPRT = $bdcd ;print 2-byte number stored in A (hibyte), X (lobyte)
+LINPRT = $bdcd ;print 16-bit unsigned int in A (hibyte), X (lobyte)
 FOUT   = $bddd ;convert contents of FAC1 to ASCII String
 
 ;CBM BASIC routines to raise a specific error
@@ -333,7 +333,6 @@ CHRIN  = $ffcf ;input a character
 CHROUT = $ffd2 ;output a char to the current output device
 LOAD   = $ffd5 ;load from a device
 STOP   = $ffe1 ;test the stop key
-CLALL  = $ffe7 ;close all files
 PLOT   = $fff0 ;Read/Set Location of the Cursor
 
 RESLST = $a09e ;$A09E-$A19D List of Keywords
@@ -395,7 +394,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge
-.text "mdbasic 25.11.08"
+.text "mdbasic 25.11.20"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -491,7 +490,7 @@ cmdtab
 .rta PRINT  ;$99
 .rta CONT   ;$9a
 .rta LIST   ;$9b
-.rta CLEAR  ;$9c CLR
+.rta clr    ;$9c CLR augmented
 .rta CMD    ;$9d
 .rta sys    ;$9e SYS augmented
 .rta $e1be  ;$9f OPEN
@@ -634,7 +633,7 @@ misop  .shift "missing operand"       ;31
 ilvne  .shift "illegal voice number"  ;32
 illspr .shift "illegal sprite number" ;33
 ilcoor .shift "illegal coordinate"    ;34
-cantre .shift "can't resume"          ;35
+cantre .shift "resume without err"    ;35
 usrerr .shift "user defined"          ;36 to 127 and 0
 ;
 erradd .word misop, ilvne, illspr, ilcoor, cantre, usrerr
@@ -1039,7 +1038,7 @@ lstpause
  beq out        ;just output pi symbol as-is
  cmp #FIRST_CMD_TOK ;first MDBASIC command token?
  bcs newlst     ;decode MDBASIC token to text
- jmp $a724      ;perform part of CLR
+ jmp $a724      ;print CBM BASIC keyword from token
 out jmp $a6f3   ;output byte as it is on cmd line
 newlst
  sbc #FIRST_CMD_TOK-1
@@ -1216,7 +1215,7 @@ copystr
  jsr filess
  inc R6510
  bcs errmdb
- jsr LINPRT     ;print 2-byte binary number in x and y regs
+ jsr LINPRT     ;print 16-bit unsigned int value in x and y regs
  lda #$a6       ;$a1a6 ROM value for string " FILES"
  ldy #$a1
  jsr printstr   ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
@@ -1269,14 +1268,13 @@ opnprt          ;7=upper/lower case chars, 0=Upper case and symbol chars
  lda #$00       ;zero byte file name length (no name)
  jsr SETNAM     ;set file name
  jsr OPEN       ;perform OPEN 127,4,0,""
- bcc prtopen    ;clear carry flag means success
-errout
- jmp errmdb
-prtopen
+ bcs errout     ;carry flag indicates error
  ldx mdbout     ;current MDBASIC output channel
  jsr CHKOUT     ;set as the current I/O file number
- bcs errout
+ bcs errout     ;carry flag indicates error
  rts
+errout
+ jmp errmdb     ;cannot access printer device
 ;
 ;*******************
 ;DUMP LIST [start]-[end]
@@ -1672,7 +1670,7 @@ setaflg
  sta autoflag
  rts
 getinc
- jsr LINGET   ;get increment param
+ jsr LINGET   ;get increment param as binary int in LINNUM
  ldx LINNUM
  ldy LINNUM+1
  cpy #4       ;max auto-line number value is 1023
@@ -1712,7 +1710,7 @@ aline
  bcc doauto     ;input begins with numeric value
  jmp $a496      ;non-line number input, tokenize then execute
 doauto
- jsr LINGET
+ jsr LINGET     ;convert ASCII digits to binary line number
  lda autoflag
  beq eauto
  jsr CHRGOT
@@ -1889,12 +1887,12 @@ oklod2
  ldx STAL   ;print mem ptr from file
  lda STAL+1
 prtmem
- jsr LINPRT ;print 2-byte binary value
+ jsr LINPRT ;print 16-bit unsigned int value in x and y regs
  lda #"-"
  jsr CHROUT
  ldx EAL    ;ptr to end addr of loaded file
  lda EAL+1
- jsr LINPRT ;print 2-byte binary value
+ jsr LINPRT ;print 16-bit unsigned int value in x and y regs
 lodone
  lda VERCK  ;load=0 or 1=verify
  bne lodbas
@@ -1990,12 +1988,21 @@ findlnr
  rts
 ;
 ;*******************
+; CLR [SYS]
+clr beq oldclr
+ cmp #TOKEN_SYS
+ bne oldclr
+ jsr initmdb
+ jsr CHRGET
+oldclr jmp CLEAR
+;
+;*******************
 ; NEW [SYS]
 new beq oldnew
  cmp #TOKEN_SYS
  bne oldnew
  jmp ($fffc)
-oldnew jmp NEW
+oldnew jmp SCRTCH
 ;
 ;;*******************
 ; OLD takes no params
@@ -2186,26 +2193,10 @@ newpoke
  beq baderr2     ;zero is invalid
  stx $ff         ;set step increment
 gopoke
-;make sure start is less than or equal to end
- lda LINNUM
- sec
- sbc $fb
- lda LINNUM+1
- sbc $fc
- bcs okpoke ;start is less than end
-;swap start and end
- lda LINNUM
- ldy $fb
- sta $fb
- sty LINNUM
- lda LINNUM+1
- ldy $fc
- sta $fc
- sty LINNUM+1
-okpoke
  dec R6510
  jmp pokee
 ;
+;*******************
 ; ERR CLR    :clear last error data
 ; ERR OFF    :turn off error trapping
 ; ERR errnum :raise error (1-35)
@@ -2278,14 +2269,7 @@ hiinc
  jsr find ;find all 65535
  jmp endprg
 ;
-;these next 3 routine are only called when BASIC ROM is switched out
-evalnum
- inc R6510
- jsr FRMNUM
- jsr GETADR
- dec R6510
- rts
-;
+;these 2 routines are only called when BASIC ROM is switched out
 fltstr
  inc R6510    ;switch BASIC ROM in
  jsr uint2fl  ;convert 2-byte unsigned int in FAC1 to float
@@ -2293,13 +2277,11 @@ fltstr
  dec R6510    ;switch BASIC ROM out
  rts          ;return to caller under BASIC ROM
 ;
-;these 2 routines are called while BASIC ROM is switched out
 tofac
  lda FRESPC
  sta $63
  lda FRESPC+1
  sta $62
-runcc
  inc R6510    ;switch BASIC ROM in
  jsr RUNC     ;reset TXTPTR to beginning of program
  dec R6510    ;switch BASIC ROM out
@@ -2368,7 +2350,12 @@ nxtcls
 clsfiles
  jsr getchr       ;skip over FILES token
 clsall
- jsr CLALL        ;close all open files and restore default devices
+ ldx LDTND        ;current open file count
+ beq closed       ;if no open files then quit
+ lda LAT-1,x      ;get logical file number from file descriptors table
+ jsr $e1cc        ;BASIC wrapper for Kernal CLOSE logical file routine
+ bcc clsall       ;carry will always be clear since error already handled
+closed
  jmp clscmd       ;set default I/O channel and clear MDBASIC file numbers
 ;
 ;*******************
@@ -2575,7 +2562,7 @@ resum
  bne nxtstmt0 ;should always branch if valid hibyte
 noresum
  jsr detrap
- ldx #35      ;can't resume error
+ ldx #35      ;RESUME WITHOUT ERRROR
  jmp (IERROR)
 ;
 ;*******************
@@ -3296,8 +3283,6 @@ clrsid sta FRELO1,y
  bmi setvo
 ;
 ;*******************
-;NTSC and PAL hold the value of 1Hz (based on clock speed)
-;REG_VAL=FREQUENCY/NTSC
 ;VOICE CLR
 ;VOICE voice#, frequency(0 to 3994.997 for NTSC machines)
 voice
@@ -3309,11 +3294,11 @@ voice
  sta $fe
  jsr ckcom2      ;check for and skip over comma, misop err if missing
  jsr FRMNUM      ;convert current expression to a number and store in FAC1
- lda #<ntscm     ;ptr to 5-byte value for NTSC systems
+ lda #<ntscm     ;ptr to 5-byte value for of 1Hz (based on clock speed)
  ldy #>ntscm     ;both NTSC and PAL FAC value have same ptr hibyte
  ldx PALNTSC     ;clock type 0=NTSC, 1=PAL
- beq memfac      ;if PAL then add 5 byte offset to ptr
- lda #<palb
+ beq memfac      ;if PAL then adjust FAC value ptr
+ lda #<palb      ;which is offset by 5 more bytes
 memfac
  jsr FMULT       ;multiply FAC1 by a value in memory ptr A=lo byte, Y=hi byte
  jsr doround     ;round FAC1 to nearest whole number
@@ -3669,7 +3654,7 @@ norm2
 ;
 illqty8 jmp FCERR     ;illegal quantity error
 
-; TEXT [x, y,] "string", [charset], [sizeX], [sizeY], [plotType], [color]
+; TEXT x, y, "string", [charset], [sizeX], [sizeY], [plotType], [color]
 text
  beq norm
  jsr getpnt   ;get plot x,y
@@ -3757,9 +3742,8 @@ pokcol            ;multicolor mode is bit patterns 01 and 10
  rts
 ;
 ;*******************
-; SCREEN CLR [page]
 ; SCREEN ON|OFF
-; SCREEN [page], [xoffset], [yoffset]
+; SCREEN [CLR] [page] [,xoffset] [,yoffset]
 ; page (0-4, initially 0, 0=normal text page, 1-4=redefined char mode)
 ; xoffset (0-15, initially 8) 0-7 horiz offset with 38 cols, 8-15 is 40 cols
 ; yoffset (0-15, initially 11) 0-7 vert offset with 24 rows, 8-15 is 25 rows
@@ -4603,7 +4587,7 @@ fnkey
  bne nobutt
  jsr CHRGET      ;skip over $ symbol
  tya
- jsr $b6f0       ;perform chr$
+ jsr $b6f0       ;perform chr$(a)
 ;NOTE: JSR will not return here since rountine pulls address off stack
 ;
 ;*******************
@@ -4776,8 +4760,8 @@ nobutt2          ;reg y holds the lobyte
 ;*******************
 ;H$ = HEX$(n) where n is a signed 32-bit signed integer
 hex
- jsr trim      ;get fn param as 5-byte float truncated
- jsr QINT     ;convert FAC1 into a signed 32-bit int in FAC1
+ jsr trim        ;get fn param as 5-byte float truncated
+ jsr QINT        ;convert FAC1 into a signed 32-bit int in FAC1
  dec R6510
  jsr hexx
  inc R6510
@@ -4832,6 +4816,10 @@ runstp
  jsr $f6bc       ;scan keyboard for STOP key with result in $91
  jsr STOP        ;if STOP key was pressed
  beq brkirq      ;then break
+ lda #0          ;turn off editor quote/edit/rvs mode
+ sta QTSW        ;quote mode flag
+ sta INSRT       ;insert char count
+ sta RVS         ;reverse char flag
  jmp $fe72       ;NMI RS-232 Event Handler
 
 ;***************************************************************
@@ -4899,7 +4887,7 @@ hibyer
  jsr printstr
  lda #$69     ;address of the zero-terminated string ($a369) = "  ERROR"
  ldy #$a3
- jsr STROUT   ;print str whose addr is in y reg (hi byte) and a reg (lo byte)
+ jsr STROUT   ;print str whose addr is in y reg (hibyte) and a reg (lobyte)
  ldy CURLIN+1 ;hibyte of line number where error occured
  iny          ;a value of $ff indicates immediate mode
  beq redy     ;otherwise program mode
@@ -4923,16 +4911,6 @@ hibyer
 ; IRQ driven key decode overriden to support function keys
 ;*********************************************************
 keychk
- ldy SHFLAG     ;0=none, 1=shift key, 2=logo key, 4=ctrl key
- cpy #%00000110 ;ctrl and logo key combo exactly?
- bne keychk2
- lda #0         ;turn off editor quote/edit/rvs mode
- sta QTSW       ;quote mode flag
- sta INSRT      ;insert char count
- sta RVS        ;reverse char flag
- beq nokey      ;always branches
-;start of the original mdbasic routine
-keychk2
  lda MSGFLG     ;control messages enabled?
  beq nokey      ;no, use original routine
  lda QTSW       ;editor in quote mode?
@@ -5208,10 +5186,10 @@ comma jsr CHRGET   ;advance TXTPTR
 getstr jsr CHRGET  ;get next basic text chr
 getstr0 beq missop
 getstr1 jsr FRMEVL ;evaluate expression
-getstr2 jsr FRESTR ;discard temp string
- stx $50           ;lowbyte
- sty $51           ;hibyte
- sta $52           ;length
+getstr2 jsr FRESTR ;enforce string type and discard temp string
+ stx $50           ;str ptr lowbyte
+ sty $51           ;str ptr hibyte
+ sta $52           ;str length
  rts
 ;*******************
 ;get charset parameter 0-3
@@ -5276,7 +5254,7 @@ getvalue  jsr FRMNUM ;eval numeric expr & type
 getvalu
  jsr GETADR          ;convert FAC1 to unsigned 16-bit int in LINNUM
  ldx LINNUM          ;return lobyte in x reg
- ldy LINNUM+1        ;return hibyte in y reg
+ tay                 ;return hibyte in y reg
  rts                 ;processor zero flag set based on hibyte
 ;*******************
 ; get plot type and color for graphics statements
@@ -5347,20 +5325,21 @@ rom1 inc R6510   ;switch in BASIC ROM (a000-bfff)
  jmp prtnum
 rom2 inc R6510   ;switch in BASIC ROM (a000-bfff)
  jsr MOVFM       ;move a float from memory to fac1
-prtnum jsr FOUT  ;convert fac1 to ascii with str ptr in a,y registers
+prtnum jsr FOUT  ;convert FAC1 to ascii with str ptr in a,y registers
  jsr STROUT      ;print string ptr (a=lobyte y=hibyte)
  dec R6510       ;switch out BASIC ROM for RAM (a000-bfff)
  rts
 rom3 inc R6510   ;switch in BASIC ROM (a000-bfff)
- jsr getvalue
- php             ;save zero flag indicating hibyte non-zero
- txa             ;lobyte also in A reg for convenience
+ jsr FRMNUM      ;eval numeric expression, error if not numeric
+ jsr GETADR      ;convert FAC1 into an unsigned 16-bit unsigned int in LINNUM
  dec R6510       ;switch out BASIC ROM for RAM (a000-bfff)
- plp
- rts
+ tya             ;return lobyte in accumulator
+ tax             ;also return lobyte in x reg
+ ldy LINNUM+1    ;return hibyte in y reg
+ rts             ;zero flag based on hibyte
 rom4
  inc R6510       ;switch in BASIC ROM (a000-bfff)
- jsr LINPRT+4    ;print 2-byte binary number in FAC1
+ jsr LINPRT+4    ;print 16-bit unsigned int in FAC1
  dec R6510       ;switch out BASIC ROM for RAM (a000-bfff)
  rts
 ;*******************
@@ -5614,31 +5593,31 @@ ascctlfn
 .rta txtrvsoff,txtbitclr,txtclr,txtclr,txtclr,txtclr,txtclr,txtclr
 .rta txtclr,txtclr,txtleft,txtclr,txtclr
 
-;table for converting ascii to screen code
-;except for ascii 64 which is screen code 0
-;codes 192-223 same as 96-127
-;codes 224-254 same as 160-190
-;code  255 same as 126
-asc2scr
-;codes 160 to 255
-.byte 32,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111
-.byte 112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127
-.byte 64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79
-.byte 80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95
-.byte 32,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111
-.byte 112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,94
-
 ;scroll direction vectors up,down,left,right
 scrolls .rta scroll0,scroll1,scroll2,scroll3
 
-;10 tokens use line numbers that need to be renumbered when using renum
+;8 tokens use line numbers that need to be renumbered when using renum
 gotok
-.byte TOKEN_GOTO,TOKEN_GOSUB,TOKEN_RETURN,TOKEN_THEN,TOKEN_ELSE
-.byte TOKEN_RESUME,TOKEN_TRACE,TOKEN_DELETE,TOKEN_RUN,TOKEN_RESTORE
+.byte TOKEN_GOTO, TOKEN_GOSUB, TOKEN_RETURN, TOKEN_THEN
+.byte TOKEN_ELSE, TOKEN_RESUME, TOKEN_RUN, TOKEN_RESTORE
 
 ;strings
 addchr .shift "+chr$("  ;used by keylist to display non-printable chars
 nolin  .null "65535"    ;used by renum to find bad GO statements
+
+;build expression to convert time$ to time in seconds since midnight
+;expression to calc seconds since midnight
+tim2sec
+.text "00.0" ;placeholder for seconds and one tenth of second
+.byte $aa    ;plus token
+.text "60"
+.byte $ac    ;times token
+.text "00"   ;placeholder for minutes
+.byte $aa    ;plus token
+.text "3600"
+.byte $ac    ;times token
+.text "00"   ;placeholder for hours
+.byte 0
 
 ;KEY (continued)
 keyy
@@ -5723,20 +5702,20 @@ nextlt
  ldy $fc
  lda keybuf,y
  beq stoppr
- sta $63
+ sta $63      ;byte to be printed as char or number (lobyte)
  cmp #13      ;carriage return?
- beq crqt
+ beq crqt     ;yes, then display as BASIC function CHR$
  cmp #34      ;quote?
- bne nocrqt
+ bne nocrqt   ;print byte as char
 crqt
- jsr printqt
+ jsr printqt  ;closing quote
 crqt2
  lda #<addchr
  ldy #>addchr
  jsr printstr ;+CHR$(
- lda #0       ;hibyte in a reg
- sta $62
- jsr rom4     ;switch ROM in and call routines to print int in FAC1
+ lda #0       ;hibyte is always 0 (8-bit unsinged int)
+ sta $62      ;set hibyte of unsigned int to be printed
+ jsr rom4     ;print 16-bit unsigned int in FAC1
  lda #")"
  jsr CHROUT
  inc $fc      ;index offset
@@ -6182,29 +6161,24 @@ done2
 ;
 txtlc ;lower case current charset
 ;charset $d0,$d4 uppercase $d8,$dc lowercase
- lda INPFLG
- ora #%00001000
+ lda #%00001000
+.byte $2c
+txtrvson ;rvs on current charset
+;charset $d0,$d8 norm, $d4,$dc rvs
+ lda #%00000100
+ ora INPFLG
  sta INPFLG
  rts
 txtuc ;upper case current charset
 ;charset $d0,$d4 uppercase $d8,$dc lowercase
- lda INPFLG
- and #%11110111
- sta INPFLG
- rts
+ lda #%11110111
+.byte $2c
 txtrvsoff ;rvs off current charset
 ;charset $d0,$d8 norm, $d4,$dc rvs
- lda INPFLG
- and #%11111011
+ lda #%11111011
+ and INPFLG
  sta INPFLG
- rts
-txtrvson ;rvs on current charset
-;charset $d0,$d8 norm, $d4,$dc rvs
- lda INPFLG
- ora #%00000100
- sta INPFLG
-done3
- rts
+done3 rts
 ;
 txtbs
  jsr txtleft
@@ -6282,11 +6256,23 @@ nextchar
 ;convert ascii to screen code
  tay
  bpl cd0to127
- sec
- sbc #128+32
- bcc nonprt0
- tay
- lda asc2scr,y
+ cmp #128+32
+ beq c32        ;code 160 is ascii 32
+ bcc nonprt0    ;codes 128-159 are control codes
+ cmp #255       ;code 255 is ascii 94
+ beq c255
+ cmp #160       ;code 160 is ascii 32
+ beq c32
+ cmp #224       ;code 224 is ascii 32
+ beq c32
+ bcc a64        ;code is ascii-64
+ sbc #64        ;code is ascii-128
+a64 sec
+ sbc #64
+.byte $2c       ;lda #94 becomes bit $5ea9
+c255 lda #94
+.byte $2c       ;lda #32 becomes bit $20a9
+c32 lda #32
  jmp dotptr
 nonprt0
  tya            ;restore original ascii value
@@ -8380,7 +8366,7 @@ getdb
  adc #9         ;1 for 2's comp, 8 for offset
  and #%00000011 ;just want first 2 bits
  lsr            ;shift bit positions
- ror            ;from 0,1 to 6,5
+ ror            ;from 1,0 to 6,5
  ror            ;using carry bit
  lsr            ;arriving at bits 6,5
  sta XSAV
@@ -8518,6 +8504,23 @@ xf45c lda RIDBE ;index to end of receive buffer
 ;--------------
 ;perform POKE in specified range
 pokee
+;make sure start is less than or equal to end
+ lda LINNUM
+ sec
+ sbc $fb
+ lda LINNUM+1
+ sbc $fc
+ bcs okpoke ;start is less than end
+;swap start and end
+ lda LINNUM
+ ldy $fb
+ sta $fb
+ sty LINNUM
+ lda LINNUM+1
+ ldy $fc
+ sta $fc
+ sty LINNUM+1
+okpoke
  ldy #0
 poker
  lda $fe        ;poke value
@@ -8763,20 +8766,6 @@ setterm
  sta BUF,y
  iny
  rts
-;
-;build expression to convert time$ to time in seconds since midnight
-;expression to calc seconds since midnight
-tim2sec
-.text "00.0" ;placeholder for seconds and one tenth of second
-.byte $aa    ;plus token
-.text "60"
-.byte $ac    ;times token
-.text "00"   ;placeholder for minutes
-.byte $aa    ;plus token
-.text "3600"
-.byte $ac    ;times token
-.text "00"   ;placeholder for hours
-.byte 0
 ;
 dotime
 ;copy to buffer the expression string for calc time in seconds
@@ -9197,7 +9186,8 @@ renumer
  jsr getchr
  bne serch
  jsr tofac
-strnum jsr getchr
+strnum
+ jsr getchr
  jsr getchr
  beq f65535  ;end of renum process
  jsr getchr
@@ -9208,14 +9198,17 @@ strnum jsr getchr
  sta (TXTPTR),y
  jsr addinc
  beq strnum
-serch jsr getchr
+serch
+ lda #"."
+ jsr CHROUT
+ jsr getchr
  jsr getchr
 nocrap jsr getchr
 craper cmp #"""
  bne tokgo
 ;skip over expression in quotes
 crap jsr getchr
- beq renumer  ;end of line
+ beq renumer   ;no end-quote, end of line
  cmp #"""
  bne crap
  beq nocrap
@@ -9223,20 +9216,30 @@ tokgo tax
  beq renumer
  bpl nocrap
 ;check if token is a statement that use line numbers
- ldx #10     ;there are 10 tokens that reference a line number
+ ldx #7        ;there are 8 tokens that reference a line number
 chktok
- cmp gotok-1,x
+ cmp gotok,x   ;8 tokens indexed 0 to 7
  beq sav7a
  dex
- bne chktok
- beq nocrap
-sav7a lda TXTPTR
+ bpl chktok
+fndtok
+ cmp #TOKEN_ERR
+ bne nocrap
+;determine if error line comparison, ie: IF ERRL=100 THEN...
+ jsr getchr
+ cmp #"l"       ;ERRL
+ bne craper
+ jsr CHRGET
+ cmp #TOKEN_EQUAL ;ERRL=
+ bne craper
+sav7a
+ lda TXTPTR
  sta OLDLIN
  lda TXTPTR+1
  sta OLDLIN+1
  jsr CHRGET
  bcs craper
- jsr evalnum
+ jsr rom3      ;evaluate line number
  jsr replac
  lda OLDLIN+1
  sta TXTPTR+1
@@ -9282,25 +9285,27 @@ ne2d dec VARTAB
  jsr CHRGOT
  bcc dec2d
 workdone
- cmp #","
+ cmp #","   ;comma-separated list of line numbers?
  beq sav7a
  jmp craper
 ;
 replac jsr tofac
 goagan jsr getchr
  jsr getchr
- bne isline
- lda #$ff
+ bne isline ;invalid line numer?
+ lda #$ff   ;then use 65535
  sta $62
  sta $63
- bmi pnl
-isline jsr getchr
+ jmp fltstr ;convert line number to string in FAC1
+isline
+;if found line number then convert to string in FAC1
+ jsr getchr
  cmp LINNUM
  bne nexlin
  jsr getchr
  cmp LINNUM+1
  bne nexlin+3
-pnl jmp fltstr
+ jmp fltstr
 ;
 nexlin jsr getchr
  jsr addinc
@@ -9343,5 +9348,5 @@ pntreq lda $22
  cmp $25
 gbhah rts
 ;
-.byte 0 ;fillter to complete RAM block
+.repeat 36,0  ;filler to complete RAM block
 .end

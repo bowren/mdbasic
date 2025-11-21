@@ -39,8 +39,8 @@ READY.
 * SAVE specific memory address range using the SAVE command's alternate syntax
 * Binary, Hexadecimal and Octal constant values in expressions
 * 8 assignable function keys each with up to 15 characters
-* Exit quote and insert mode using key combination CTRL-Commodore
-* Freeze LISTing by holding down the shift key
+* Easily exit editor modes Quote, Insert & Reverse by pressing the Restore key
+* Freeze LISTing by holding down the Shift key
 </pre>
 <u><b>Various Examples of statements (not a complete list; commands have many optional parameters):</b></u><br>
 <br>
