@@ -394,7 +394,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge
-.text "mdbasic 25.11.20"
+.text "mdbasic 25.11.24"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -2157,9 +2157,10 @@ oldrst
  jmp RESTORE     ;original CBM RESTORE takes no params
 ;
 ;*******************
-; POKE mem, value
-; POKE mem1 TO mem2, value [,operation] [,step]
-;operation is optional (default 0): 0=SET,1=AND,2=OR,3=EOR
+; POKE addr, value
+; POKE addr1 TO addr2, value [,operation, [step]]
+;operation is optional (0-5, default 0): 0=SET,1=AND,2=OR,3=EOR,4=RASTERAND,5=COPY
+;step increment is optional, (1-255, default 1)
 poke
  jsr getvaluez   ;get 2-byte int in LINNUM
  jsr CHRGOT
@@ -2174,24 +2175,33 @@ newpoke
  jsr CHKCOM+2    ;check for and skip over TO token, syntax error if not found
  jsr getvaluez   ;get 2-byte int in LINNUM
  jsr ckcom2      ;check for and skip over comma, misop err if missing
- jsr GETBYTC+3   ;get poke value
- stx $fe         ;set poke value
+ jsr $b1b5       ;INTIDX+3 get poke value
+ ldx $65
+ ldy $64
+ stx $fe         ;set poke value lobyte
+ sty $ff         ;set poke value hibyte (for COPY operation only)
  ldx #0          ;default poke operation 0=SET
- stx $fd         ;set poke operation 0=SET,1=AND,2=OR,3=EOR,4=RASTERAND
- inx             ;default increment to 1
- stx $ff         ;set increment
- cmp #","        ;is poke operation param present?
- bne gopoke      ;if not then use default
+ stx $fd         ;set poke operation 0=SET,1=AND,2=OR,3=EOR,4=RASTERAND,5=COPY
+ inx             ;default step increment to 1
+ stx COUNT       ;set step increment
+ jsr comchk      ;is poke operation param present?
+ bne nohi        ;if not then use default
  jsr GETBYTC     ;get poke operation param
- cpx #5          ;valid values 0=SET,1=AND,2=OR,3=EOR,5=RASTERAND
- bcs baderr2
  stx $fd         ;set poke operation
  cmp #","        ;is step param present?
- bne gopoke      ;if not then use default
+ bne chkpoke     ;if not then use default
  jsr GETBYTC     ;get step increment
  txa
  beq baderr2     ;zero is invalid
- stx $ff         ;set step increment
+ stx COUNT       ;set step increment
+chkpoke
+ lda $fd         ;operation (0-5)
+ cmp #5          ;operation 5?
+ beq gopoke      ;only operation 5 supports 2-byte values
+ bcs baderr2     ;invalid operation
+nohi
+ lda $ff         ;hibyte must be zero for operations 0-4
+ bne baderr2     ;non-zero hibyte is invalid
 gopoke
  dec R6510
  jmp pokee
@@ -2988,7 +2998,7 @@ setpage
  lda #0
  sta $fb
 nobmclr
- lda #8
+ lda #8         ;bitmap uses page 3 at $c800
  jsr pagee
 rwait
  lda SCROLY
@@ -5106,14 +5116,14 @@ times8
  sta $be
 end40 rts
 ;
-;add value in accumulator to value in $fb,$fc
+;add 8 bit value in accumulator to value in $fb,$fc
 addfb
  clc
  adc $fb
  sta $fb
- lda $fc
- adc #0
- sta $fc
+ bcc fbadd
+ inc $fc
+fbadd
  rts
 ;
 sytxer jmp SNERR   ;print syntax error
@@ -8504,27 +8514,30 @@ xf45c lda RIDBE ;index to end of receive buffer
 ;--------------
 ;perform POKE in specified range
 pokee
+ ldy #0
+;operation 5 treats addr1 and addr2 as from/to addresses for copy
+ lda $fd      ;poke type 0=set,1=and,2=or,3=eor,4=rasterand,5=copy
+ cmp #5       ;copy operation uses a much different process
+ beq cpypoke
 ;make sure start is less than or equal to end
  lda LINNUM
  sec
  sbc $fb
  lda LINNUM+1
  sbc $fc
- bcs okpoke ;start is less than end
+ bcs poker ;start is less than end
 ;swap start and end
  lda LINNUM
- ldy $fb
+ ldx $fb
  sta $fb
- sty LINNUM
+ stx LINNUM
  lda LINNUM+1
- ldy $fc
+ ldx $fc
  sta $fc
- sty LINNUM+1
-okpoke
- ldy #0
+ stx LINNUM+1
 poker
- lda $fe        ;poke value
- ldx $fd        ;poke type 0=set,1=and,2=or,3=eor
+ lda $fe        ;single byte poke value
+ ldx $fd        ;poke type 0=set,1=and,2=or,3=eor,4=rasterand
  beq poke0
  dex
  bne poke2
@@ -8549,13 +8562,8 @@ poke0 sta ($fb),y
  cpx LINNUM
  beq poked
 nxtpg
- lda $fb
- clc
- adc $ff
- sta $fb
- lda $fc
- adc #0
- sta $fc
+ lda COUNT
+ jsr addfb
 chkdone
  lda $fc
  cmp LINNUM+1
@@ -8564,6 +8572,30 @@ chkdone
  cmp $fb
  bcs poker
 poked jmp memnorm
+;operation 5, copy bytes from source to destination address
+cpypoke
+ lda $fe
+ sec            ;decrement num bytes to copy
+ sbc #1
+ sta $fe
+ lda $ff
+ sbc #0
+ bcc poked
+ sta $ff
+ lda ($fb),y    ;get source byte
+ sta (LINNUM),y ;set destination byte
+;advance source and destination pointers
+ lda LINNUM
+ clc
+ adc COUNT      ;step increment
+ sta LINNUM
+ bcc incsrc
+ inc LINNUM+1
+incsrc
+ lda COUNT      ;step increment
+ jsr addfb      ;advance source ptr
+ jmp cpypoke    ;continue copying
+;
 ;--------------
 ;perform HEX$(s$) for 32-bit number
 hexx
@@ -9155,18 +9187,6 @@ nomsb
  lda SP0X,x  ;lobyte for x coord
  rts
 ;
-clrflg lda TXTPTR
- sta $22
- lda TXTPTR+1
- sta $23
- lda VARTAB
- sta $24
- lda VARTAB+1
- sta $25
- ldy #$00
- sty COUNT
- sty XSAV
- rts
 ;*********
 ;prepare for FIND with 65535 as param
 f65535
@@ -9348,5 +9368,17 @@ pntreq lda $22
  cmp $25
 gbhah rts
 ;
-.repeat 36,0  ;filler to complete RAM block
+clrflg lda TXTPTR
+ sta $22
+ lda TXTPTR+1
+ sta $23
+ lda VARTAB
+ sta $24
+ lda VARTAB+1
+ sta $25
+ ldy #$00
+ sty COUNT
+ sty XSAV
+ rts
+;
 .end
