@@ -394,7 +394,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge
-.text "mdbasic 25.11.24"
+.text "mdbasic 25.12.03"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -4929,7 +4929,7 @@ keychk
  bit MDBIRQ     ;is keypump irq already enabled?
  bne nokey      ;yes, use normal decode routine
  ldx #$81       ;standard keyboard matrix decode table $eb81
- tya            ;SHFLAG: 0=none, 1=shift key, 2=logo key, 4=ctrl key
+ ldy SHFLAG     ;0=none, 1=shift key, 2=logo key, 4=ctrl key
  beq stdkey
  dey            ;zero flag set if only shift key pressed
  bne nokey      ;unsupported key combo for function keys
