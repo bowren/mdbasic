@@ -256,6 +256,7 @@ NEXT   = $ad1e ;perform NEXT
 FRMNUM = $ad8a ;evaluate numeric expression and check data type, result in FAC1
 TESTNUM= $ad8d ;test last expression was numeric, if not, type mismatch error
 FRMEVL = $ad9e ;evaluate expression
+PIVAL  = $aea8 ;PI as 5-byte float
 PARCHK = $aef1 ;eval expr inside parentheses
 CHKCLS = $aef7 ;check for and skip closing parentheses
 CHKOPN = $aefa ;check for and skip opening parentheses
@@ -394,7 +395,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge
-.text "mdbasic 25.12.03"
+.text "mdbasic 26.03.11"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -433,7 +434,7 @@ newcmd
 .shift "text"
 .shift "screen"
 .shift "resume"
-.shift "envelope"
+.shift "envlope"
 .shift "wave"
 .shift "voice"
 .shift "pulse"
@@ -592,7 +593,7 @@ funtab
 .rta fnround, trim, mod     ;$f5,$f6,$f7
 .rta ptr, inf, pen          ;$f8,$f9,$fa
 .rta joy, pot, hex          ;$fb,$fc,$fd
-.rta instr, $ae9e           ;$fe,$ff (PI Constant)
+.rta instr, pi              ;$fe,$ff (PI Constant)
 ;
 ;*** error messages ***
 ;To invoke, load x register with error# then jmp ($0300)
@@ -898,7 +899,7 @@ funtok
  pha              ;hibyte for indirect addressing
  lda funtab,y     ;lobyte value of address for function
  pha              ;lobyte for indirect addressing
- rts              ;execute function
+ jmp getchr       ;get next TXTPTR then execute function
 ;
 ;evaluate inline binary, octal or hex value
 ;exponent increment: binary=1, octal=3, hex=4; shifted right = 0,1,2
@@ -923,19 +924,13 @@ nxtdig
 ;non digit, check literal type is hex
  cpx #2        ;hex?
  bne end1      ;if not then stop now
-;ensure valid hex char A to F
- cmp #"a"
- bcc end1      ;bad hex char
- cmp #"f"+1
- bcs end1      ;bad hex char
- sec           ;prepare char A-F for index conversion
  sbc #7        ;'0'=0,'1'=1,...'A'=10,...'F'=15
 digit
  sec
  sbc #"0"
  bmi end1
- cmp facexpo,x
- bcs end1
+ cmp facexpo,x ;did digit value exceed highest value?
+ bcs end1      ;if so stop now otherwise keep going
  tax
  lda FACEXP
  beq zero3
@@ -949,8 +944,8 @@ zero3 txa
 ;
 over jmp OVERR
 
-;clear num work area $5d-$60, FAC1 $61-$68 and FAC2 $69-$6E
-clrfac ldx #11
+;clear num work area, FAC1 and FAC2
+clrfac ldx #$13
  lda #0
 loop sta $5d,x
  dex
@@ -992,7 +987,6 @@ timeclr
 ; T$ = TIME$  get current time as string value
 ; T  = TIME   get current time as float number of seconds since start
 fntime
- jsr getchr   ;advance TXTPTR 1 position and get the char
  dec R6510
  cmp #"$"
  bne time2
@@ -1228,17 +1222,19 @@ getfilnum
  lda LDTND      ;number of open i/o files/index to the end of file tables
  cmp #10        ;limit 10
  bcs filemax
+;save x and y registers
+ stx $61
+ sty $62
 ;determine available file number
- stx LINNUM
- sty LINNUM+1
  ldy #128
 nextf
  dey
  tya
  jsr $f314      ;check if file num is in use
  beq nextf      ;file is in use, try next
- ldx LINNUM
- ldy LINNUM+1
+;restore x and y registers
+ ldx $61
+ ldy $62
  rts
 ;
 ;get and validate the disk device number 8-11, default 8
@@ -1299,9 +1295,9 @@ dumpvars
  jsr vars
  jmp closer+2
 dumplist
- jsr opnprt0
- jsr lstrap
  jsr opget   ;get LIST parameters
+ jsr opnprt0
+ jsr lstrap  ;enable hook into LIST subroutine via error trapping
  jsr $a6c9   ;perform list
  jsr printcr ;print carriage return
  jmp clsmdb
@@ -1376,8 +1372,8 @@ nxtcol
 done4 rts
 ;
 tokopn
- dec R6510
  jsr getfilnum ;get available file number
+ dec R6510
  jsr openrs232
  inc R6510
  bcc done4     ;clear carry indicates success
@@ -2358,7 +2354,7 @@ nxtcls
  jsr chkcomm      ;check for comma, quit if none otherwise skip over it
  jmp gfn          ;process next file number
 clsfiles
- jsr getchr       ;skip over FILES token
+ jsr tokclse      ;ensure RS-232 channel is closed & skip over CLOSE token
 clsall
  ldx LDTND        ;current open file count
  beq closed       ;if no open files then quit
@@ -2369,6 +2365,7 @@ closed
  jmp clscmd       ;set default I/O channel and clear MDBASIC file numbers
 ;
 ;*******************
+;STOP
 ;STOP ON | OFF
 ;STOP KEY ON | OFF
 stop
@@ -2412,6 +2409,7 @@ baderr
 ;*******************
 ; ON ERR GOTO line
 ; ON ERR RESUME NEXT
+; ON ERR OFF
 ; ON KEY OFF
 ; ON KEY GOSUB line
 ; ON i GOTO|GOSUB line1,line2,...
@@ -2525,8 +2523,9 @@ resumenext
 quitrun
  jsr detrap    ;disable error trapping
  jmp READY     ;use normal error routine
+
 ;*******************************************
-; general error trap routine
+; general error trap routine for ON ERR GOTO
 ;*******************************************
 trap
  txa           ;x holds the error num
@@ -2946,7 +2945,7 @@ mcbits
  rts
 ;
 ;*****************
-; COLOR [foreground] [,bgcol0] [,border], [,bgcol1], [,bgcol2], [,bgcol3]
+; COLOR [foreground] [,bgcol0] [,border] [,bgcol1] [,bgcol2] [,bgcol3]
 color
  beq mop6
  cmp #","         ;skip param?
@@ -3457,7 +3456,13 @@ line
  jsr ERRDIR        ;if not in prg mode, illegal direct error
  jsr CHRGET        ;skip over INPUT token and get next non-space char
  beq mop3          ;a param is required
- jsr txtback       ;back up TXTPTR by 1 byte
+;back up TXTPTR by 1 byte
+ ldx TXTPTR
+ bne txtbak
+ dec TXTPTR+1
+txtbak
+ dec TXTPTR
+;check for literal string prompt
  cmp #"""
  bne readline      ;if not quote then perform input without prompt
  jsr getstr        ;string returned in registers y=hibyte, x=lobyte, a=length
@@ -3585,7 +3590,8 @@ okvalu
  rts
 ;
 ;*******************
-; PAINT x,y [,color]
+; PAINT x,y [,color]                     ;use flood fill algorithm
+; PAINT x1,y1 TO x2,y2, plotType, color  ;use rectangle fill algorithm
 paint
  jsr getxy      ;get point1
  jsr CHRGOT
@@ -4356,7 +4362,6 @@ inivoc
 ; I = INSTR(offset,src$,find$)
 ;if first param is numeric then use as offset, otherwise offset=1 (default)
 instr
- jsr CHRGET   ;process next cmd text
  jsr CHKOPN   ;check for and skip opening parentheses
  jsr FRMEVL   ;eval expression
  lda VALTYP   ;check if numeric (offset param) or string (source$ param)
@@ -4414,13 +4419,19 @@ notfound
  jmp CHKCLS   ;check for and skip closing parentheses
 ;
 ;*******************
+; PI function
+pi
+ lda #<PIVAL     ;ptr to the 5-byte float value of PI
+ ldy #>PIVAL
+ jmp MOVFM       ;copy PI value into FAC1
+;
+;*******************
 ; P=PTR(x) or P=PTR(x%) or P=PTR(x$) where x is the variable name
 ptr
- jsr CHRGET
- jsr PARCHK     ;get term inside parentheses
- lda VARPNT     ;pointer to variable
+ jsr PARCHK      ;get term inside parentheses
+ lda VARPNT      ;pointer to variable
  ldy VARPNT+1
- jmp uint2f     ;convert 16-bit unsigned int to float into FAC1
+ jmp uint2f      ;convert 16-bit unsigned int to float into FAC1
 ;
 ;*******************
 ; R = MOD(dividend, divisor)   modulo is the remainder after division
@@ -4437,7 +4448,7 @@ mod
 ;FAC1 = N/D
  lda #<BUF+$54   ;dividend pointer
  ldy #>BUF+$54
- jsr FDIV        ;divide a number in memory by FAC1 pointed to by A (lobyte) Y (hibyte) result in FAC1
+ jsr FDIV        ;divide a number in memory by FAC1
 ;FAC1=TRIM(FAC1)
  jsr trunc       ;truncate fractional portion
 ;FAC1 = FAC1 * divisor
@@ -4451,7 +4462,6 @@ mod
 
 ;get first numeric function param (used by ROUND and MOD)
 getfnp1
- jsr CHRGET
  jsr CHKOPN      ;check for and skip opening parentheses
  jsr FRMNUM      ;get numeric param1 - numerator
 ;save param1 (numerator)
@@ -4500,9 +4510,9 @@ strcpy
 ;
 ; I = TRIM(float)  truncate the fractional portion
 trim
- jsr getchr
  cmp #"$"
  beq trimstr
+getparval
  jsr PARCHK     ;get term inside parentheses
  jsr TESTNUM    ;ensure expression was numeric, error if not
 trunc
@@ -4591,7 +4601,6 @@ xmul10
 ; K = KEY    -get ASCII value, no key = 0
 ; K$ = KEY$  -get string value of length 1, no key has ASC(KEY$)=0
 fnkey
- jsr getchr
  ldy keyentry    ;y=lobyte
  cmp #"$"
  bne nobutt
@@ -4627,13 +4636,10 @@ nofire tay       ;lobyte
 nobutt lda #0    ;hibyte 0
  jmp GIVAYF      ;convert 16-bit signed int in A,Y regs to 5-byte float in FAC1
 ;
-illqty7 jmp FCERR ;display illegal qty error
-;
 ;*******************
 ; EN = ERR    -error number
 ; EL = ERRL   -error line number
 fnerr
- jsr getchr      ;advance TXTPTR one byte
  ldy errnum      ;assume ERR (error number)
  cmp #"l"        ;ERRL?
  bne nobutt      ;return error number
@@ -4641,6 +4647,8 @@ fnerr
  lda errline     ;return error line number
  ldy errline+1
  jmp uint2f      ;convert 16-bit unsigned int to float into FAC1
+;
+illqty7 jmp FCERR ;display illegal qty error
 ;
 ;*******************
 ; P = PEN(n) where n: 0=button state, 1=x-coordinate, 2=y-coordinate
@@ -4690,11 +4698,12 @@ pendone          ;return 2-byte int value
  jmp GIVAYF      ;convert binary int to FAC then return
 ;
 ;*******************
-; V = INF(n) where n = 0 to 67 to select info
+; V = INF(n) where n = 0 to 69 to select info
 inf
  jsr getfnparam
- cmp #68
- bcs illqty7
+ cmp #70
+ beq smode
+qtyill7 bcs illqty7
  dec R6510
  jsr inff
  inc R6510
@@ -4708,7 +4717,36 @@ uint2fl
  ldx #$90        ;FAC1 exponent
  sec             ;flag for unsinged int
  jmp $bc49       ;convert 2-byte int in FAC1 to float
-;
+
+;get current MDBASIC screen mode (0-5)
+;--+----------------+---------------+------------------+-----------------
+;# | MODE           | SCROLX (bit4) | SCROLY (bit6,5,4)| STATEMENT      |
+;--+----------------+---------------+------------------+-----------------
+;0 | standard text  |    0          | 00 1             | SCREEN [0-4],0 |
+;1 | hires bitmap   |    0          | 01 1             | SCREEN 5,0     |
+;2 | extbgcol text  |    0          | 10 1             | SCREEN [0-4],2 |
+;3 | off (blank)    |    x          | xx 0             | SCREEN OFF     |
+;4 | mc text        |    1          | 00 1             | SCREEN [0-4],1 |
+;5 | mc bitmap      |    1          | 01 1             | SCREEN 5,1     |
+;--+----------------+---------------+------------------+-----------------
+smode
+ lda SCROLY      ;ext bkgnd color mode, bitmap mode, screen on/off
+ and #%01110000  ;bits 6,5,4
+ lsr             ;bits 5,4,3
+ lsr             ;bits 4,3,2
+ lsr             ;bits 3,2,1
+ sta XSAV
+ lda SCROLX
+ and #%00010000  ;include multicolor mode flag
+ ora XSAV        ;bits 4,3,2,1
+ lsr             ;bits 3,2,1,0
+ lsr             ;bits 2,1,0,c
+ bcs notblank
+ lda #3          ;mode 3 (off)
+notblank
+ ldy #0          ;hibyte result
+ beq uint2f      ;always branches
+
 ;*******************
 ; P = POT(n) where n=potentiometer number (1-4)
 ;labeled "Port 1" (pots 1 and 2) buttons on CIA #1 Data Port B
@@ -4719,7 +4757,7 @@ pot
  stx $62         ;save pot num for later
  dex             ;convert to pot index 0 to 3
  cpx #4          ;valid pot nums are 1 to 4
- bcs illqty7     ;valid pot indexes are 0 to 3
+ bcs qtyill7     ;valid pot indexes are 0 to 3
 ;
  cpx #2          ;set carry flag if pot num 3 or 4 (index 2 or 3)
  ldx #%11000000  ;bits 6,7 set to select output for port 1 or 2 paddle read
@@ -4770,7 +4808,7 @@ nobutt2          ;reg y holds the lobyte
 ;*******************
 ;H$ = HEX$(n) where n is a signed 32-bit signed integer
 hex
- jsr trim        ;get fn param as 5-byte float truncated
+ jsr getparval   ;get fn param as 5-byte float truncated
  jsr QINT        ;convert FAC1 into a signed 32-bit int in FAC1
  dec R6510
  jsr hexx
@@ -5126,19 +5164,14 @@ addfb
 fbadd
  rts
 ;
-sytxer jmp SNERR   ;print syntax error
-;
 ;*******************
 ;get parameters for DUMP LIST and DELETE
-opget jsr CHRGET
-opget2 bcc okopge  ;text found (not a token)
- beq okopge        ;end of line found
- cmp #$ab          ;subtract token? (- is a token)
- bne sytxer
-okopge
+opget
+ jsr CHRGET
+opget2
  jsr LINGET        ;convert asci decimal number to a 2-byte binary line number
  jsr FINDLN        ;search for start line number
- jsr CHRGOT        ;get current char on line
+ jsr CHRGOT        ;another param?
  beq linnul
  lda #$ab          ;subtract token? (- is a token)
  jsr CHKCOM+2      ;check for and skip over token, syntax error if not there
@@ -5157,14 +5190,6 @@ getchr ldy #0
  bne ne7a
  inc TXTPTR+1
 ne7a lda (TXTPTR),y
- rts
-;*******************
-txtback
- ldx TXTPTR
- bne txtbak
- dec TXTPTR+1
-txtbak
- dec TXTPTR
  rts
 ;*******************
 comchk
@@ -5252,7 +5277,7 @@ getval
 ;*******************
 ;get an unsigned single byte int parameter enclosed in parenthesis
 getfnparam
- jsr trim           ;get numeric param inside parenthesis and truncate
+ jsr getparval      ;get numeric param inside parenthesis and truncate
  jsr GETBYTC+6      ;convert number in FAC1 to an unsigned single-byte int
  txa                ;also return the result in the accumulator
  rts                ;with processor flags Z and N affected
@@ -5377,7 +5402,7 @@ prtchr and #$7f
 ;* Global Constant Storage
 ;********************************************************************
 ;
-;table for calculating 2^n where n=0-7
+;table for calculating 2^n where n is 0 to 7
 bitweights .byte 1,2,4,8,16,32,64,128
 
 ;table for calculating base 2, 8, 16 literal values
@@ -5589,7 +5614,7 @@ infwords
 .word $ff80     ;Kernal version/system id
 .word playindex ;index of next note to play in play string
 .word playoct   ;current play octave
-.word lastplotx ;last plotted x coordinate
+.word SPMC      ;8 bit flags for sprite color mode
 .word lastploty ;last plotted y coordinate
 
 ascctrl
@@ -6537,7 +6562,7 @@ circel
  lda SCROLX
  and #%00010000
  beq hirez
- asl $be  ;doule x-radius size for mc mode
+ asl $be  ;double x-radius size for mc mode
 hirez
  sta $29  ;0=hires mode, 1=multicolor mode
 ;
@@ -6558,7 +6583,7 @@ hirez
 ;
  lda $be    ;x radius size
  asl        ;diameter = 2*radius
- sta INPFLG ;x diameter lobyte
+ sta $11    ;x diameter lobyte
  sta $57
  sta $50
  lda #0
@@ -6574,10 +6599,7 @@ hirez
  rol
  sta LINNUM+1 ;y diameter hibyte
 ;
- lda #2
- ldx #3
- ldy #1
- jsr curve
+ jsr curve23
  ldx #2
 tb6tc4 lda $59,x
  sta $22,x
@@ -6590,8 +6612,7 @@ tb6tc4 lda $59,x
  sta $57
  sta $50
  lda #2
- ldx #2
- ldy #1
+ tax
  jsr curve
  lda $5a
  sta $0f
@@ -6600,15 +6621,15 @@ tb6tc4 lda $59,x
  ldx #0
  stx $65
  lda LINNUM+1 ;y diameter hibyte
- cmp $12    ;x diameter hibyte
+ cmp $12      ;x diameter hibyte
  bne cbne
- lda LINNUM ;y diameter lobyte
- cmp INPFLG ;x diameter lobyte
+ lda LINNUM   ;y diameter lobyte
+ cmp $11      ;x diameter lobyte
  bne cbne
  ldy LINNUM+1
  bne csca
- cmp #2     ;x & y diameter is 2?
- beq jloops ;special case, no looping needed
+ cmp #2       ;x & y diameter is 2?
+ beq jloops   ;special case, no looping needed
 cbne bcs csca
  inc $65
 csca
@@ -6620,7 +6641,7 @@ csca
 jloops jmp loops
 ce00 jsr loops
  inc $66
-tfb2b2 lda INPFLG
+tfb2b2 lda $11
  sta $fb
  sta $57
  lda $12
@@ -6635,7 +6656,6 @@ tfb2b2 lda INPFLG
  sta $50
  lda #2
  ldx #4
- ldy #1
  jsr curve
  ldx #3
 tb6td8 lda $59,x
@@ -6702,9 +6722,7 @@ tc4taf lda $22,x
  dex
  bpl tc4taf
  lda #3
- ldx #3
- ldy #1
- jsr curve
+ jsr curve3
  ldx #0
  ldy #3
  clc
@@ -6725,10 +6743,7 @@ dpcsym
  sta $51
  lda $0e
  sta $50
- lda #2
- ldx #3
- ldy #1
- jsr curve
+ jsr curve23
  lda $28
  bne ne2db
  ldx #2
@@ -6776,7 +6791,6 @@ tc4af lda $22,x
  bpl tc4af
  lda #3
  ldx #4
- ldy #1
  jsr curve
  lda $5c
  bne ne2b9
@@ -6810,17 +6824,23 @@ ne2cf lda $6d
  cmp #3
  bcs fd512a
  rts
-curve stx $5e
+;
+curve23
+ lda #2
+curve3
+ ldx #3
+curve
+ stx $5e
  sta $5d
  lda #0
  dex
 f2b600 sta $59,x
  dex
  bpl f2b600
- sty $5f
+ ldx #1
+ stx $5f
  lda #$80
  sta $60
- ldx $5f
 cc2bd and $57,x
  bne bdb2ne
  lsr $60
@@ -6866,7 +6886,9 @@ x2bb inx
  inc $59,x
  beq x2bb
  bne lsr2bd
-drwcir jsr tfb2d4
+;
+drwcir
+ jsr tfb2d4
  lda $fb
  clc
  adc $61
@@ -6978,7 +7000,6 @@ c4af lda $22,x
  bpl c4af
  lda #3
  ldx #4
- ldy #1
  jsr curve
  ldx #3
 b6d8 lda $59,x
@@ -7037,10 +7058,7 @@ loops2
  sta $51
  lda $0e
  sta $50
- lda #2
- ldx #3
- ldy #1
- jsr curve
+ jsr curve23
  ldx #0
  ldy #3
  clc
@@ -7063,7 +7081,6 @@ c4af2 lda $22,x
  bpl c4af2
  lda #3
  ldx #4
- ldy #1
  jsr curve
  ldx #3
 cd8b6 lda $25,x
@@ -7105,10 +7122,7 @@ x59 lda $59,x
  sta $51
  lda $0e
  sta $50
- lda #2
- ldx #3
- ldy #1
- jsr curve
+ jsr curve23
  lda $6c
  beq zero6c
 loopy
@@ -7626,16 +7640,12 @@ s1fbfc dec $fb
  jsr CHROUT
  lda $61
  bpl posnum
- jmp nxtbit
-posnum lda $fb
- clc
- adc #8
- sta $fb
- bcc tcic
- inc $fc
-tcic dec $fe
- beq aldone
- jmp nxtbit
+nbit jmp nxtbit
+posnum
+ lda #8
+ jsr addfb
+ dec $fe
+ bne nbit
 aldone
  jsr screenon    ;turn screen back on
 ;restore printer to 1/6 inch line using control codes for ESC/P printers
@@ -8031,7 +8041,7 @@ digitdone
  lda temp1
  rts            ;result returned in accumulator
 
-;returns char in A reg; zero-flag set indicate no more notes
+;returns char in A reg; zero-flag set indicates no more notes
 noteget
  inc playindex
  beq nonote
@@ -9073,27 +9083,6 @@ iodone
  lda $61
 iodone1 rts
 ;
-getdot
- jsr getpoint   ;put last plot coordinates in x = $fb,$fc and y = $fd
- jsr ydiv8
- lda R6510
- pha
- and #%11111100 ;switch out Kernal for RAM at $e000-$ffff
- sei            ;disable IRQ since kernal is unavailable
- sta R6510      ;apply mem block selection
- lda ($c3),y
- tay
- pla
- sta R6510
- cli
- tya
- and ptab2,x    ;only desired bits, multicolor uses 2
- beq rtndot     ;pixel not set
- lda #1         ;pixel set
-rtndot
- ldy #0
- rts
-;
 inff
 ;process INF parameter in accumulator
  tax
@@ -9102,8 +9091,8 @@ inff
  bcc useinfbytes
  beq csraddr
  cmp #20
- beq getdot
- bcs membank
+ beq lastx
+ bcs getdot
  sec
  sbc #11        ;first infoword index
  asl            ;double byte ptr index
@@ -9131,14 +9120,38 @@ goodinf1 sta $64
  ldy #0         ;hibyte
  lda ($64),y    ;lobyte
  rts
-membank
+;
+;last plot X coordinate, INF 20
+lastx
+ lda lastplotx
+ ldy lastplotx+1
+ rts
+;
+;last plotted dot state, INF 21
+getdot
  cmp #22
  bcs fstart
- lda CI2PRA
- and #%00000011
- eor #%00000011
+ jsr getpoint   ;put last plot coordinates in x = $fb,$fc and y = $fd
+ jsr ydiv8
+ lda R6510
+ pha
+ and #%11111100 ;switch out Kernal for RAM at $e000-$ffff
+ sei            ;disable IRQ since kernal is unavailable
+ sta R6510      ;apply mem block selection
+ lda ($c3),y
+ tay
+ pla
+ sta R6510
+ cli
+ tya
+ and ptab2,x    ;only desired bits, multicolor uses 2
+ beq rtndot     ;pixel not set
+ lda #1         ;pixel set
+rtndot
  ldy #0
  rts
+
+;double byte values from zero-page addresses, INF 22-23
 fstart
  cmp #23
  beq fend
@@ -9150,6 +9163,8 @@ fend
  lda EAL     ;last load end address
  ldy EAL+1
  rts
+
+;double byte values indexed consecutively INF 24-36
 infptrs
  sbc #24
  cmp #13
@@ -9159,6 +9174,8 @@ infptrs
  lda TXTTAB,x
  ldy TXTTAB+1,x
  rts
+
+;color info INF 37-51
 infcolor
  sbc #13
  cmp #15
@@ -9169,8 +9186,13 @@ infcolor
 goinf
  ldy #0
  rts
+
+;sprite coordinates INF 52-67
 spritexy
  sbc #15
+ cmp #16
+ beq membank
+ bcs spage
  tax         ;register offset (0-15)
  lsr         ;odd or even index check
  bcc xcoord  ;even is x coordinate
@@ -9187,6 +9209,35 @@ nomsb
  lda SP0X,x  ;lobyte for x coord
  rts
 ;
+;current MDBASIC screen page 0-5, INF 69
+;if SCROLY bit5 = 1 then 5
+;else if HIBASE = 4 then 0
+;else ((HIBASE AND 12)/4)+1
+spage
+ ldy #0          ;hibyte always 0
+ lda #%00100000  ;bit5 is bitmap mode: 0=off, 1=on
+ bit SCROLY      ;bitmap mode on?
+ bne bitpg       ;yes, use page 5
+ lda HIBASE      ;page0=$04, page1=$c0, page2=$c4, page3=$c8, page4=$cc
+ bpl txtpg
+ and #%00001100
+ lsr
+ lsr
+ adc #1
+ rts
+bitpg lda #5
+ rts
+txtpg lda #0
+ rts
+
+;current VIC-II 16KB addressable memory bank, INF 68
+membank
+ lda CI2PRA
+ and #%00000011
+ eor #%00000011
+ ldy #0
+ rts
+
 ;*********
 ;prepare for FIND with 65535 as param
 f65535
@@ -9380,5 +9431,7 @@ clrflg lda TXTPTR
  sty COUNT
  sty XSAV
  rts
+;
+.repeat 4,0 ;filler to complete RAM page
 ;
 .end
