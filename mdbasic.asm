@@ -2000,7 +2000,7 @@ new beq oldnew
  jmp ($fffc)
 oldnew jmp SCRTCH
 ;
-;;*******************
+;*******************
 ; OLD takes no params
 old
  lda TXTTAB+1   ;hibyte of the beginning of BASIC prg text is used to
@@ -2522,7 +2522,7 @@ resumenext
 ;
 quitrun
  jsr detrap    ;disable error trapping
- jmp READY     ;use normal error routine
+ jmp READY     ;display READY then enter immediate mode
 
 ;*******************************************
 ; general error trap routine for ON ERR GOTO
@@ -2986,8 +2986,7 @@ illq jmp FCERR    ;illegal quantity error
 mop6 jmp missop   ;missing operand error
 ;*****************
 setpage
- lda SCROLY
- bpl setpage
+ jsr rwait      ;wait for raster off screen
  cpx #5
  bne page4
 ;page 5, turn on bitmap graphics mode
@@ -2999,9 +2998,7 @@ setpage
 nobmclr
  lda #8         ;bitmap uses page 3 at $c800
  jsr pagee
-rwait
- lda SCROLY
- bpl rwait
+ jsr rwait      ;wait for raster off screen
  and #%10111111 ;bit#6=0, ext bkgrd color mode off (not compatable)
  ora #%00100000 ;bit#5=1, bitmap mode on
  sta SCROLY     ;apply setting to control register
@@ -3022,16 +3019,15 @@ page4
 ;clear if requested
 chkclr
  sta HIBASE
- ldy $fb
- beq chkclrd
- pha
- jsr CLS
-rwait2
+ lda $fb
+ beq setlinptr
+ jsr CLS        ;clear screen and set cursor ptr
+rwait
  lda SCROLY
- bpl rwait2
- pla
-chkclrd
+ bpl rwait
  rts
+setlinptr
+ jmp $e56c      ;set cursor ptr to current screen line
 ;pages 1-4
 page
  txa            ;valid page index 0 to 3
@@ -3039,9 +3035,10 @@ page
  asl            ;each page is 4 blocks of 256 bytes (1K)
  asl            ;video matrix base is at $c000
 pagee
- ora #%11000000 ;page 0=$c0, 1=$c4, 2=$c8, 3=$cc
- jsr chkclr     ;clear if requested
+ ora #%11000000 ;page index 0=$c0, 1=$c4, 2=$c8, 3=$cc
+ jsr chkclr     ;clear screen if requested
 ;set video matrix and char dot data address offsets
+ lda HIBASE
  asl            ;discard bits 6,7
  asl            ;while moving bits 2,3 to positions 4,5
                 ;bits 4-7 video matrix offset (4*page*1K)
@@ -3799,7 +3796,8 @@ colmode
  jmp setsclx
 mode2            ;ext bkgrd color mode
  lda SCROLY
- and #%11011111  ;bit5=0 to disable bitmap mode (not compatible)
+ bit bitweights+5 ;bitmap mode is not compatible with ext bgcol mode
+ bne illqty3
  ora #%01000000  ;bit6=1 to enable extended background color text mode
  sta SCROLY
 mode0            ;standard color mode
@@ -4718,7 +4716,7 @@ uint2fl
  sec             ;flag for unsinged int
  jmp $bc49       ;convert 2-byte int in FAC1 to float
 
-;get current MDBASIC screen mode (0-5)
+;get current C64 screen mode (0-5)
 ;--+----------------+---------------+------------------+-----------------
 ;# | MODE           | SCROLX (bit4) | SCROLY (bit6,5,4)| STATEMENT      |
 ;--+----------------+---------------+------------------+-----------------
