@@ -395,7 +395,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge
-.text "mdbasic 26.03.11"
+.text "mdbasic 26.04.03"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -434,7 +434,7 @@ newcmd
 .shift "text"
 .shift "screen"
 .shift "resume"
-.shift "envlope"
+.shift "envelope"
 .shift "wave"
 .shift "voice"
 .shift "pulse"
