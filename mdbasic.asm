@@ -395,7 +395,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge
-.text "mdbasic 26.04.03"
+.text "mdbasic 26.05.24"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -920,6 +920,7 @@ nxtdig
  tax           ;to check max+1 digit value 2,8,16
 ;
  jsr CHRGET    ;get next literal digit char
+ beq end1
  bcc digit     ;carry clear when numeral 0-9
 ;non digit, check literal type is hex
  cpx #2        ;hex?
