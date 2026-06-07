@@ -395,7 +395,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge
-.text "mdbasic 26.05.24"
+.text "mdbasic 26.06.07"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -635,9 +635,10 @@ ilvne  .shift "illegal voice number"  ;32
 illspr .shift "illegal sprite number" ;33
 ilcoor .shift "illegal coordinate"    ;34
 cantre .shift "resume without err"    ;35
-usrerr .shift "user defined"          ;36 to 127 and 0
+stkovr .shift "stack overflow"        ;36
+usrerr .shift "user defined"          ;37 to 127 and 0
 ;
-erradd .word misop, ilvne, illspr, ilcoor, cantre, usrerr
+erradd .word misop, ilvne, illspr, ilcoor, cantre, stkovr, usrerr
 ;
 ;Program Tokenization process - text to tokens via vector ICRNCH ($0304)
 ;
@@ -761,6 +762,9 @@ xcmd jsr tstcmd
  beq nocmd     ;key trapping is off
  dey
  bne nocmd     ;key trapping is paused
+ ldy CURLIN+1  ;when current line num hibyte is $FF (invalid) then immed mode
+ iny           ;if y goes to 0 then immediate mode
+ beq nocmd     ;otherwise program mode
  lda NDX       ;num chars in keyboard buffer
  beq nocmd
  sei
@@ -1687,7 +1691,6 @@ badauto
 ;* MDBASIC immediate mode input via vector IMAIN ($0302) *
 ;*********************************************************
 immed
- jsr detrap     ;ensure error trapping is off
 ;if screen is off or in bitmap mode then switch to normal text
  lda SCROLY
  eor #%00010000
@@ -2206,7 +2209,7 @@ gopoke
 ;*******************
 ; ERR CLR    :clear last error data
 ; ERR OFF    :turn off error trapping
-; ERR errnum :raise error (1-35)
+; ERR errnum :raise error (0-127)
 error
  cmp #TOKEN_CLR
  beq errclr
@@ -2231,6 +2234,7 @@ raiseerr
  bmi baderr2   ;128 and over is invalid
  jmp (IERROR)
 ;
+
 baderr2 jmp FCERR   ;ILLEGAL QUANTITY
 ;
 ;*******************
@@ -2452,21 +2456,26 @@ onerres
  jsr CHRGET
  cmp #TOKEN_NEXT
  bne baderr
- ldx #<resumenext  ;apply ON ERR RESUME NEXT
- ldy #>resumenext  ;so that all errors will be ignored
- jsr seterrvec     ;and failed statement are skipped
+ lda #$ff      ;apply ON ERR RESUME NEXT
+ sta errhdl    ;so that all errors will be ignored
  jmp CHRGET
 errgoto
  jsr getline
- stx TMPERRP       ;of the line# specified
+ stx TMPERRP   ;of the line# specified
  sty TMPERRP+1
  lda LINNUM
  sta errtrap
  lda LINNUM+1
  sta errtrap+1
-entrap         ;enable error trapping
- ldx #<trap
- ldy #>trap
+entrap
+ lda #1        ;custom error handler
+.byte $2c      ;defeat lda #0
+;use standard error handler
+detrap
+ lda #0        ;standard error handler
+ sta errhdl
+ ldx #<errors
+ ldy #>errors
  bne seterrvec ;hibyte of vector will always be non-zero
 lstrap
  ldx IERROR
@@ -2479,10 +2488,6 @@ lstrap
 retrap
  ldx TMPERR
  ldy TMPERR+1
- bne seterrvec
-detrap         ;disable error trapping
- ldx #<errors
- ldy #>errors
 seterrvec
  stx IERROR
  sty IERROR+1
@@ -2504,38 +2509,40 @@ dec5f2 dex
 undef
  jmp UNDEFST   ;UNDEF'D STATEMENT
 
-;*******************************************
-; error trap routine for ON ERR RESUME NEXT
-;*******************************************
-resumenext
+;*******************************************************
+;* MDBASIC ERROR HANDLER SUBROUTINES
+;* BASIC Error Handler Routine via vector IERROR ($0300)
+;*******************************************************
+errors
  txa
- bmi quitrun
- ldy CURLIN+1  ;when current line num hibyte is $FF (invalid)
- iny           ;then immediate mode
- beq quitrun
- stx errnum    ;update last error number
- lda CURLIN+1  ;update last BASIC line# causing error
- sta errline+1
+ bmi quitrun   ;bit 7 off means error condition
+;clear temp string stack
+ ldx #$19      ;25=empty temp string index value
+ stx $16       ;reset TEMPPT temp string stack
+ ldx #0        ;0=normal var else var is array or user FN
+ stx $10       ;reset SUBFLG subscript flag
+;check for stack overflow
+ cmp #$10      ;out of memory?
+ bne okerr
+ tsx
+ cpx #$41      ;stack overflow?
+ bcs okerr
+ ldx #$fa      ;top of stack
+ txs           ;reset stack
+ lda #36       ;STACK OVERFLOW ERROR
+okerr
+;capture error number and line
+ sta errnum    ;set current error number
  lda CURLIN
- sta errline
- jsr DATA      ;scan for start of next BASIC stmt
- jmp nxtstmt
-;
-quitrun
- jsr detrap    ;disable error trapping
- jmp READY     ;display READY then enter immediate mode
-
-;*******************************************
-; general error trap routine for ON ERR GOTO
-;*******************************************
+ ldy CURLIN+1
+ jsr seterrln
+;determine error handler
+ ldx errhdl    ;type of handler
+ beq err0      ;$00 = standard error handler (default, ERR OFF)
+ dex           ;$01 = use custom error handler (ON ERR GOTO)
+ bne resnxt    ;$ff = ignore all errors (ON ERR RESUME NEXT)
+;standard error trapping
 trap
- txa           ;x holds the error num
- bmi quitrun   ;bit7, 0=error, 1=switch to immediate mode
- ldy CURLIN+1  ;when current line num hibyte is $FF (invalid)
- iny           ;then immediate mode
- beq quitrun
- stx errnum    ;set current error number
- jsr detrap    ;disable error trapping
  lda #3        ;3 plus the 2 for this jsr is 5 bytes
  jsr GETSTK    ;ensure space on stack, out of mem err if not
  lda OLDTXT+1  ;save the BASIC text ptr
@@ -2543,10 +2550,8 @@ trap
  lda OLDTXT    ;that caused the error
  pha           ;and save the BASIC
  lda CURLIN+1  ;line# for resume
- sta errline+1
  pha
  lda CURLIN
- sta errline
  pha
  lda #TOKEN_ERR
  pha
@@ -2557,6 +2562,75 @@ trap
  lda errtrap
  ldy errtrap+1
  jmp setline
+
+;perform resume next
+resnxt
+ jsr DATA      ;scan for start of next BASIC stmt
+ jmp nxtstmt   ;exec next statement
+
+quitrun
+ jsr detrap    ;disable error trapping
+ jmp READY     ;display READY then enter immediate mode
+
+;no error trapping
+err0
+ ldx #$fa
+ txs
+ jsr clsmdb   ;close mdb file handles and set default I/O channels
+ jsr norm     ;set text mode normal display and ensure BASIC ROM enabled
+ ldy CURLIN+1 ;when current line num hibyte is $FF (invalid) then immed mode
+ iny          ;if y goes to 0 then immediate mode
+ bne prgmode  ;otherwise program mode
+ dey          ;put y back to $ff
+ sty errline  ;ensure ERRL variable returns 65535
+ lda #13      ;cr
+.byte $2c     ;defeat lda #147 by making it BIT $93A9
+prgmode
+ lda #147     ;clr screen
+ jsr CHROUT
+ lda #$80     ;only control messages - SEARCHING, SAVING, FOUND, etc.
+ jsr SETMSG
+ jsr $ab45    ;print question mark
+ lda errnum   ;current error num
+ beq usererr  ;user defined error numbers
+ cmp #37      ;are 0, 37-127
+ bcc erridx   ;CBM BASIC error numbers 1-31
+usererr
+ lda #37      ;all user defined errors use same message
+erridx asl    ;calc 2-byte index to message
+ tax
+ sec
+ sbc #62
+ bcc cbmerr   ;CBM errors 1-30 (index 2-60)
+ tax
+ lda erradd,x ;MDBASIC errors 31-36
+ ldy erradd+1,x
+ bne hibyer   ;always branches since hi-byte would not be 0
+cbmerr
+ lda $a326,x  ;$A328-$A364 Error Message Vector Table
+ ldy $a327,x
+hibyer
+ jsr printstr
+ lda #$69     ;address of the zero-terminated string ($a369) = "  ERROR"
+ ldy #$a3
+ jsr STROUT   ;print str whose addr is in y reg (hibyte) and a reg (lobyte)
+ ldy CURLIN+1 ;hibyte of line number where error occured
+ iny          ;a value of $ff indicates immediate mode
+ beq quitrun  ;otherwise program mode
+ jsr INPRT    ;display text IN {line#}
+ lda CURLIN   ;put the current BASIC line number
+ sta LINNUM   ;where FINDLN expect to see it
+ lda CURLIN+1
+ sta LINNUM+1
+ jsr FINDLN   ;set position to line num causing error
+ jsr printcr
+ jsr lstrap
+ jsr $a6c9    ;perform LIST line#
+ ldx #$02     ;place cursor on first digit of line number
+ ldy #$00     ;which would be line 2 column 0
+ clc
+ jsr PLOT
+ jmp (IMAIN)  ;main BASIC loop
 ;
 ;perform RESUME - with statement that caused the error
 resum
@@ -2569,7 +2643,8 @@ resum
  sta TXTPTR
  pla
  sta TXTPTR+1
- bne nxtstmt0 ;should always branch if valid hibyte
+ jmp nxtstmt0 ;should always branch if valid hibyte
+;
 noresum
  jsr detrap
  ldx #35      ;RESUME WITHOUT ERRROR
@@ -2640,18 +2715,14 @@ pullit
  pla
 pullit2
  tsx
- cpx #$ff
- beq stoppull
+ cpx #$fb     ;top of stack?
+ bcs stoppull ;equal or greater
  cmp #<xcmd+2 ;is the point where last command was executed
  bne pullit   ;in the main MDBASIC loop via jsr tstcmd
  pla          ;keep going till 2-byte ptr is found
  cmp #>xcmd+2
  bne pullit2
 stoppull
- lda #$19     ;25=empty temp string index value
- sta $16      ;reset temp string stack
- lda #0       ;clear SUBFLG, 0=normal var else var is array or user FN
- sta $10
  jmp (IGONE)  ;read and execute the next statement
 _a807 cmp #$3a
  beq pullit
@@ -4883,76 +4954,6 @@ brkirq
  inc R6510       ;LORAM signal select ROM (BASIC)
  jmp $e39d       ;init stack ptr then enter main basic loop
 ;
-;*******************************************************
-;* MDBASIC ERROR HANDLER
-;* BASIC Error Handler Routine via vector IERROR ($0300)
-;*******************************************************
-errors
- txa
- bpl doerr    ;bit 7 off means error condition
-redy
- jmp READY    ;print READY. then continue with BASIC main loop
-doerr
- sta errnum   ;set current error number
- jsr $a67a    ;empty system and temp string stacks
- jsr clsmdb   ;close mdb file handles and set default I/O channels
- jsr norm     ;set text mode normal display and ensure BASIC ROM enabled
- lda CURLIN
- ldy CURLIN+1 ;when current line num hibyte is $FF (invalid) then immed mode
- jsr seterrln ;immediate mode returns 65535 as error line number
- iny          ;if y goes to 0 then immediate mode
- bne prgmode  ;otherwise program mode
- dey          ;put y back to $ff
- sty errline  ;ensure ERRL variable returns 65535
- lda #13      ;cr
-.byte $2c     ;defeat lda #147 by making it BIT $93A9
-prgmode
- lda #147     ;clr screen
- jsr CHROUT
- lda #$80     ;only control messages - SEARCHING, SAVING, FOUND, etc.
- jsr SETMSG
- jsr $ab45    ;print question mark
- lda errnum   ;current error num
- beq usererr  ;user defined error numbers
- cmp #36      ;are 0, 35-127
- bcc erridx   ;CBM BASIC error numbers 1-31
-usererr
- lda #36      ;all user defined errors use same message
-erridx asl    ;calc 2-byte index to message
- tax
- sec
- sbc #62
- bcc cbmerr   ;CBM errors 1-30 (index 2-60)
- tax
- lda erradd,x ;MDBASIC errors 31-35
- ldy erradd+1,x
- bne hibyer   ;always branches since hi-byte would not be 0
-cbmerr
- lda $a326,x  ;$A328-$A364 Error Message Vector Table
- ldy $a327,x
-hibyer
- jsr printstr
- lda #$69     ;address of the zero-terminated string ($a369) = "  ERROR"
- ldy #$a3
- jsr STROUT   ;print str whose addr is in y reg (hibyte) and a reg (lobyte)
- ldy CURLIN+1 ;hibyte of line number where error occured
- iny          ;a value of $ff indicates immediate mode
- beq redy     ;otherwise program mode
- jsr INPRT    ;display text IN {line#}
- lda CURLIN   ;put the current BASIC line number
- sta LINNUM   ;where FINDLN expect to see it
- lda CURLIN+1
- sta LINNUM+1
- jsr FINDLN   ;set position to line num causing error
- jsr printcr
- jsr lstrap
- jsr $a6c9    ;perform LIST line#
- ldx #$02     ;place cursor on first digit of line number
- ldy #$00     ;which would be line 2 column 0
- clc
- jsr PLOT
- jmp (IMAIN)  ;main BASIC loop
-;
 ;*********************************************************
 ; Keyboard Table Setup Routine via vector KEYLOG ($028F)
 ; IRQ driven key decode overriden to support function keys
@@ -5434,6 +5435,7 @@ neg30 .byte $85,$f0,$00,$00,$00 ;FAC binary represenation of -30
 
 autonum    .word 10     ;last auto line numbering increment
 autoflag   .byte 0      ;auto line numbering flag: 0=off, 1=on
+errhdl     .byte 0      ;error handler: 0=standard, 1=custom, 255=ignore all
 
 stopflg    .byte 0      ;0 = STOP enabled, otherwise disabled
 
