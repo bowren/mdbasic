@@ -1,6 +1,6 @@
 ; ***MDBASIC***
 ; by Mark D Bowren
-; (c)1985-2025 Bowren Consulting, Inc. (www.bowren.com)
+; (c)1985-2026 Bowren Consulting, Inc. (www.bowren.com)
 ;
 ;zero-page registers
 R6510  = $01 ;LORAM/HIRAM/CHAREN RAM/ROM selection and cassette control reg
@@ -395,7 +395,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge
-.text "mdbasic 26.06.07"
+.text "mdbasic 26.06.10"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -2524,24 +2524,23 @@ errors
 ;check for stack overflow
  cmp #$10      ;out of memory?
  bne okerr
- tsx
+ tsx           ;get stack pointer
  cpx #$41      ;stack overflow?
- bcs okerr
- ldx #$fa      ;top of stack
- txs           ;reset stack
- lda #36       ;STACK OVERFLOW ERROR
+ bcs okerr     ;no, then OUT OF MEMORY ERROR
+ ldx #$fa      ;yes, then init stack pointer
+ txs           ;apply new stack pointer
+ lda #36       ;change err num to STACK OVERFLOW ERROR
 okerr
 ;capture error number and line
  sta errnum    ;set current error number
  lda CURLIN
  ldy CURLIN+1
- jsr seterrln
+ jsr seterrln  ;set current error line number
 ;determine error handler
- ldx errhdl    ;type of handler
- beq err0      ;$00 = standard error handler (default, ERR OFF)
- dex           ;$01 = use custom error handler (ON ERR GOTO)
- bne resnxt    ;$ff = ignore all errors (ON ERR RESUME NEXT)
-;standard error trapping
+ ldx errhdl    ;type of error handler
+ beq err0      ;$00 = standard error handler (default, ERR OFF
+ bmi resnxt    ;$ff = ignore all errors (ON ERR RESUME NEXT)
+;$01 = use custom error handler (ON ERR GOTO)
 trap
  lda #3        ;3 plus the 2 for this jsr is 5 bytes
  jsr GETSTK    ;ensure space on stack, out of mem err if not
@@ -2572,7 +2571,7 @@ quitrun
  jsr detrap    ;disable error trapping
  jmp READY     ;display READY then enter immediate mode
 
-;no error trapping
+;standard error handler (no error trapping)
 err0
  ldx #$fa
  txs
@@ -4512,6 +4511,7 @@ mod
  jsr FRMNUM      ;get numeric param2 called the divisor or modulus
  jsr CHKCLS      ;check for and skip closing parentheses
 ;save param2 (divisor)
+ jsr ROUND       ;adjust rounding byte if needed
  ldx #<BUF+$4f
  ldy #>BUF+$4f
  jsr MOV2F+16    ;copy a 5-byte floating point number from FAC1 to memory
@@ -4535,6 +4535,7 @@ getfnp1
  jsr CHKOPN      ;check for and skip opening parentheses
  jsr FRMNUM      ;get numeric param1 - numerator
 ;save param1 (numerator)
+ jsr ROUND       ;adjust rounding byte if needed
  ldx #<BUF+$54
  ldy #>BUF+$54
  jmp MOV2F+16    ;copy a 5-byte floating point number from FAC1 to memory
@@ -4597,9 +4598,7 @@ doround
  lda FACSGN     ;FAC1 sign byte
  pha            ;save sign byte
  lsr FACSGN     ;ensure positive number
- jsr $b96f      ;increment FAC1 mantissa
  jsr FADDH      ;add .5 to value in FAC1
- jsr ROUND      ;adjust rounding byte
 trunca
  jsr INT        ;convert FAC1 value to its lowest integer value (floor)
 signit
@@ -7868,7 +7867,7 @@ nextn
  beq wrdidx
  clc            ;adjust note index for PAL
  adc #15        ;to use regvals for 50Hz clock
-wrdidx asl      ;convert node index to word index
+wrdidx asl      ;convert note index to word index
  tax
  jsr noteget
  beq regnote
