@@ -395,7 +395,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge
-.text "mdbasic 26.06.10"
+.text "mdbasic 26.06.12"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -5358,7 +5358,7 @@ rom1 inc R6510   ;switch in BASIC ROM (a000-bfff)
  jsr GIVAYF      ;convert 16-bit signed int to float (a=hibyte y=lobyte)
  jmp prtnum
 rom2 inc R6510   ;switch in BASIC ROM (a000-bfff)
- jsr MOVFM       ;move a float from memory to fac1
+ jsr MOVFM       ;copy a float from memory into FAC1
 prtnum jsr FOUT  ;convert FAC1 to ascii with str ptr in a,y registers
  jsr STROUT      ;print string ptr (a=lobyte y=hibyte)
  dec R6510       ;switch out BASIC ROM for RAM (a000-bfff)
@@ -5422,10 +5422,10 @@ palb  .byte $85,$08,$3a,$2e,$54 ;17.02840868
 
 ;Constants for PULSE width% conversion to regval
 ;REGVAL=40.95*width%
-m4095 .byte $86,$23,$cc,$cc,$cc ;FAC binary representation of 40.95
+m4095 .byte $86,$23,$cc,$cc,$cd ;FAC binary representation of 40.95 (rounded)
 
 ;Constants for FILTER center frequency (Hz) conversion to regval
-five8 .byte $7e,$30,$8d,$3d,$c8 ;FAC binary representation of 1/5.8
+five8 .byte $7e,$30,$8d,$3d,$c9 ;FAC binary representation of 1/5.8 (rounded)
 neg30 .byte $85,$f0,$00,$00,$00 ;FAC binary represenation of -30
 
 ;********************************************************************
