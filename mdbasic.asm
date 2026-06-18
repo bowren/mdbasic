@@ -395,7 +395,7 @@ TOKEN_PI      = $ff  ;PI symbol token
 .text "CBM80"
 ;
 mesge
-.text "mdbasic 26.06.12"
+.text "mdbasic 26.06.17"
 .byte 13,0
 ;
 ;Text for New Commands
@@ -4363,32 +4363,30 @@ pfgnd lda $a2
 ;
 ; IRQ routine to play next note
 playit
+ clc ;reset done flag
  dec playtime
- bpl nxtply
+ bpl plydone
  lda R6510
  pha
  and #%11111110
  sta R6510
  jsr notegot
  beq played
- jsr nextn
+ jsr nextn      ;play next note
+ clc            ;flag for still playing
+.byte $24       ;defeat sec
+played sec      ;flag for done playing
  pla
  sta R6510
-nxtply
- clc
+ bcs endplay
+plydone
  rts
-played
- pla
- sta R6510
 endplay
- lda #%11111110 ;play irq flag off
- jsr irqoff
  ldx playvoice  ;SID reg offset
  lda playwave   ;select current waveform; start release cycle
  sta VCREG1,x   ;start decay cycle
- sec
-plydone
- rts
+ lda #%11111110 ;play irq flag off
+ jmp irqoff     ;turn off irq then return to caller with done flag
 
 initvoice
  ldx #30        ;default note length to 30 jiffies (approx 1/60 sec.)
@@ -5413,20 +5411,20 @@ sidoff .byte 0,7,14
 ;Constants for VOICE frequency (Hz) conversion to regval
 ;REGVAL=FREQ/(CLOCK/16777216)
 ;FREQ=REGVAL*(CLOCK/16777216)Hz
-;NTSC-M CLOCK = 1022727.143, PAL-B CLOCK = 985248.444
-;NTSC-M 1Hz Freq Value = 16777216/1022727.143 = 16.404391059
-;PAL-B  1Hz Freq Value = 16777216/985248.444  = 17.028411567
+;NTSC-M CLOCK = 1022727.143, PAL-B CLOCK = 985248.611
+;NTSC-M 1Hz Freq Value = 16777216/1022727.143 = 16.4043911 (rounded)
+;PAL-B  1Hz Freq Value = 16777216/985248.611  = 17.0284087 (rounded)
 ;below are the FAC values for 1 unit in Hz for both CLOCK speeds
-ntscm .byte $85,$03,$3c,$31,$62 ;16.404391059
-palb  .byte $85,$08,$3a,$2e,$54 ;17.02840868
+ntscm .byte $85,$03,$3c,$31,$66 ;16.4043911
+palb  .byte $85,$08,$3a,$2e,$58 ;17.0284087
 
 ;Constants for PULSE width% conversion to regval
 ;REGVAL=40.95*width%
-m4095 .byte $86,$23,$cc,$cc,$cd ;FAC binary representation of 40.95 (rounded)
+m4095 .byte $86,$23,$cc,$cc,$cd ;FAC value of 40.95 (includes rounding adj)
 
 ;Constants for FILTER center frequency (Hz) conversion to regval
-five8 .byte $7e,$30,$8d,$3d,$c9 ;FAC binary representation of 1/5.8 (rounded)
-neg30 .byte $85,$f0,$00,$00,$00 ;FAC binary represenation of -30
+five8 .byte $7e,$30,$8d,$3d,$c9 ;FAC value of 1/5.8 (includes rounding adj)
+neg30 .byte $85,$f0,$00,$00,$00 ;FAC value of -30
 
 ;********************************************************************
 ;* Global Variable Storage
@@ -5572,28 +5570,36 @@ playoct   .byte 4  ;default octave 4
 playlen   .byte 30 ;notelength for each voice
 playindex .byte 0  ;index of current char in play string for each voice
 
-;** music notes table ***
+;** Musical Notes Table ***
 ;These numbers represent the middle octave for the SID freq control registers
 ;CLOCK is NTSC=1022727.143, PAL=985248.611
 ;FREQUENCY=REGVAL*(CLOCK/16777216)Hz
 ;REGVAL=FREQUENCY/(CLOCK/16777216)Hz
-;https://pages.mtu.edu/~suits/notefreqs.html
 ;There are 8 octaves each with 12 notes 8*12 = 96 total notes
-;The notes here are octave 4 on NTSC clock. The others are derived from these.
-;
-notes ;A    B    C    D    E    F    G
-.word 3609,4051,4292,4817,5407,5729,6431
-;flats(-) are derived from sharps(#). A- is in previous octave (G#)
-;*for invalid notes C-/B# = B and F-/E# = E
-;      A-
-.word 3406
-;      B-  *C-   D-   E-  *F-   G-
-;      A#  *B#   C#   D#  *E#   F#   G#
-.word 3824,4051,4547,5104,5407,6069,6813
-;these are the same notes above but for PAL systems (30 byte offset)
-.word 3746,4205,4455,5001,5613,5947,6675
-.word 3536
-.word 3969,4205,4720,5298,5613,6300,7072
+;These notes are octave 4 on NTSC clock; other octaves are derived from these.
+notes
+.word 7218 ;A 440.000 Hz (High A guitar string)
+.word 8102 ;B 493.883 Hz
+.word 4292 ;C 261.626 Hz (Middle C)
+.word 4817 ;D 293.665 Hz
+.word 5407 ;E 329.628 Hz (High E guitar string)
+.word 5729 ;F 349.228 Hz
+.word 6430 ;G 391.995 Hz
+;flats(-) are derived from sharps with 1 word offset in this table
+.word 6813 ;A-/G# 415.305 Hz
+;sharps(#)
+.word 7647 ;A#/B- 466.164
+.word 0000 ;B#/C- 000.000 Hz Invalid Note
+.word 4547 ;C#/D- 277.183 Hz
+.word 5104 ;D#/E- 311.127 Hz
+.word 0000 ;E#/F- 000.000 Hz Invalid Note
+.word 6070 ;F#/G- 369.994
+.word 6813 ;G#/A- 415.305
+
+;this table holds the same notes as above but for PAL systems (30 byte offset)
+.word 7492,8410,4455,5001,5613,5947,6675 ;A to G
+.word 7072 ;A-/G#
+.word 7938,0000,4720,5298,0000,6301,7072 ;A# to G# or B- to A-
 
 ;INF() memory locations
 infbytes
@@ -7888,6 +7894,7 @@ fltshr
 
 regnote
  ldy notes+1,x  ;hibyte of note
+ beq endply     ;invalid note? skip it.
  lda notes,x    ;lobyte of note
  jsr octadj     ;adjust note for octave
  ldx playvoice  ;voice offset
@@ -7910,23 +7917,23 @@ endply
  rts
 
 plyrpt
- cmp #"@"-"a" ;255 repeat?
+ cmp #"@"-"a"   ;255 repeat?
  beq nextn0
 
 octchg
- cmp #"<"-"a" ;251 octave down
+ cmp #"<"-"a"   ;251 octave down
  bne octup2
 prevoct
  dec playoct
  bpl nextn3
  bmi nextoct
 octup2
- cmp #">"-"a" ;253 octave up
+ cmp #">"-"a"   ;253 octave up
  bne nextn3
 nextoct
  inc playoct
  lda playoct
- cmp #9
+ cmp #8         ;only octaves 0-7
  bcs prevoct
 nextn3
  inc playindex  ;skip over char
@@ -7986,7 +7993,7 @@ noteoct
  cmp #"o"
  bne notewave
  jsr getdigitval
- cmp #9
+ cmp #8         ;valid octave 0-7
  bcs skipnote
  sta playoct
  bcc skipnote   ;always branches
@@ -8086,8 +8093,8 @@ octend
 octdone rts
 octmax
  lda #$ff ;max regval reached starting at
- tay      ;octave 8 note B for PAL
- rts      ;octave 8 note C for NTSC
+ tay      ;octave 7 note B for PAL
+ rts      ;octave 7 note C for NTSC
 ;--------------
 ;process DRAW string
 godraww
@@ -9432,6 +9439,6 @@ clrflg lda TXTPTR
  sty XSAV
  rts
 ;
-.repeat 4,0 ;filler to complete RAM page
+.repeat 2,0 ;filler to complete RAM page
 ;
 .end
