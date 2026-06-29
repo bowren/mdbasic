@@ -5464,6 +5464,7 @@ ptrend     .repeat 8,0  ;param for each sprite ending data pointer
 
 ;sprite color 16
 sprcolopt  .byte 0      ;bit flags for which sprites to change color
+moveacc    .byte 0      ;accumulator for jiffy-based sprite MOVE delay
 
 ;GENERAL GRAPHICS COMMANDS (Shared):
 lastplotx  .word 0      ;last plot x coord
@@ -5704,7 +5705,6 @@ setchr
 ;**************************
 ;KEY LIST (continued)
 keylistt
- jsr printcr
  lda #"1"
  sta $fd      ;current key#
  lda #0
@@ -5994,21 +5994,19 @@ std010 sta MSIGX
  lda $fd
  sta SP0Y,y
 ;apply sprite move delay
- ldy $fe      ;move speed
+ lda $fe      ;move speed
  beq linedon
-movewait
- jsr STOP
- bne movwait  ;carry flag returned to caller to indicate STOP key pressed
+ clc
+ adc moveacc
+ sta moveacc
+ bcc linedon
+ ldx #1       ;wait one jiffy on overflow
+ ldy #0
+ jsr delay2   ;jiffy wait; returns carry set if STOP key pressed
+ bcc linedon  ;no STOP, keep moving the sprite
+ pla          ;STOP pressed: discard return into the move loop
  pla
- pla
- rts
-movwait
- ldx #7
-mowait dex
- bne mowait
- dey
- bne movewait
-linedon rts
+linedon rts   ;return to caller (carry set flags STOP to break)
 ;
 ;**************************
 setdot
@@ -9439,6 +9437,6 @@ clrflg lda TXTPTR
  sty XSAV
  rts
 ;
-.repeat 2,0 ;filler to complete RAM page
+.repeat 1,0 ;filler to complete RAM page
 ;
 .end
